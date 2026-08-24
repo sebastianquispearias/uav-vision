@@ -136,6 +136,10 @@ class CamaraArduCam:
         camara: CameraConfig = ARDUCAM_MODULE_3,
         rot180: bool = True,
         reid_modelo: Optional[str] = None,
+        rastreador: bool = False,
+        fps: Optional[float] = None,
+        buffer_pista_s: float = 8.0,
+        compensar_camara: bool = False,
     ) -> None:
         self.modelo = modelo
         self.umbral = umbral
@@ -150,9 +154,29 @@ class CamaraArduCam:
         self.rot180 = rot180
         # mismo modelo que usa entrenamiento/rehuella_osnet.py
         self.reid_modelo = reid_modelo
+        # rastreador: BoT-SORT oficial (boxmot) sobre las detecciones.
+        # Cada deteccion sale ademas con 'track_id', que es lo que la
+        # capa de identidad (identity.py) necesita para armar POIs.
+        # BoT-SORT cuenta su memoria en FRAMES, asi que el buffer se
+        # declara en SEGUNDOS y se convierte con el fps declarado: el
+        # mismo numero de frames significa 8 s a 5 Hz pero 24 s a la
+        # cadencia del vuelo 3 -- otra constante que no generaliza sola.
+        # compensar_camara (CMC) mejora el tracking cuando la camara se
+        # mueve, pero su costo en la Raspberry NO esta medido: apagado
+        # hasta que el banco diga que entra en el presupuesto de 5 Hz.
+        if rastreador and fps is None:
+            raise ValueError(
+                "rastreador=True necesita fps: el buffer de BoT-SORT "
+                "se mide en frames y sin la cadencia real el numero "
+                "no significa nada.")
+        self.rastreador_habilitado = rastreador
+        self.fps = fps
+        self.buffer_pista_s = buffer_pista_s
+        self.compensar_camara = compensar_camara
         self._picam: Any = None
         self._yolo: Any = None
         self._reid: Any = None
+        self._tracker: Any = None
 
     # -- hardware ---------------------------------------------------------
 
@@ -185,6 +209,30 @@ class CamaraArduCam:
             from boxmot.reid.core.reid import ReID
             self._reid = ReID(self.reid_modelo, device="cpu", half=False)
 
+        if self.rastreador_habilitado:
+            self._crear_rastreador()
+
+    def _crear_rastreador(self) -> None:
+        """Official BoT-SORT, same knobs the offline validation used
+        (entrenamiento/correr_botsort.py), buffer converted from
+        seconds using the declared fps."""
+        from boxmot.trackers.bbox.botsort import BotSort
+
+        self._tracker = BotSort(
+            reid_model=None,                # embeddings come in via embs=
+            # Appearance matching only when this camera computes
+            # OSNet embeddings; otherwise BotSort refuses to run
+            # ("A ReID model is required when embeddings are not
+            # provided") -- motion-only mode needs with_reid=False.
+            with_reid=self.reid_modelo is not None,
+            use_cmc=self.compensar_camara,
+            track_high_thresh=0.35,
+            track_low_thresh=0.2,
+            new_track_thresh=0.4,
+            track_buffer=max(2, round(self.buffer_pista_s * self.fps)),
+            match_thresh=0.85,
+        )
+
     def apagar(self) -> None:
         if self._picam is not None:
             self._picam.stop()
@@ -215,11 +263,45 @@ class CamaraArduCam:
             })
             cajas.append(xyxy)
 
+        huellas: List[np.ndarray] = []
         if self._reid is not None and detecciones:
-            for det, emb in zip(detecciones, self._huellas(frame, cajas)):
+            huellas = self._huellas(frame, cajas)
+            for det, emb in zip(detecciones, huellas):
                 det["emb"] = emb
 
+        if self._tracker is not None:
+            self._rastrear(frame, detecciones, cajas, huellas)
+
         return detecciones
+
+    def _rastrear(
+        self,
+        frame,
+        detecciones: List[Deteccion],
+        cajas: List[np.ndarray],
+        huellas: List[np.ndarray],
+    ) -> None:
+        """Run BoT-SORT on this frame's boxes; attach 'track_id'.
+
+        Called EVERY frame, detections or not: the tracker also needs
+        the empty frames to age out tracks that left the scene. A
+        detection the tracker hasn't confirmed yet gets no track_id;
+        the identity layer simply skips those until it does.
+        """
+        if cajas:
+            dts = np.array(
+                [[*c, det["conf"], 0] for c, det in zip(cajas, detecciones)],
+                dtype="float32")
+            embs = np.asarray(huellas, dtype="float32") if huellas else None
+        else:
+            dts = np.empty((0, 6), dtype="float32")
+            embs = None
+
+        res = np.asarray(self._tracker.update(dts, frame, embs=embs))
+        for fila in res:
+            det_idx = int(fila[7])
+            if 0 <= det_idx < len(detecciones):
+                detecciones[det_idx]["track_id"] = int(fila[4])
 
     def _huellas(self, frame, cajas: List[np.ndarray]) -> List[np.ndarray]:
         """Huellas OSNet de todas las cajas del frame, en una sola pasada.
