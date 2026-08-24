@@ -69,6 +69,7 @@ def project_to_pixel(
     focal_px: float = DEFAULT_CAMERA.focal_length_px,
     img_w: int = DEFAULT_CAMERA.image_width,
     img_h: int = DEFAULT_CAMERA.image_height,
+    principal_point: Optional[Tuple[float, float]] = None,
 ) -> Optional[Tuple[float, float]]:
     """Project a 3D target position to pixel coordinates.
 
@@ -83,6 +84,9 @@ def project_to_pixel(
         focal_px: Focal length in pixels.
         img_w: Image width in pixels.
         img_h: Image height in pixels.
+        principal_point: The point where the optical axis meets the sensor,
+            in pixels. When omitted the geometric image centre is used,
+            which is what an ideally aligned lens would give.
 
     Returns:
         Pixel coordinates (px, py) if target is visible, None otherwise.
@@ -98,7 +102,7 @@ def project_to_pixel(
     if Z <= 0:
         return None
 
-    cx, cy = img_w / 2.0, img_h / 2.0
+    cx, cy = principal_point if principal_point is not None else (img_w / 2.0, img_h / 2.0)
     px = focal_px * (X / Z) + cx
     py = focal_px * (Y / Z) + cy
 
@@ -116,6 +120,7 @@ def pixel_to_ray(
     focal_px: float = DEFAULT_CAMERA.focal_length_px,
     img_w: int = DEFAULT_CAMERA.image_width,
     img_h: int = DEFAULT_CAMERA.image_height,
+    principal_point: Optional[Tuple[float, float]] = None,
 ) -> Measurement:
     """Back-project a pixel to a 3D ray (measurement for fusion).
 
@@ -130,13 +135,15 @@ def pixel_to_ray(
         focal_px: Focal length in pixels.
         img_w: Image width in pixels.
         img_h: Image height in pixels.
+        principal_point: The point where the optical axis meets the sensor,
+            in pixels. When omitted the geometric image centre is used.
 
     Returns:
         Measurement tuple ((ox, oy, oz), (dx, dy, dz)) where origin is
         the drone position and direction is a unit vector in world frame.
     """
     px, py = pixel_xy
-    cx, cy = img_w / 2.0, img_h / 2.0
+    cx, cy = principal_point if principal_point is not None else (img_w / 2.0, img_h / 2.0)
 
     # Pixel to camera-frame direction (X=right, Y=down, Z=forward)
     d_cam = np.array([

@@ -8,7 +8,7 @@ only requires changing DEFAULT_CAMERA (or passing a different CameraConfig).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -20,11 +20,30 @@ class CameraConfig:
     image_width: int
     image_height: int
     fov_deg: float  # horizontal FOV in degrees
+    calibrated_principal_point: Optional[Tuple[float, float]] = None
 
     @property
     def image_center(self) -> Tuple[float, float]:
-        """Principal point assuming no lens distortion (width/2, height/2)."""
+        """
+        The geometric centre of the image, in pixels. It is always
+        (width/2, height/2) and does not depend on lens calibration.
+        """
         return (self.image_width / 2.0, self.image_height / 2.0)
+
+    @property
+    def principal_point(self) -> Tuple[float, float]:
+        """
+        The point where the optical axis meets the sensor, in pixels. On a
+        perfectly aligned lens it coincides with the geometric image centre,
+        so that is the value returned when no calibration is available.
+        A calibrated value shifts every back-projected ray: an offset of
+        14 px at a focal length of 1407 px tilts the ray by 0.65 degrees,
+        which displaces the ground intersection by roughly 0.4 m when
+        flying at 35 m.
+        """
+        if self.calibrated_principal_point is None:
+            return self.image_center
+        return self.calibrated_principal_point
 
     @property
     def max_radius(self) -> float:
@@ -50,18 +69,17 @@ SIYI_A8_MINI = CameraConfig(
     fov_deg=80.8,
 )
 
-# Valores REALES, tomados de los run_info.json que el propio onboard.py
-# escribio en los tres vuelos (26jul, 01ago, 02ago):
-#     "focal_px": 1407.0, "principal_point": [945.7, 547.1]
-# El punto principal calibrado NO es el centro geometrico (960, 540); ver
-# README, seccion "punto principal".
-# FOV horizontal = 2 * atan(1920 / (2 * 1407)) = 68.6 grados
+# Intrinsics recovered from the run_info.json files written by onboard.py
+# during the three real flights (26 Jul, 1 Aug and 2 Aug 2026). The
+# calibrated principal point is 14 px away from the geometric centre.
+# Horizontal FOV = 2 * atan(1920 / (2 * 1407)) = 68.6 degrees.
 ARDUCAM_MODULE_3 = CameraConfig(
     name="Arducam Module 3",
     focal_length_px=1407.0,
     image_width=1920,
     image_height=1080,
     fov_deg=68.6,
+    calibrated_principal_point=(945.7, 547.1),
 )
 
 # Valores calibrados para simulación (specs oficiales Raspberry Pi).

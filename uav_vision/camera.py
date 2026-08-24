@@ -79,6 +79,7 @@ class CamaraSimulada:
             self.camara.focal_length_px,
             self.camara.image_width,
             self.camara.image_height,
+            self.camara.principal_point,
         )
         if pixel is None:          # fuera de cuadro o detras de la camara
             return []
