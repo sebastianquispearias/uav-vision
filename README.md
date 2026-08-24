@@ -148,6 +148,40 @@ python tests/test_contrato.py
 | `pinhole_local.py` | píxel ↔ rayo. Matemática pura, sin dependencias |
 | `camera_config.py` | intrínsecos de cada cámara |
 | `confidence.py` | modelo de confianza para simulación |
+| `vision_protocol.py` | el protocolo GrADyS: cámara adentro, POIs afuera. **Único archivo que importa `gradys_embedded`** |
+
+---
+
+## El protocolo (`VisionProtocol`)
+
+Es un protocolo GrADyS **solo-observador**: nunca manda comandos de
+movilidad, así que convive con cualquier protocolo de misión. Cada 200 ms
+(5 Hz, la tasa segura en la Raspberry) llama `camara.ver_alvo(pos, yaw)`,
+convierte cada detección en rayo, cruza el rayo con el suelo y guarda el
+impacto. Cada 2 s corre RANSAC sobre los impactos acumulados y transmite
+el POI dominante como JSON (`BroadcastMessageCommand`).
+
+- **posición**: llega sola por `handle_telemetry` (marco local de GrADyS).
+- **yaw**: la `Telemetry` de GrADyS no lo trae. En el dron real lo da
+  `UavApiYaw`, que consulta el uav_api por HTTP en localhost
+  (`GET /telemetry/general`, campo `heading`) — el uav_api es el único
+  dueño del puerto serial MAVLink. En simulación se inyecta una función.
+- **configuración**: `instantiate()` de GrADyS llama `cls()` sin
+  argumentos, así que la configuración va por
+  `VisionProtocol.with_config(camera=..., pitch_deg=..., yaw_source=...)`,
+  que devuelve una clase lista para dársela al runner.
+
+Prueba de punta a punta (no necesita el simulador instalado; usa un
+proveedor falso y encuentra `../gradys-embedded` solo):
+
+```bash
+python tests/test_vision_protocol.py
+```
+
+Limitación deliberada por ahora: todos los impactos van a UN solo RANSAC,
+o sea el protocolo reporta el POI dominante (la persona más observada).
+La capa de identidad incremental (multi-POI, móviles con trayectoria,
+huellas) es el siguiente paso.
 
 ---
 
