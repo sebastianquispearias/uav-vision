@@ -1,0 +1,111 @@
+# Manifest del modulo de vision — ficha para descubrimiento automatico.
+#
+# Para que sirve: el agente LLM de la Ground Station (LangGraph) necesita
+# saber que habilidades existen en el ecosistema sin leer el codigo de
+# cada una. Esta ficha responde: que hace el modulo, que necesita para
+# correr, como se activa y que mensajes emite. El formato es una
+# PROPUESTA — pendiente de acordar el esquema definitivo con el grupo.
+#
+# Regla de la ficha: solo se declara lo que esta implementado y probado.
+# Lo no medido o no probado va en `limitaciones`, no en `capacidades`.
+
+skill:
+  nombre: vigilancia-visual
+  version: 0.1.0
+  repo: https://github.com/sebastianquispearias/uav-vision
+  resumen: >
+    El dron observa el suelo con su camara, geolocaliza a las personas
+    que ve y reporta puntos de interes (POIs) por radio: cuantas cosas
+    hay, donde esta cada una, y cuales se estan moviendo.
+
+  descripcion: >
+    Protocolo GrADyS solo-observador: nunca envia comandos de movilidad,
+    asi que se puede sumar a cualquier mision existente como un sensor
+    mas. Cada 200 ms captura y detecta (YOLO afinado en vistas aereas);
+    cada deteccion se convierte en un rayo 3D y se cruza con el suelo.
+    Un rastreador (BoT-SORT) mantiene la identidad de cada persona entre
+    frames, y la capa de identidad separa objetivos estaticos de moviles
+    y fusiona observaciones repetidas. Cada 2 s transmite la lista de
+    POIs consolidada.
+
+capacidades:
+  - detectar personas en imagen aerea (modelo propio afinado en VisDrone)
+  - geolocalizar cada deteccion en coordenadas locales del enjambre
+  - distinguir individuos (track_id estable + huella de apariencia OSNet)
+  - clasificar POIs: estatico (posicion consolidada) vs movil (posicion actual)
+  - reportar por el sistema de mensajes de GrADyS (broadcast JSON)
+
+requisitos:
+  hardware: Raspberry Pi 5 + ArduCam Module 3 (montaje rot180, pitch -55)
+  energia: >
+    fuente 5 V estable. Con UBEC 5 A el sistema colapsa por caida de
+    voltaje sobre ~5 FPS; la tasa de vision esta fijada en 5 Hz por eso.
+  servicios:
+    - uav_api corriendo en localhost:8000 (unico dueno del MAVLink;
+      este modulo le pide el yaw por GET /telemetry/general)
+    - runner de gradys-embedded (o gradys-sim para simulacion)
+  software: python>=3.9, numpy; en el dron ademas ultralytics y boxmot
+
+activacion:
+  tipo: protocolo IProtocol de GrADyS (clase, no servicio)
+  como: >
+    construir la clase configurada con VisionProtocol.with_config(...)
+    y entregarsela al runner del dron. Parametros obligatorios: camera,
+    pitch_deg, yaw_source. Opcional: identidad (IdentidadIncremental)
+    para reportes multi-POI; sin ella reporta el POI dominante.
+  ejemplo: |
+    from uav_vision.camera import CamaraArduCam
+    from uav_vision.identity import IdentidadIncremental
+    from uav_vision.vision_protocol import VisionProtocol, UavApiYaw
+
+    Protocolo = VisionProtocol.with_config(
+        camera=CamaraArduCam(modelo="best_ncnn_model", rastreador=True,
+                             fps=5.0, reid_modelo="osnet_x0_25_msmt17.pt"),
+        pitch_deg=-55.0,
+        yaw_source=UavApiYaw(),
+        identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=5.0),
+    )
+
+mensajes:
+  emite:
+    tipo: vision_poi
+    transporte: BroadcastMessageCommand (JSON)
+    frecuencia: cada 2 s (solo si hay evidencia suficiente)
+    esquema:
+      type: siempre "vision_poi"
+      sender: id del nodo que reporta (int)
+      time: reloj del runner en segundos (float)
+      frames_seen: frames procesados hasta ahora (int)
+      pois:
+        descripcion: lista de POIs; cada uno con los campos siguientes
+        x: este en metros, marco local del enjambre (float)
+        y: norte en metros (float)
+        n_obs: observaciones acumuladas — mas es mas confiable (int)
+        conf: confianza media del detector, 0-1 (float)
+        movil: true si se esta moviendo; su (x,y) es la posicion ACTUAL
+    ejemplo: |
+      {"type": "vision_poi", "sender": 3, "time": 128.4,
+       "frames_seen": 610,
+       "pois": [{"x": -0.44, "y": 6.66, "n_obs": 467,
+                 "conf": 0.52, "movil": false}]}
+  recibe: "nada (version 0.1: observador puro, sin comandos remotos)"
+
+validacion:
+  - "contrato camara probado en la Raspberry real (5.58 FPS, 24ago2026)"
+  - "geometria identica al vuelo real 02ago (0.000 grados en 268 rayos)"
+  - "replay del vuelo 02ago: operador reportado como POI separado a
+    2.31 m (el analisis offline dio 2.49 m)"
+  - "rastreador: ids estables 30/30 frames en secuencia sintetica"
+  - "banco de energia y temperatura: data/bench_rpi (22ago2026)"
+
+limitaciones:
+  - "coordenadas en el marco LOCAL del enjambre, no lat/lng: la
+    conversion a GPS requiere el origen de la mision (pendiente de
+    acordar con la Ground Station)"
+  - "POIs moviles validados en replay parcialmente: el ensayo con
+    BoT-SORT en vivo sobre la Pi esta pendiente"
+  - "costo de OSNet y de compensacion de camara en la Pi sin medir:
+    ambos apagados por defecto hasta que el banco los apruebe"
+  - "terreno plano (z=0): sin modelo de elevacion"
+  - "la cadena completa junta (camara+tracker+identidad en la Pi) aun
+    no se ensayo de punta a punta"
