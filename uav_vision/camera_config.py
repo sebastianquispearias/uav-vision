@@ -7,7 +7,7 @@ only requires changing DEFAULT_CAMERA (or passing a different CameraConfig).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Tuple
 
 
@@ -49,6 +49,26 @@ class CameraConfig:
     def max_radius(self) -> float:
         """Half of image width — used to normalize pixel distance from center."""
         return self.image_width / 2.0
+
+    def rotated_180(self) -> "CameraConfig":
+        """Config for the same camera mounted upside-down (rot180).
+
+        When the ISP un-flips the captured image (hflip+vflip), every
+        pixel coordinate c maps to (size - 1) - c, and the calibrated
+        principal point must follow. Same formula onboard.py applies:
+            CX, CY = IMG_W - 1 - CX, IMG_H - 1 - CY
+        Skipping this shifts the ArduCam centre by (28, -15) px, i.e.
+        ~1.1 degrees of ray error, ~0.8 m on the ground at 35 m altitude.
+        """
+        px, py = self.principal_point
+        return replace(
+            self,
+            name=f"{self.name} (rot180)",
+            calibrated_principal_point=(
+                self.image_width - 1 - px,
+                self.image_height - 1 - py,
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------

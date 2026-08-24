@@ -43,7 +43,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from uav_vision.camera_config import ARDUCAM_MODULE_3, DEFAULT_CAMERA, CameraConfig
-from uav_vision.confidence import simulate_confidence
+from uav_vision.confidence import confidence_to_pixel_sigma_model, simulate_confidence
 from uav_vision.pinhole_local import project_to_pixel
 
 Deteccion = Dict[str, float]
@@ -64,11 +64,22 @@ class CamaraSimulada:
         pitch_deg: float,
         camara: CameraConfig = DEFAULT_CAMERA,
         rng: Optional[np.random.Generator] = None,
+        ruido_pixel: bool = True,
+        modelo_ruido: str = "heuristic",
     ) -> None:
         self.alvo = tuple(alvo)
         self.pitch_deg = pitch_deg
         self.camara = camara
         self.rng = rng if rng is not None else np.random.default_rng()
+        # ruido_pixel: un detector real no devuelve el pixel exacto. El
+        # modelo es el del paper: sigma_pixel = C / conf (menos confianza,
+        # mas ruido). Sin esto la simulacion es perfecta y RANSAC no tiene
+        # nada que rechazar — el resultado no dice nada. Apagable solo
+        # para pruebas de geometria pura.
+        self.ruido_pixel = ruido_pixel
+        # modelo_ruido: "heuristic" (sigma = C / conf) o "visdrone_1d"
+        # (ajuste empirico sobre VisDrone2019-DET-val + YOLOv8s).
+        self.modelo_ruido = modelo_ruido
 
     def ver_alvo(self, pos: Sequence[float], yaw: float) -> List[Deteccion]:
         pixel = project_to_pixel(
@@ -90,7 +101,14 @@ class CamaraSimulada:
             self.camara.max_radius,
             self.rng,
         )
-        return [{"px": pixel[0], "py": pixel[1], "conf": conf}]
+        px, py = pixel
+        if self.ruido_pixel:
+            sigma = confidence_to_pixel_sigma_model(conf, self.modelo_ruido)
+            px = float(np.clip(px + self.rng.normal(0, sigma),
+                               0, self.camara.image_width - 1))
+            py = float(np.clip(py + self.rng.normal(0, sigma),
+                               0, self.camara.image_height - 1))
+        return [{"px": px, "py": py, "conf": conf}]
 
 
 class CamaraArduCam:
@@ -105,22 +123,30 @@ class CamaraArduCam:
     por hecho (revision2/bench_rpi.py).
     """
 
+    # nombres de clase que cuentan como "persona": COCO dice 'person',
+    # VisDrone dice 'pedestrian' y 'people'. Con un solo nombre, cambiar
+    # de modelo hacia que el filtro descartara TODO en silencio.
+    CLASES_PERSONA = frozenset({"person", "pedestrian", "people"})
+
     def __init__(
         self,
         modelo: str,
         umbral: float = 0.3,
-        clase: str = "person",
+        clases: Optional[Sequence[str]] = None,
         camara: CameraConfig = ARDUCAM_MODULE_3,
         rot180: bool = True,
         reid_modelo: Optional[str] = None,
     ) -> None:
         self.modelo = modelo
         self.umbral = umbral
-        self.clase = clase
-        self.camara = camara
+        self.clases = frozenset(clases) if clases is not None else self.CLASES_PERSONA
         # rot180: desde el 02ago2026 la ArduCam esta montada girada 180
-        # sobre el eje optico. El ISP endereza la imagen en captura, de
-        # forma que YOLO ve personas de pie y la geometria no cambia.
+        # sobre el eje optico. El ISP endereza la imagen en captura (asi
+        # YOLO ve personas de pie), pero eso mueve el punto principal
+        # calibrado: cada coordenada c pasa a (tamano - 1) - c. Es lo
+        # mismo que hace onboard.py. Sin esta linea, los rayos del vuelo
+        # rot180 salen ~1.1 grados torcidos (~0.8 m en el suelo a 35 m).
+        self.camara = camara.rotated_180() if rot180 else camara
         self.rot180 = rot180
         # mismo modelo que usa entrenamiento/rehuella_osnet.py
         self.reid_modelo = reid_modelo
@@ -178,7 +204,7 @@ class CamaraArduCam:
         detecciones: List[Deteccion] = []
         cajas: List[np.ndarray] = []
         for caja in resultados[0].boxes:
-            if self._yolo.names[int(caja.cls[0])] != self.clase:
+            if self._yolo.names[int(caja.cls[0])] not in self.clases:
                 continue
             xyxy = caja.xyxy[0].cpu().numpy()
             x1, _y1, x2, y2 = xyxy

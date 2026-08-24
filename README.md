@@ -74,6 +74,16 @@ coincidir es `ver_alvo`.
 `CamaraArduCam` importa `picamera2` y `ultralytics` recién en la primera
 foto, así que este paquete se puede importar en una laptop que no los tenga.
 
+Dos detalles con historia detrás:
+
+- **`clases`** (no `clase`): el filtro acepta un conjunto de nombres y por
+  defecto incluye `person` (COCO), `pedestrian` y `people` (VisDrone). Con
+  un solo nombre, cambiar del modelo COCO al fine-tune VisDrone hacía que
+  el filtro descartara *todas* las detecciones en silencio.
+- **`ruido_pixel`** en `CamaraSimulada` (por defecto encendido): aplica
+  `sigma = C / conf` al píxel, el modelo del paper. Sin ruido la simulación
+  es geométricamente perfecta y RANSAC no tiene nada que rechazar.
+
 ---
 
 ## La huella (`emb`)
@@ -156,13 +166,11 @@ Con un solo módulo importado por todos, esa divergencia no puede ocurrir.
 
 ## Pendientes conocidos
 
-**1. Punto principal.** Los `run_info.json` de los tres vuelos registran
-`principal_point = [945.7, 547.1]` (y `[973.3, 531.9]` para el montaje
-girado 180°). Pero `CameraConfig.image_center` lo calcula como
-`(ancho/2, alto/2) = (960, 540)`, y `pinhole_local.project_to_pixel` hace lo
-mismo internamente. O sea: **el dron usa un punto principal calibrado y la
-simulación usa el centro geométrico.** Son ~14 px de diferencia. Falta
-decidir si `CameraConfig` lleva `cx`/`cy` explícitos.
+**1. Punto principal — RESUELTO (24ago2026).** `CameraConfig` lleva
+`calibrated_principal_point` (el de la ArduCam es `[945.7, 547.1]`, de los
+`run_info.json`), y `rotated_180()` lo refleja a `[973.3, 531.9]` para el
+montaje girado — la misma fórmula `tamaño - 1 - c` que aplica `onboard.py`.
+`CamaraArduCam(rot180=True)` hace la reflexión sola.
 
 **2. Calibración con tablero de ajedrez.** `focal_px = 1407.0` está tomado de
 los `run_info.json` de los vuelos, no de una calibración formal.
