@@ -52,7 +52,10 @@ for etiqueta, pos in casos:
     salida = cam.ver_alvo(pos, 0.0)
     assert isinstance(salida, list), f"{etiqueta}: no es lista"
     for det in salida:
-        assert set(det) == {"px", "py", "conf"}, f"{etiqueta}: campos {set(det)}"
+        faltan = {"px", "py", "conf"} - set(det)
+        assert not faltan, f"{etiqueta}: faltan campos {faltan}"
+        sobran = set(det) - {"px", "py", "conf", "emb"}
+        assert not sobran, f"{etiqueta}: campos desconocidos {sobran}"
     print(f"  {etiqueta} OK")
 
 print()
@@ -64,5 +67,20 @@ print(f"  detecciones={n}  suma de confianzas={suma:.3f}")
 print()
 print("  La misma funcion, con CamaraArduCam, correria en la Raspberry")
 print("  sin cambiar una linea.")
+
+print()
+print("=" * 64)
+print("5. 'emb' es OPCIONAL: se pide con .get(), nunca con []")
+print("=" * 64)
+det = cam.ver_alvo((0.0, -20.0, 50.0), 0.0)[0]
+print(f"  campos que trae la simulada : {sorted(det)}")
+print(f"  det.get('emb')              : {det.get('emb')}")
+assert det.get("emb") is None, "la simulada no tiene imagen: no puede tener huella"
+try:
+    det["emb"]
+    raise AssertionError("deberia haber fallado")
+except KeyError:
+    print("  det['emb']                  : KeyError  <- por eso se usa .get()")
+
 print()
 print("TODO OK")

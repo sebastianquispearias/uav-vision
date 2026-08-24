@@ -12,7 +12,7 @@ dependencies = ["numpy"]
 # El dron real necesita ademas:  ultralytics, picamera2
 # No van aca porque no se instalan en una laptop.
 [project.optional-dependencies]
-dron = ["ultralytics"]
+dron = ["ultralytics", "boxmot"]
 
 [tool.setuptools.packages.find]
 include = ["uav_vision*"]

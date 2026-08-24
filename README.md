@@ -31,11 +31,15 @@ Lista de detecciones. Lista vacía = no se detectó nada en ese instante.
 [{'px': 960.0, 'py': 805.0, 'conf': 0.846}, ...]
 ```
 
-| Campo | Qué es |
-|---|---|
-| `px` | centro horizontal de la detección, en píxeles |
-| `py` | **borde inferior**, no el centro — el punto donde el objeto toca el suelo |
-| `conf` | confianza de la detección, en (0, 1] |
+| Campo | Obligatorio | Qué es |
+|---|---|---|
+| `px` | sí | centro horizontal de la detección, en píxeles |
+| `py` | sí | **borde inferior**, no el centro — el punto donde el objeto toca el suelo |
+| `conf` | sí | confianza de la detección, en (0, 1] |
+| `emb` | **no** | huella de apariencia: 512 `float32` normalizados (OSNet) |
+
+`emb` solo aparece si la cámara puede calcularla. Pedila siempre con
+`det.get('emb')`, nunca con `det['emb']`.
 
 `py` es el borde inferior porque la persona está parada y lo que apoya en el
 piso son los pies. Si se usara el centro, el rayo apuntaría a la cintura y
@@ -69,6 +73,45 @@ coincidir es `ver_alvo`.
 
 `CamaraArduCam` importa `picamera2` y `ultralytics` recién en la primera
 foto, así que este paquete se puede importar en una laptop que no los tenga.
+
+---
+
+## La huella (`emb`)
+
+512 números que resumen cómo se ve un recorte. No es la imagen: no se puede
+reconstruir la foto desde ahí. Sirve para decir *"estas dos detecciones son la
+misma cosa"* sin mirar la posición.
+
+Medido sobre el vuelo del 02ago (coseno, 1.0 = idénticas):
+
+| | parecido |
+|---|---|
+| misma identidad, distintas fotos | 0.63 – 0.87 |
+| entre identidades distintas | 0.33 – 0.46 |
+
+No se solapan. Por eso separa al operador de los falsos positivos estáticos
+—la caja blanca del equipo, con 930 observaciones— que en el vuelo 3 le
+robaron el consenso a RANSAC y produjeron 4-5 m de error.
+
+**Se calcula en la cámara** (decisión del 23ago2026). Motivo: así la imagen
+nunca sale del módulo. Lo que puede viajar por radio son 512 `float32`
+(2 048 B), o 128 B comprimiendo con PCA int8 — el resultado de la tesis de
+handoff, que iguala al descriptor completo con 16× de compresión.
+
+Mismo modelo que `entrenamiento/rehuella_osnet.py`: `boxmot` + OSNet
+`osnet_x0_25_msmt17`, CPU, un batch de cajas por imagen, vector normalizado.
+
+### A futuro (pendiente de medir)
+
+Dos alternativas quedan abiertas, ninguna descartada:
+
+1. **Mandar el recorte** en vez de la huella, y calcularla en tierra. Descarga
+   a la Raspberry pero mueve imágenes por radio.
+2. **Mandar la huella comprimida con PCA int8** (128 B). Es lo que la tesis de
+   handoff ya validó offline; falta probarlo en el enlace real.
+
+El costo de OSNet en la Raspberry **no está medido**. Hasta que corra
+`revision2/bench_rpi.py`, `reid_modelo` es opcional y por defecto está apagado.
 
 ---
 
