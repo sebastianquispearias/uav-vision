@@ -1,229 +1,147 @@
-# uav_vision
+# uav-vision
 
-Detección y geometría de cámara para geolocalización de objetivos desde UAV.
+Detection and camera geometry for vision-based target geolocation from UAVs.
 
-La misma interfaz corre en **simulación** (GrADyS-SIM) y en el **dron real**
-(Raspberry Pi + ArduCam). Este paquete no importa nada de GrADyS, del
-simulador ni de MAVLink: se puede instalar solo.
+The same interface runs in **simulation** (GrADyS-SIM) and on the **real drone**
+(Raspberry Pi + camera). The package imports nothing from GrADyS, the simulator
+or MAVLink, except for the single protocol module noted below — it can be
+installed on its own.
 
----
+## The camera contract
 
-## Manifiesto — entrada y salida
-
-Todo el módulo se reduce a un método. Las dos clases lo exponen igual:
+The whole module reduces to one method, exposed identically by both cameras:
 
 ```python
 camara.ver_alvo(pos, yaw) -> list[dict]
 ```
 
-**Entrada**
-
-| Nombre | Tipo | Qué es |
+| Input | Type | Meaning |
 |---|---|---|
-| `pos` | `(x, y, z)` float, metros | posición de la cámara, marco local ENU (x=Este, y=Norte, z=Arriba) |
-| `yaw` | float, grados | rumbo. 0 = Norte, 90 = Este, sentido horario |
+| `pos` | `(x, y, z)` float, meters | camera position, local ENU frame (x=East, y=North, z=Up) |
+| `yaw` | float, degrees | heading. 0 = North, 90 = East, clockwise |
 
-**Salida**
-
-Lista de detecciones. Lista vacía = no se detectó nada en ese instante.
+The output is a list of detections; an empty list means nothing was detected.
 
 ```python
 [{'px': 960.0, 'py': 805.0, 'conf': 0.846}, ...]
 ```
 
-| Campo | Obligatorio | Qué es |
+| Field | Required | Meaning |
 |---|---|---|
-| `px` | sí | centro horizontal de la detección, en píxeles |
-| `py` | sí | **borde inferior**, no el centro — el punto donde el objeto toca el suelo |
-| `conf` | sí | confianza de la detección, en (0, 1] |
-| `emb` | **no** | huella de apariencia: 512 `float32` normalizados (OSNet) |
+| `px` | yes | horizontal center of the detection, pixels |
+| `py` | yes | **bottom edge** — the point where the object touches the ground |
+| `conf` | yes | detector confidence in (0, 1] |
+| `emb` | no | appearance embedding: 512 normalized `float32` (OSNet) |
+| `track_id` | no | stable identity assigned by the tracker |
 
-`emb` solo aparece si la cámara puede calcularla. Pedila siempre con
-`det.get('emb')`, nunca con `det['emb']`.
+`py` is the bottom edge because a standing person touches the ground with
+their feet; using the box center would aim the ray at the waist and place the
+ground intersection too far. `conf` feeds the view selector and is not
+informational. Optional fields appear only when the camera can compute them —
+read them with `det.get(...)`, never `det[...]`.
 
-`py` es el borde inferior porque la persona está parada y lo que apoya en el
-piso son los pies. Si se usara el centro, el rayo apuntaría a la cintura y
-cruzaría el suelo más lejos. Es lo que ya hacía `onboard.py` en el dron
-(`bearing_py = y2`).
-
-`conf` no es decorativa: alimenta `select_best_views`, que con `alpha=0.2` le
-da el 80 % del peso. Sin ella el selector del paper no funciona.
-
----
-
-## Uso
+## Usage
 
 ```python
 from uav_vision.camera import CamaraSimulada, CamaraArduCam
 
-# simulacion
+# simulation
 camara = CamaraSimulada(alvo=(0.0, 0.0, 0.0), pitch_deg=-55.0)
 
-# dron real
-camara = CamaraArduCam(modelo="/home/pi/yolov8s.pt", umbral=0.3)
+# real drone, full pipeline: detector + embeddings + tracker
+camara = CamaraArduCam(modelo="best_ncnn_model", rastreador=True, fps=5.0,
+                       reid_modelo="osnet_x0_25_msmt17.pt")
 
-# de aca para abajo el codigo es identico
+# from here on the consumer code is identical
 for det in camara.ver_alvo(pos, yaw):
     ...
 ```
 
-Los constructores son distintos a propósito — la simulada necesita saber
-dónde está el objetivo, la real necesita un modelo. Lo único que tiene que
-coincidir es `ver_alvo`.
+The constructors differ on purpose — the simulated camera needs to know where
+the target is, the real one needs a detector model. Only `ver_alvo` must
+match. `CamaraArduCam` imports `picamera2`, `ultralytics` and `boxmot` on the
+first capture, so the package imports cleanly on machines without them.
 
-`CamaraArduCam` importa `picamera2` y `ultralytics` recién en la primera
-foto, así que este paquete se puede importar en una laptop que no los tenga.
-
-Dos detalles con historia detrás:
-
-- **`clases`** (no `clase`): el filtro acepta un conjunto de nombres y por
-  defecto incluye `person` (COCO), `pedestrian` y `people` (VisDrone). Con
-  un solo nombre, cambiar del modelo COCO al fine-tune VisDrone hacía que
-  el filtro descartara *todas* las detecciones en silencio.
-- **`ruido_pixel`** en `CamaraSimulada` (por defecto encendido): aplica
-  `sigma = C / conf` al píxel, el modelo del paper. Sin ruido la simulación
-  es geométricamente perfecta y RANSAC no tiene nada que rechazar.
-
----
-
-## La huella (`emb`)
-
-512 números que resumen cómo se ve un recorte. No es la imagen: no se puede
-reconstruir la foto desde ahí. Sirve para decir *"estas dos detecciones son la
-misma cosa"* sin mirar la posición.
-
-Medido sobre el vuelo del 02ago (coseno, 1.0 = idénticas):
-
-| | parecido |
-|---|---|
-| misma identidad, distintas fotos | 0.63 – 0.87 |
-| entre identidades distintas | 0.33 – 0.46 |
-
-No se solapan. Por eso separa al operador de los falsos positivos estáticos
-—la caja blanca del equipo, con 930 observaciones— que en el vuelo 3 le
-robaron el consenso a RANSAC y produjeron 4-5 m de error.
-
-**Se calcula en la cámara** (decisión del 23ago2026). Motivo: así la imagen
-nunca sale del módulo. Lo que puede viajar por radio son 512 `float32`
-(2 048 B), o 128 B comprimiendo con PCA int8 — el resultado de la tesis de
-handoff, que iguala al descriptor completo con 16× de compresión.
-
-Mismo modelo que `entrenamiento/rehuella_osnet.py`: `boxmot` + OSNet
-`osnet_x0_25_msmt17`, CPU, un batch de cajas por imagen, vector normalizado.
-
-### A futuro (pendiente de medir)
-
-Dos alternativas quedan abiertas, ninguna descartada:
-
-1. **Mandar el recorte** en vez de la huella, y calcularla en tierra. Descarga
-   a la Raspberry pero mueve imágenes por radio.
-2. **Mandar la huella comprimida con PCA int8** (128 B). Es lo que la tesis de
-   handoff ya validó offline; falta probarlo en el enlace real.
-
-El costo de OSNet en la Raspberry **no está medido**. Hasta que corra
-`revision2/bench_rpi.py`, `reid_modelo` es opcional y por defecto está apagado.
-
----
-
-## Instalación
+`correr.py` runs the full geolocation pipeline of the paper in either world:
 
 ```bash
-pip install -e .              # laptop / simulacion
-pip install -e ".[dron]"      # + ultralytics (picamera2 ya viene en Raspberry Pi OS)
+python correr.py sim     # geometric camera, no images
+python correr.py dron    # real captures + YOLO
 ```
 
-Prueba del contrato:
+## The GrADyS protocol
 
-```bash
-python tests/test_contrato.py
-```
+`vision_protocol.py` — the only module that imports `gradys_embedded` — wraps
+the camera as an observe-only GrADyS protocol: it never sends mobility
+commands, so it composes with any mission. On a timer it captures, detects,
+back-projects each detection to a ground impact and feeds the identity layer;
+every report period it broadcasts the consolidated POI list as JSON.
 
----
-
-## Contenido
-
-| Archivo | Qué es |
-|---|---|
-| `camera.py` | las dos cámaras. El contrato |
-| `pinhole_local.py` | píxel ↔ rayo. Matemática pura, sin dependencias |
-| `camera_config.py` | intrínsecos de cada cámara |
-| `confidence.py` | modelo de confianza para simulación |
-| `vision_protocol.py` | el protocolo GrADyS: cámara adentro, POIs afuera. **Único archivo que importa `gradys_embedded`** |
-
----
-
-## El protocolo (`VisionProtocol`)
-
-Es un protocolo GrADyS **solo-observador**: nunca manda comandos de
-movilidad, así que convive con cualquier protocolo de misión. Cada 200 ms
-(5 Hz, la tasa segura en la Raspberry) llama `camara.ver_alvo(pos, yaw)`,
-convierte cada detección en rayo, cruza el rayo con el suelo y guarda el
-impacto. Cada 2 s corre RANSAC sobre los impactos acumulados y transmite
-el POI dominante como JSON (`BroadcastMessageCommand`).
-
-- **posición**: llega sola por `handle_telemetry` (marco local de GrADyS).
-- **yaw**: la `Telemetry` de GrADyS no lo trae. En el dron real lo da
-  `UavApiYaw`, que consulta el uav_api por HTTP en localhost
-  (`GET /telemetry/general`, campo `heading`) — el uav_api es el único
-  dueño del puerto serial MAVLink. En simulación se inyecta una función.
-- **configuración**: `instantiate()` de GrADyS llama `cls()` sin
-  argumentos, así que la configuración va por
+- **Position** arrives through `handle_telemetry` (the shared local frame).
+- **Yaw** is not part of GrADyS telemetry; on the drone it comes from
+  `UavApiYaw`, which polls the `uav_api` HTTP service on localhost (that
+  service owns the MAVLink serial link). In simulation a function is injected.
+- **Configuration** goes through
   `VisionProtocol.with_config(camera=..., pitch_deg=..., yaw_source=...)`,
-  que devuelve una clase lista para dársela al runner.
+  because GrADyS instantiates protocols with no constructor arguments.
 
-Prueba de punta a punta (no necesita el simulador instalado; usa un
-proveedor falso y encuentra `../gradys-embedded` solo):
+`identity.py` turns tracked detections into named POIs: image-plane tracks are
+summarized on the ground, classified static vs mobile, and merged by position
+and appearance under a co-occurrence veto. Thresholds are parameters whose
+defaults come from measurements — see `NOTES.md` for the provenance of every
+number.
+
+`manifest.yaml` describes the module as a discoverable skill (capabilities,
+requirements, activation, message schema) for the ground-station LLM agent.
+
+## Installation
 
 ```bash
-python tests/test_vision_protocol.py
+pip install -e .              # laptop / simulation
+pip install -e ".[dron]"      # + ultralytics, boxmot (picamera2 ships with Raspberry Pi OS)
 ```
 
-Limitación deliberada por ahora: todos los impactos van a UN solo RANSAC,
-o sea el protocolo reporta el POI dominante (la persona más observada).
-La capa de identidad incremental (multi-POI, móviles con trayectoria,
-huellas) es el siguiente paso.
+## Tests
 
----
+```bash
+python tests/test_contrato.py          # both cameras honor the same contract
+python tests/test_identidad.py         # identity rules against known ground truth
+python tests/test_vision_protocol.py   # end-to-end synthetic flight (needs ../gradys-embedded)
+python tests/test_rastreador.py        # tracker wiring (needs boxmot)
+python scripts/replay_vuelo3.py        # replay of a recorded real flight through the protocol
+```
 
-## Por qué existe este repo
+## Contents
 
-La matemática de `pixel_to_ray` estaba escrita en cuatro lugares distintos
-(`onboard/onboard.py`, `ground_station/pipeline_offline.py`,
-`real_flight_14jun/rpi/onboard.py`, y el showcase del simulador) con firmas
-distintas y constantes distintas. Una copia con el pitch equivocado produce
-**6.287 m** de error en la posición estimada — más grande que el error total
-que reporta el paper (2.34 m).
+| File | Purpose |
+|---|---|
+| `camera.py` | the two cameras; the contract |
+| `pinhole_local.py` | pixel ↔ ray projection, pure math |
+| `camera_config.py` | camera intrinsics |
+| `confidence.py` | confidence-to-noise models |
+| `identity.py` | tracked detections → named POIs (static/mobile) |
+| `vision_protocol.py` | the GrADyS protocol; only module importing `gradys_embedded` |
+| `fusion.py` | robust multi-view triangulation (RANSAC and variants) |
+| `view_selection.py` | joint geometry+confidence view selector |
+| `noise.py` | sensor noise models for simulation |
+| `manifest.yaml` | skill manifest for the LLM agent |
+| `NOTES.md` | decision log: where every calibrated number comes from |
 
-Con un solo módulo importado por todos, esa divergencia no puede ocurrir.
+## Why this package exists
 
----
+The pixel-to-ray math used to live in four places (the onboard script, the
+offline pipeline, an earlier field script and the simulator showcase) with
+different signatures and different constants. One copy with a stale mount
+angle produced a position error larger than the total error the method
+reports. With a single module imported by everyone, that divergence cannot
+happen.
 
-## Pendientes conocidos
+## Known limitations
 
-**1. Punto principal — RESUELTO (24ago2026).** `CameraConfig` lleva
-`calibrated_principal_point` (el de la ArduCam es `[945.7, 547.1]`, de los
-`run_info.json`), y `rotated_180()` lo refleja a `[973.3, 531.9]` para el
-montaje girado — la misma fórmula `tamaño - 1 - c` que aplica `onboard.py`.
-`CamaraArduCam(rot180=True)` hace la reflexión sola.
-
-**2. Calibración con tablero de ajedrez.** `focal_px = 1407.0` está tomado de
-los `run_info.json` de los vuelos, no de una calibración formal.
-
-**3. `CamaraArduCam` nunca se probó en vuelo.** Los tres vuelos corrieron con
-`detect_onboard = False`: YOLO se ejecutó en tierra, no a bordo. Falta el
-test de banco en la Raspberry (`revision2/bench_rpi.py`), bloqueado por falta
-de una fuente de 5 V / 5 A.
-
----
-
-## Valores de referencia (de los vuelos reales)
-
-| Vuelo | `focal_px` | `principal_point` | `camera_pitch_deg` |
-|---|---|---|---|
-| 26jul | 1407.0 | 945.7, 547.1 | −45.0 |
-| 01ago | 1407.0 | 945.7, 547.1 | −45.0 |
-| 02ago | 1407.0 | 973.3, 531.9 | −55.0 |
-
-El montaje cambió el 02ago2026: la ArduCam se giró 180° sobre el eje óptico
-y el pitch pasó de −45 a −55. Por eso `pitch_deg` **no tiene valor por
-defecto** en `CamaraSimulada` — quien crea la cámara declara el que usó.
+- POI coordinates are in the local mission frame, not lat/lng; conversion
+  requires the mission origin from the ground station.
+- Flat-terrain assumption (ground plane at a fixed z).
+- The full onboard chain (camera + tracker + identity on the Pi) has been
+  validated piecewise and in replay, not yet end-to-end in flight.
+- Focal length and principal point come from flight logs; checkerboard
+  calibration is pending.

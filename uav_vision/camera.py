@@ -1,39 +1,28 @@
-"""Proveedor de camara para geolocalizacion por vision.
+"""
+Camera providers for vision-based geolocation.
 
-Hay dos clases y las dos exponen el MISMO metodo. Quien las consume no
-sabe cual le toco: en simulacion recibe CamaraSimulada, en el dron
-recibe CamaraArduCam, y su codigo no cambia.
+Two classes expose the same method, ver_alvo(pos, yaw). Consumers never learn which one they
+received: simulation code gets CamaraSimulada, the real drone gets CamaraArduCam, and the consumer
+code is identical in both cases.
 
-CONTRATO de  ver_alvo(pos, yaw)
--------------------------------
-entra:
-    pos  = (x, y, z) en metros, marco local ENU (x=Este, y=Norte, z=Arriba)
-    yaw  = grados. 0 = Norte, 90 = Este, sentido horario
-
-sale:
-    lista de detecciones. Cada deteccion es un dict:
+Contract of ver_alvo(pos, yaw):
+    Input:
+        pos: (x, y, z) in meters, local ENU frame (x=East, y=North, z=Up).
+        yaw: degrees. 0 = North, 90 = East, clockwise.
+    Output:
+        List of detections, one dict per detection. An empty list means nothing was detected.
         {'px': float, 'py': float, 'conf': float}
-    lista vacia = no se detecto nada en este instante
+        - 'px' is the horizontal center of the detection.
+        - 'py' is the BOTTOM edge, not the center: the point where the object touches the ground.
+        - 'conf' is the detector confidence in (0, 1]. It feeds the view selector, which weights
+          it heavily; it is not informational.
+    Optional fields:
+        - 'emb': appearance embedding, 512 normalized float32 (OSNet). Present only when the
+          camera can compute it. Read it with det.get('emb'), never det['emb'].
+        - 'track_id': stable integer identity assigned by the tracker. Present only when the
+          camera runs one. The identity layer (identity.py) requires it.
 
-    'px' es el centro horizontal de la deteccion.
-    'py' es el BORDE INFERIOR, no el centro: es el punto donde el objeto
-         toca el suelo. Asi lo hace onboard.py en el dron real
-         (bearing_py = y2), porque la persona esta parada y lo que apoya
-         en el piso son los pies.
-    'conf' alimenta select_best_views, que con alpha=0.2 le da el 80% del
-         peso. No es decorativa: sin ella el selector del paper no corre.
-
-campo OPCIONAL:
-    'emb' = huella de apariencia, 512 float32 normalizados (OSNet).
-         Solo aparece si la camara puede calcularla. Quien la use debe
-         pedirla con det.get('emb'), nunca con det['emb'].
-         Sirve para decir "estas dos detecciones son la misma cosa" sin
-         mirar la posicion, y con eso separar personas de falsos
-         positivos estaticos.
-
-DECISION TOMADA (2026-08-23): la huella se calcula ACA, en la camara.
-La imagen nunca sale del modulo; lo que viaja son 512 numeros (2048 B),
-o 128 B si se comprime con PCA int8. Ver README, seccion "a futuro".
+Design notes and measured values behind the defaults are collected in NOTES.md.
 """
 
 from __future__ import annotations
@@ -50,12 +39,13 @@ Deteccion = Dict[str, float]
 
 
 class CamaraSimulada:
-    """Camara de simulacion: no hay imagen, el pixel se calcula por geometria.
+    """
+    Simulation camera: there is no image, the pixel is computed geometrically by projecting a
+    known target position through the camera model.
 
-    pitch_deg NO tiene valor por defecto a proposito. El montaje real
-    cambio de -45 a -55 grados el 02ago2026, y tener el numero escondido
-    como default en dos archivos distintos es justamente lo que hace que
-    las copias diverjan. Quien crea la camara declara el pitch que uso.
+    pitch_deg has no default on purpose. The camera mount angle is a physical property of each
+    deployment and hiding it as a default is how independent copies of the geometry drift apart.
+    Whoever creates the camera states the pitch it models.
     """
 
     def __init__(
@@ -71,14 +61,12 @@ class CamaraSimulada:
         self.pitch_deg = pitch_deg
         self.camara = camara
         self.rng = rng if rng is not None else np.random.default_rng()
-        # ruido_pixel: un detector real no devuelve el pixel exacto. El
-        # modelo es el del paper: sigma_pixel = C / conf (menos confianza,
-        # mas ruido). Sin esto la simulacion es perfecta y RANSAC no tiene
-        # nada que rechazar — el resultado no dice nada. Apagable solo
-        # para pruebas de geometria pura.
+        # A real detector does not return the exact pixel. Pixel noise follows
+        # sigma = C / confidence, so low-confidence detections are noisier. Disable only for
+        # pure-geometry tests: without noise the fusion stage has nothing to reject and
+        # simulation results become meaningless.
         self.ruido_pixel = ruido_pixel
-        # modelo_ruido: "heuristic" (sigma = C / conf) o "visdrone_1d"
-        # (ajuste empirico sobre VisDrone2019-DET-val + YOLOv8s).
+        # Noise model name, resolved by confidence.confidence_to_pixel_sigma_model.
         self.modelo_ruido = modelo_ruido
 
     def ver_alvo(self, pos: Sequence[float], yaw: float) -> List[Deteccion]:
@@ -92,7 +80,7 @@ class CamaraSimulada:
             self.camara.image_height,
             self.camara.principal_point,
         )
-        if pixel is None:          # fuera de cuadro o detras de la camara
+        if pixel is None:  # out of frame or behind the camera
             return []
 
         conf = simulate_confidence(
@@ -112,20 +100,22 @@ class CamaraSimulada:
 
 
 class CamaraArduCam:
-    """Camara real: saca una foto con picamera2 y la pasa por YOLO.
+    """
+    Real camera: captures a frame with picamera2 and runs a YOLO detector on it.
 
-    picamera2, ultralytics y boxmot se importan la primera vez que se
-    pide una foto, no al crear el objeto. Asi este archivo se puede
-    importar en una laptop que no tiene ninguno de los tres instalados.
+    picamera2, ultralytics and boxmot are imported on the first capture, not at construction, so
+    this module can be imported on machines that do not have them installed.
 
-    Si se pasa reid_modelo, cada deteccion sale ademas con su huella
-    ('emb'). Cuesta CPU: en la Raspberry hay que medirlo antes de darlo
-    por hecho (revision2/bench_rpi.py).
+    Optional stages, enabled by constructor arguments:
+        - reid_modelo: compute an OSNet appearance embedding per detection ('emb' field).
+        - rastreador: run BoT-SORT over the detections and attach a stable 'track_id' per
+          detection. Requires fps, because the tracker's memory is measured in frames and only
+          the declared rate makes a buffer duration meaningful.
     """
 
-    # nombres de clase que cuentan como "persona": COCO dice 'person',
-    # VisDrone dice 'pedestrian' y 'people'. Con un solo nombre, cambiar
-    # de modelo hacia que el filtro descartara TODO en silencio.
+    # Class names that count as a person. Detection models trained on different datasets name
+    # the class differently (COCO: 'person'; VisDrone: 'pedestrian', 'people'); filtering on a
+    # single name silently drops every detection when the model changes.
     CLASES_PERSONA = frozenset({"person", "pedestrian", "people"})
 
     def __init__(
@@ -144,34 +134,21 @@ class CamaraArduCam:
         self.modelo = modelo
         self.umbral = umbral
         self.clases = frozenset(clases) if clases is not None else self.CLASES_PERSONA
-        # rot180: desde el 02ago2026 la ArduCam esta montada girada 180
-        # sobre el eje optico. El ISP endereza la imagen en captura (asi
-        # YOLO ve personas de pie), pero eso mueve el punto principal
-        # calibrado: cada coordenada c pasa a (tamano - 1) - c. Es lo
-        # mismo que hace onboard.py. Sin esta linea, los rayos del vuelo
-        # rot180 salen ~1.1 grados torcidos (~0.8 m en el suelo a 35 m).
+        # When the camera is mounted upside-down the ISP un-flips the image at capture time
+        # (hflip+vflip). That remapping moves the calibrated principal point, so the effective
+        # config must be the reflected one; see CameraConfig.rotated_180().
         self.camara = camara.rotated_180() if rot180 else camara
         self.rot180 = rot180
-        # mismo modelo que usa entrenamiento/rehuella_osnet.py
         self.reid_modelo = reid_modelo
-        # rastreador: BoT-SORT oficial (boxmot) sobre las detecciones.
-        # Cada deteccion sale ademas con 'track_id', que es lo que la
-        # capa de identidad (identity.py) necesita para armar POIs.
-        # BoT-SORT cuenta su memoria en FRAMES, asi que el buffer se
-        # declara en SEGUNDOS y se convierte con el fps declarado: el
-        # mismo numero de frames significa 8 s a 5 Hz pero 24 s a la
-        # cadencia del vuelo 3 -- otra constante que no generaliza sola.
-        # compensar_camara (CMC) mejora el tracking cuando la camara se
-        # mueve, pero su costo en la Raspberry NO esta medido: apagado
-        # hasta que el banco diga que entra en el presupuesto de 5 Hz.
         if rastreador and fps is None:
             raise ValueError(
-                "rastreador=True necesita fps: el buffer de BoT-SORT "
-                "se mide en frames y sin la cadencia real el numero "
-                "no significa nada.")
+                "rastreador=True requires fps: the tracker buffer is measured in frames and "
+                "has no meaning without the capture rate.")
         self.rastreador_habilitado = rastreador
         self.fps = fps
         self.buffer_pista_s = buffer_pista_s
+        # Camera-motion compensation improves tracking from a moving camera but costs CPU;
+        # disabled until measured on the target hardware.
         self.compensar_camara = compensar_camara
         self._picam: Any = None
         self._yolo: Any = None
@@ -181,7 +158,7 @@ class CamaraArduCam:
     # -- hardware ---------------------------------------------------------
 
     def _encender(self) -> None:
-        """Arranca camara y modelo. Se llama sola la primera vez."""
+        """Starts the camera and loads the models. Called automatically on the first capture."""
         if self._picam is not None:
             return
 
@@ -200,7 +177,7 @@ class CamaraArduCam:
             )
         )
         picam.start()
-        time.sleep(2)              # el sensor necesita estabilizar exposicion
+        time.sleep(2)  # the sensor needs time to stabilize exposure
 
         self._picam = picam
         self._yolo = YOLO(self.modelo)
@@ -213,17 +190,13 @@ class CamaraArduCam:
             self._crear_rastreador()
 
     def _crear_rastreador(self) -> None:
-        """Official BoT-SORT, same knobs the offline validation used
-        (entrenamiento/correr_botsort.py), buffer converted from
-        seconds using the declared fps."""
+        """Builds the BoT-SORT tracker, with the buffer converted from seconds to frames."""
         from boxmot.trackers.bbox.botsort import BotSort
 
         self._tracker = BotSort(
-            reid_model=None,                # embeddings come in via embs=
-            # Appearance matching only when this camera computes
-            # OSNet embeddings; otherwise BotSort refuses to run
-            # ("A ReID model is required when embeddings are not
-            # provided") -- motion-only mode needs with_reid=False.
+            reid_model=None,  # embeddings are supplied externally via embs=
+            # BotSort requires embeddings when appearance matching is on; without a ReID model
+            # it must run motion-only.
             with_reid=self.reid_modelo is not None,
             use_cmc=self.compensar_camara,
             track_high_thresh=0.35,
@@ -238,11 +211,11 @@ class CamaraArduCam:
             self._picam.stop()
             self._picam = None
 
-    # -- contrato ---------------------------------------------------------
+    # -- contract ---------------------------------------------------------
 
     def ver_alvo(self, pos: Sequence[float], yaw: float) -> List[Deteccion]:
-        # pos y yaw NO se usan: la foto real ya contiene lo que contiene.
-        # Estan en la firma para que el contrato sea identico al simulado.
+        # pos and yaw are unused: the real photo already contains what it contains. They are in
+        # the signature so the contract matches the simulated camera.
         del pos, yaw
 
         self._encender()
@@ -258,7 +231,7 @@ class CamaraArduCam:
             x1, _y1, x2, y2 = xyxy
             detecciones.append({
                 "px": float((x1 + x2) / 2),
-                "py": float(y2),                        # borde inferior: los pies
+                "py": float(y2),  # bottom edge: the point touching the ground
                 "conf": round(float(caja.conf[0]), 3),
             })
             cajas.append(xyxy)
@@ -281,12 +254,12 @@ class CamaraArduCam:
         cajas: List[np.ndarray],
         huellas: List[np.ndarray],
     ) -> None:
-        """Run BoT-SORT on this frame's boxes; attach 'track_id'.
+        """
+        Runs the tracker on this frame's boxes and attaches 'track_id' to each detection.
 
-        Called EVERY frame, detections or not: the tracker also needs
-        the empty frames to age out tracks that left the scene. A
-        detection the tracker hasn't confirmed yet gets no track_id;
-        the identity layer simply skips those until it does.
+        Called on every frame, including frames with no detections: the tracker needs the empty
+        frames to age out tracks that left the scene. Detections the tracker has not confirmed
+        yet get no track_id; consumers skip those until it does.
         """
         if cajas:
             dts = np.array(
@@ -304,11 +277,9 @@ class CamaraArduCam:
                 detecciones[det_idx]["track_id"] = int(fila[4])
 
     def _huellas(self, frame, cajas: List[np.ndarray]) -> List[np.ndarray]:
-        """Huellas OSNet de todas las cajas del frame, en una sola pasada.
-
-        Misma receta que entrenamiento/rehuella_osnet.py: un batch por
-        imagen, vector normalizado a norma 1 (asi el coseno es un simple
-        producto punto).
+        """
+        OSNet embeddings for all boxes of the frame, computed in a single batch. Vectors are
+        normalized to unit length so cosine similarity reduces to a dot product.
         """
         salida = self._reid.process({
             "fallback": True,

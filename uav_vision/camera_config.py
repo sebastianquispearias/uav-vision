@@ -51,14 +51,14 @@ class CameraConfig:
         return self.image_width / 2.0
 
     def rotated_180(self) -> "CameraConfig":
-        """Config for the same camera mounted upside-down (rot180).
+        """
+        Returns the configuration for the same camera mounted upside-down.
 
-        When the ISP un-flips the captured image (hflip+vflip), every
-        pixel coordinate c maps to (size - 1) - c, and the calibrated
-        principal point must follow. Same formula onboard.py applies:
-            CX, CY = IMG_W - 1 - CX, IMG_H - 1 - CY
-        Skipping this shifts the ArduCam centre by (28, -15) px, i.e.
-        ~1.1 degrees of ray error, ~0.8 m on the ground at 35 m altitude.
+        When the ISP un-flips the captured image (hflip + vflip), every pixel coordinate c maps
+        to (size - 1) - c, and the calibrated principal point must follow. Skipping the
+        reflection tilts every back-projected ray by the angular equivalent of the principal
+        point offset (about a degree for this camera, roughly a meter on the ground at mission
+        altitude).
         """
         px, py = self.principal_point
         return replace(
@@ -75,12 +75,11 @@ class CameraConfig:
 # Predefined camera presets
 # ---------------------------------------------------------------------------
 
-# Valores estimados a partir de specs publicadas de SIYI.
-# Pendiente calibración con tablero de ajedrez para valores exactos.
-# Sensor: Sony 1/1.7" (7.6 x 5.7 mm), FOV diagonal 93°.
-# f_real = (9.41/2) / tan(46.5°) ≈ 4.47 mm
-# f_px = 4.47 * 1920 / 7.6 ≈ 1130
-# FOV horizontal = 2 * atan(7.6 / (2 * 4.47)) ≈ 80.8°
+# Estimated from the published SIYI specifications (sensor Sony 1/1.7", 7.6 x 5.7 mm,
+# diagonal FOV 93 degrees):
+#   f_real = (9.41 / 2) / tan(46.5 deg) ~= 4.47 mm
+#   f_px = 4.47 * 1920 / 7.6 ~= 1130
+#   horizontal FOV = 2 * atan(7.6 / (2 * 4.47)) ~= 80.8 deg
 SIYI_A8_MINI = CameraConfig(
     name="SIYI A8 mini",
     focal_length_px=1130.0,
@@ -89,9 +88,8 @@ SIYI_A8_MINI = CameraConfig(
     fov_deg=80.8,
 )
 
-# Intrinsics recovered from the run_info.json files written by onboard.py
-# during the three real flights (26 Jul, 1 Aug and 2 Aug 2026). The
-# calibrated principal point is 14 px away from the geometric centre.
+# Intrinsics recovered from the logs of the real flights (see NOTES.md). The calibrated
+# principal point is 14 px away from the geometric centre.
 # Horizontal FOV = 2 * atan(1920 / (2 * 1407)) = 68.6 degrees.
 ARDUCAM_MODULE_3 = CameraConfig(
     name="Arducam Module 3",
@@ -102,8 +100,7 @@ ARDUCAM_MODULE_3 = CameraConfig(
     calibrated_principal_point=(945.7, 547.1),
 )
 
-# Valores calibrados para simulación (specs oficiales Raspberry Pi).
-# f_px = (3.04 mm * 640 px) / 3.68 mm = 529
+# From the official Raspberry Pi specifications: f_px = (3.04 mm * 640 px) / 3.68 mm = 529.
 RPI_CAMERA_V2 = CameraConfig(
     name="Raspberry Pi Camera v2",
     focal_length_px=529.0,

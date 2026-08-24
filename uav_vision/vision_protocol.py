@@ -1,53 +1,29 @@
-"""Vision protocol: watch the ground, geolocate what the camera sees,
-report POIs to the ground station.
+"""
+Vision protocol: runs the camera, geolocates detections and reports POIs.
 
-This is the ONLY module in the package that imports gradys_embedded.
-The camera layer (camera.py, pinhole_local.py) stays importable on any
-laptop; this file needs the GrADyS ecosystem installed next to it.
+This is the only module in the package that imports gradys_embedded. The camera layer stays
+importable on machines without the GrADyS ecosystem installed.
 
-How it plugs into GrADyS
-------------------------
-GrADyS protocols are classes implementing IProtocol. The runner (either
-gradys-sim or EmbeddedRunner on the real drone) instantiates the class
-and drives it with events: handle_telemetry() whenever the node moves,
-handle_timer() when a scheduled timer fires. This protocol does NOT
-command the drone -- it never sends a MobilityCommand. It only observes
-and reports, so it can run side by side with whatever mobility protocol
-the mission uses.
+The protocol is observe-only: it never sends mobility commands, so it can run alongside
+whatever mobility protocol the mission uses. Its cycle:
 
-Data flow, one cycle:
+    timer "see" (default 5 Hz):
+        camera.ver_alvo(pos, yaw) -> detections -> pixel_to_ray -> ground impact -> store
+    timer "report" (default every 2 s):
+        candidate list (identity layer) or single RANSAC consensus -> broadcast JSON
 
-    timer "see" (default 5 Hz)
-        camera.ver_alvo(pos, yaw) -> [{px, py, conf}, ...]
-        pixel_to_ray(...)         -> bearing ray in world frame
-        ray ^ ground plane        -> impact point (x, y)
-        store (impact, conf)
-
-    timer "report" (default every 2 s)
-        RANSAC consensus over stored impacts -> POI estimate
-        BroadcastMessageCommand(json)        -> ground station
-
-Where pose comes from
----------------------
-- position: Telemetry.current_position, pushed by the runner. This is
-  the local cartesian frame every GrADyS node shares.
-- yaw: Telemetry does not carry attitude, so the protocol asks a
-  yaw_source callable. On the real drone that is UavApiYaw, which polls
-  Francisco's uav_api over HTTP on localhost (GET /telemetry/general,
-  field "heading") -- the API owns the MAVLink serial port, nobody else
-  touches it. In simulation the test injects a function that returns
-  the simulated heading.
-
-Known limitation (on purpose, for now): all impacts go into ONE RANSAC,
-so the protocol reports the single dominant POI -- the person observed
-the most. The incremental identity layer (multi-POI, mobile tracks,
-appearance embeddings) is the next step; see README "Pendientes".
+Pose sources:
+    - Position arrives through handle_telemetry (the local cartesian frame all GrADyS nodes
+      share).
+    - Telemetry does not carry attitude, so yaw comes from a yaw_source callable. On the real
+      drone that is UavApiYaw, which polls the uav_api HTTP service on localhost; the API owns
+      the MAVLink serial connection and every other process reads pose over HTTP. In simulation
+      the caller injects a function returning the simulated heading.
 """
 
 from __future__ import annotations
 
 import json
-import math
 from typing import Callable, List, Optional, Sequence, Tuple, Type
 
 import numpy as np
@@ -61,7 +37,6 @@ from uav_vision.pinhole_local import pixel_to_ray
 TIMER_SEE = "uav_vision:see"
 TIMER_REPORT = "uav_vision:report"
 
-# Same consensus parameters the paper and onboard.py use.
 RANSAC_ITERATIONS = 100
 RANSAC_THRESHOLD_M = 5.0
 MIN_MEASUREMENTS = 8
@@ -72,9 +47,9 @@ def _ground_impact(
     direction: Sequence[float],
     ground_z: float,
 ) -> Optional[Tuple[float, float]]:
-    """Intersect a bearing ray with the horizontal plane z = ground_z."""
+    """Intersects a bearing ray with the horizontal plane z = ground_z."""
     dz = direction[2]
-    if dz >= -1e-9:            # ray parallel to the ground or pointing up
+    if dz >= -1e-9:  # ray parallel to the ground or pointing up
         return None
     t = (ground_z - origin[2]) / dz
     return (origin[0] + t * direction[0], origin[1] + t * direction[1])
@@ -86,11 +61,9 @@ def _ransac_consensus(
     threshold_m: float = RANSAC_THRESHOLD_M,
     iterations: int = RANSAC_ITERATIONS,
 ) -> Tuple[np.ndarray, int]:
-    """Largest cluster of ground impacts, refit as the inlier mean.
-
-    Same idea as onboard/fusion.py ransac_fusion, expressed over impact
-    points instead of rays: hypothesize a point, count impacts within
-    threshold_m, keep the hypothesis with the most support.
+    """
+    Finds the largest cluster of ground impacts and refits it as the inlier mean. Same consensus
+    idea as fusion.ransac_fusion, expressed over impact points instead of rays.
 
     Returns (estimate_xy, n_inliers).
     """
@@ -106,11 +79,12 @@ def _ransac_consensus(
 
 
 class UavApiYaw:
-    """Yaw source for the real drone: polls uav_api on localhost.
+    """
+    Yaw source for the real drone: polls the uav_api service on localhost.
 
-    uav_api owns the MAVLink serial connection; every consumer reads
-    pose over HTTP. GET /telemetry/general returns a JSON object whose
-    "heading" field is the yaw in degrees (0 = North, clockwise).
+    GET /telemetry/general returns a JSON object whose "heading" field is the yaw in degrees
+    (0 = North, clockwise). Returns None on any failure so a transient HTTP error skips one
+    frame instead of crashing the protocol.
     """
 
     def __init__(self, base_url: str = "http://localhost:8000", timeout_s: float = 0.5):
@@ -124,20 +98,21 @@ class UavApiYaw:
             with urllib.request.urlopen(self.url, timeout=self.timeout_s) as r:
                 return float(json.loads(r.read())["heading"])
         except Exception:
-            return None           # no pose -> skip this frame, never crash
+            return None
 
 
 class VisionProtocol(IProtocol):
-    """Observe-only protocol: camera in, POI messages out.
+    """
+    Observe-only protocol: camera in, POI messages out.
 
-    IProtocol.instantiate() calls cls() with no arguments, so runtime
-    configuration cannot go through __init__. Use with_config() to build
-    a configured subclass and hand THAT class to the runner:
+    IProtocol.instantiate() calls cls() with no arguments, so runtime configuration cannot go
+    through __init__. Use with_config() to build a configured subclass and hand that class to
+    the runner:
 
         Protocol = VisionProtocol.with_config(
-            camera=CamaraSimulada(alvo=(3, -2, 0), pitch_deg=-55.0),
+            camera=CamaraArduCam(...),
             pitch_deg=-55.0,
-            yaw_source=my_yaw_function,
+            yaw_source=UavApiYaw(),
         )
     """
 
@@ -145,15 +120,13 @@ class VisionProtocol(IProtocol):
     camera = None                                  # ver_alvo(pos, yaw) provider
     pitch_deg: Optional[float] = None              # camera mount pitch; no default
     yaw_source: Optional[Callable[[], Optional[float]]] = None
-    see_period_s: float = 0.2                      # 5 Hz, the safe rate on the Pi
+    see_period_s: float = 0.2
     report_period_s: float = 2.0
     ground_z: float = 0.0
     rng_seed: int = 0
-    # Optional IdentidadIncremental. When present AND detections carry a
-    # 'track_id', reports become multi-POI (statics + mobiles separated).
-    # Without it, everything goes into one RANSAC -- which on flight 3
-    # reproduces the original failure (POI lands nearer the equipment
-    # box than the operator; see scripts/replay_vuelo3.py).
+    # Optional IdentidadIncremental. When present and detections carry a 'track_id', reports
+    # become multi-POI (statics and mobiles separated). Without it, all impacts go into one
+    # RANSAC and the report is the single dominant POI.
     identidad = None
 
     @classmethod
@@ -168,11 +141,9 @@ class VisionProtocol(IProtocol):
         rng_seed: int = 0,
         identidad=None,
     ) -> Type["VisionProtocol"]:
-        """Build a configured protocol class ready for the runner.
-
-        pitch_deg is explicit and has no default for the same reason
-        CamaraSimulada's doesn't: the real mount changed from -45 to -55
-        once already, and hidden defaults are how copies diverge.
+        """
+        Builds a configured protocol class ready for the runner. pitch_deg is explicit and has
+        no default: the mount angle is a property of the deployment.
         """
         return type(
             "ConfiguredVisionProtocol",
@@ -195,9 +166,8 @@ class VisionProtocol(IProtocol):
         if self.camera is None or self.pitch_deg is None or self.yaw_source is None:
             raise RuntimeError(
                 "VisionProtocol is not configured. Build the class with "
-                "VisionProtocol.with_config(camera=..., pitch_deg=..., "
-                "yaw_source=...) and give THAT class to the runner."
-            )
+                "VisionProtocol.with_config(camera=..., pitch_deg=..., yaw_source=...) and "
+                "give that class to the runner.")
         self._position: Optional[Tuple[float, float, float]] = None
         self._impacts: List[Tuple[float, float]] = []
         self._confs: List[float] = []
@@ -222,7 +192,7 @@ class VisionProtocol(IProtocol):
                 TIMER_REPORT, self.provider.current_time() + self.report_period_s)
 
     def handle_packet(self, message: str) -> None:
-        pass                      # observe-only: nothing to receive yet
+        pass  # observe-only: no incoming commands in this version
 
     def finish(self) -> None:
         pass
@@ -232,10 +202,10 @@ class VisionProtocol(IProtocol):
     def _see(self) -> None:
         """One camera cycle: detect, back-project, store ground impacts."""
         if self._position is None:
-            return                # no telemetry yet
+            return  # no telemetry yet
         yaw = self.yaw_source()
         if yaw is None:
-            return                # pose source unavailable this frame
+            return  # pose source unavailable this frame
         self._frames_seen += 1
 
         cam_cfg = self.camera.camara
@@ -266,11 +236,10 @@ class VisionProtocol(IProtocol):
                 )
 
     def _report(self) -> None:
-        """Broadcast the current POI list.
-
-        With an identity layer: one POI per candidate, mobiles first.
-        Without one (or before any candidate matures): single dominant
-        POI by RANSAC consensus over all impacts.
+        """
+        Broadcasts the current POI list. With an identity layer: one POI per candidate, mobiles
+        first. Without one, or before any candidate has enough evidence: the single dominant POI
+        by RANSAC consensus over all stored impacts.
         """
         pois = self.identidad.candidatos() if self.identidad is not None else []
 

@@ -1,6 +1,8 @@
-"""Prueba que las dos camaras cumplen el mismo contrato.
+"""
+Checks that both cameras honor the same ver_alvo contract: identical signature, identical
+output shape, and consumer code that never learns which camera it received.
 
-Correr con:   python tests/test_contrato.py     (desde lac/uav_vision)
+Run with: python tests/test_contrato.py
 """
 import inspect
 import os

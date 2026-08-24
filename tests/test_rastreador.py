@@ -1,13 +1,11 @@
-"""Wiring test for the BoT-SORT tracker inside CamaraArduCam.
+"""
+Wiring test for the BoT-SORT tracker inside CamaraArduCam, without hardware.
 
-No hardware: the tracker part of the camera is exercised directly with
-synthetic frames -- one static box (the operator standing) and one box
-walking across the image. PASS means each keeps ONE stable track_id for
-the whole sequence and the two ids are different. That is exactly what
-the identity layer consumes.
+The tracker stage is exercised directly with synthetic frames: one static box and one box
+walking across the image. Passing means each keeps one stable track_id for the whole sequence
+and the two ids differ — which is what the identity layer consumes.
 
-Needs boxmot installed -- run with the entrenamiento venv:
-    entrenamiento/venv/Scripts/python tests/test_rastreador.py
+Needs boxmot installed: run with a python environment that has it.
 """
 import os
 import sys

@@ -1,19 +1,13 @@
-"""Empirical gates for IdentidadIncremental, with known ground truth.
+"""
+Empirical gates for IdentidadIncremental, each on a synthetic scene with known ground truth:
 
-Four behaviours, each with a synthetic scene where the right answer is
-known exactly:
+  1. Static: one standing person under projection noise yields one candidate near the truth.
+  2. Mobile: a walker is classified as mobile and its reported position must beat the lagging
+     naive estimate (median of the recent window).
+  3. Co-occurrence veto: two people seen in the same frames stay two candidates.
+  4. Twin override: duplicate boxes of one person merge into one candidate.
 
-  1. STATIC: one person standing + projection noise -> ONE candidate
-     near the truth (no phantom fragmentation).
-  2. MOBILE (gate for the linear-fit current position): a walker at
-     1 m/s -> classified MOVIL, and the reported position must beat
-     the lagging naive estimate (median of the recent window).
-  3. CO-OCCURRENCE VETO: two people 2 m apart seen in the same frames,
-     different appearance -> stay TWO candidates (never merged).
-  4. TWIN OVERRIDE: duplicate boxes of ONE person (co-occurring, same
-     spot, same appearance) -> merged into ONE candidate.
-
-Run with:   python tests/test_identidad.py     (from lac/uav_vision)
+Run with: python tests/test_identidad.py
 """
 import math
 import os

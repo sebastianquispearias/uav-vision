@@ -1,17 +1,13 @@
-"""End-to-end test of VisionProtocol without the full simulator.
+"""
+End-to-end test of VisionProtocol without the full simulator.
 
-A fake provider plays the role of gradys-sim: it keeps the clock, the
-timer queue and the outbox. The drone orbits a target for 60 simulated
-seconds; the simulated camera adds pixel noise (sigma = C/conf), so the
-protocol has to earn its estimate through RANSAC, not get it for free.
+A fake provider plays the role of the runner: it keeps the clock, the timer queue and the
+outbox. The drone orbits a target for 60 simulated seconds with pixel noise enabled, so the
+protocol has to earn its estimate through consensus. Passing means the full loop — detect,
+back-project, intersect ground, fuse, report — works end to end.
 
-PASS criterion: the last reported POI lands within 1.5 m of the true
-target. That is the full loop -- detect, back-project, intersect
-ground, fuse, report -- working end to end.
-
-Run with:   python tests/test_vision_protocol.py     (from lac/uav_vision)
-Needs gradys-embedded importable; the sys.path fallback below picks up
-the sibling clone at ../gradys-embedded.
+Run with: python tests/test_vision_protocol.py
+Needs gradys-embedded importable; the sys.path fallback picks up the sibling clone.
 """
 import json
 import math
@@ -69,7 +65,7 @@ class FakeProvider:
 ALVO = (3.0, -2.0, 0.0)           # true target on the ground
 RADIO = 20.0                      # orbit radius, m
 ALTURA = 35.0                     # flight altitude, m (matches real flights)
-PITCH = -55.0                     # camera mount pitch since 02ago2026
+PITCH = -55.0                     # current camera mount pitch
 
 state = {"yaw": 0.0}
 

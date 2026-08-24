@@ -1,29 +1,20 @@
-"""Replay flight 3 (02ago2026) through VisionProtocol, no drone needed.
+"""
+Replays a recorded real flight through VisionProtocol, no drone needed.
 
-The recorded flight provides everything the protocol would get live:
-frames.csv has the pose per frame (lat/lng/alt/yaw) and the cached
-detections (examen_v3_datos.npz) are what the detector saw. A replay
-camera hands those detections to the protocol exactly as CamaraArduCam
-would, and a fake provider plays the clock. The protocol then does its
-real job: pixel -> ray -> ground impact -> RANSAC -> POI report.
+The recording provides everything the protocol would get live: frames.csv has the pose per
+frame and the cached detections are what the detector saw. A replay camera hands those
+detections to the protocol exactly as CamaraArduCam would, and a fake provider plays the clock.
 
 Two-stage verification, in order of trust:
 
-  1. RAY CHECK: the npz rows carry the rays the real pipeline computed
-     during analysis. For every detection we compare the protocol's ray
-     against the recorded one. If the angles don't match, the frames,
-     the calibration or the yaw convention are wired wrong and the POI
-     means nothing -- so this check gates the rest.
+  1. Ray check: the cached rows carry the rays the original pipeline computed. Every
+     protocol-computed ray is compared against the recorded one; a mismatch means the
+     calibration, frame or yaw convention is wired wrong and gates the rest.
+  2. POI check: the reported POIs against the two known ground-truth positions of that flight
+     (the operator, and the object cluster that corrupted the single-consensus estimate in the
+     original run — the case the identity layer exists to solve).
 
-  2. POI CHECK: the final reported POI against the two known ground
-     truths: PIES = (-1.3, 8.8) is the operator, OBJ = (2.5, 4.4) is
-     the equipment box that stole RANSAC's consensus in the original
-     flight-3 failure. The protocol currently fuses everything into ONE
-     POI, so an honest replay is expected to reproduce that failure --
-     that is the motivation for the incremental identity layer, not a
-     surprise.
-
-Run from lac/uav_vision:   python scripts/replay_vuelo3.py
+Run from the repo root: python scripts/replay_vuelo3.py
 Needs ../gradys-embedded and ../drone-geolocation next to this repo.
 """
 import csv

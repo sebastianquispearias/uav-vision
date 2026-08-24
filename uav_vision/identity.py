@@ -1,108 +1,85 @@
-"""Incremental identity: from per-frame detections to named POIs, online.
+"""
+Incremental identity: turns tracked detections into named points of interest, online.
 
-This is the live version of the logic validated offline on flight 3
-(drone-geolocation/entrenamiento/correr_botsort.py): image-plane tracks
-first (strong signal), ground projection only to place tracks that
-already exist (weak signal, 2-3 m of telemetry noise). The offline run
-separated the operator (674 obs, 2.49 m) from the equipment box and
-found 4 walkers with trajectories; these are the same association rules
-made incremental.
+Division of labour:
+    - The camera owns image-plane tracking (it has the image and the boxes). Every detection
+      arrives here already carrying a track_id.
+    - This module owns everything after: it accumulates ground impacts per track, classifies
+      tracks as static or mobile, and merges tracks that correspond to the same physical thing
+      (by position and appearance, with a co-occurrence veto) into reportable candidates.
 
-Division of labour
-------------------
-- The CAMERA owns image-plane tracking (it has the image and the boxes;
-  on the drone that is the official BoT-SORT). Each detection arrives
-  here already carrying a track_id.
-- This module owns everything after: accumulate ground impacts per
-  track, classify tracks static vs MOBILE, and merge tracks that are
-  the same physical thing (position + appearance, with co-occurrence
-  veto) into reportable candidates.
+Image-plane tracking runs first because it is the strong signal: two people two meters apart are
+clearly separate in the image, while their ground projections overlap under telemetry noise.
+Ground coordinates are used only to place tracks that already exist.
 
-Why the thresholds are parameters, not constants
-------------------------------------------------
-The offline constants were tuned for one flight and silently encode the
-scene: POS_M=3.5 assumes the 02ago telemetry noise, the n>=6/20/25
-observation counts assume its ~0.7 FPS capture rate. Copied as-is they
-would look general and fail quietly at another altitude or frame rate.
-So here:
-
-- radio_fusion_m has NO default. It is roughly the expected ground
-  noise: gps_sigma + slant_range * yaw_sigma_rad (3.5 m fits the 02ago
-  scene at 35 m altitude). The caller states it, like pitch_deg in the
-  camera.
-- observation counts are DURATIONS (seconds) times the fps the caller
-  declares. The defaults (8.6 s / 29 s / 36 s) reproduce exactly the
-  validated offline counts (6 / 20 / 25) at that flight's 0.7 FPS, and
-  scale correctly at the 5 Hz live rate.
-  IMPORTANT (learned on flights 1-2, C-5 validation): fps here means
-  the expected OBSERVATION rate -- detections per second actually
-  reaching observar() -- NOT the camera frame rate. On flight 1 the
-  camera ran at 8.7 FPS but the person was detected in ~30% of frames
-  (2.45 obs/s); thresholds scaled by camera fps demanded impossible
-  evidence and reported zero candidates. When detection is
-  intermittent, measure obs/s and pass that.
-- emb_dist_max comes from a measurement, not taste: on flight 02ago,
-  same-identity crops score cosine 0.63-0.87 and different identities
-  0.33-0.46 (no overlap). The midpoint of the gap, cosine 0.545, is
-  L2 distance sqrt(2 - 2*0.545) = 0.95 on normalised vectors.
+Thresholds are parameters rather than constants because they encode scene properties (ground
+noise) and data rate. The provenance of every default is documented in NOTES.md.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-# Measured on flight 02ago (see module docstring). Midpoint of the gap
-# between same-identity and different-identity cosine similarity.
+# Fusion threshold for appearance embeddings (L2 distance between unit vectors). Chosen at the
+# midpoint of the measured gap between same-identity and different-identity scores; see NOTES.md.
 EMB_DIST_MAX_MEDIDO = 0.95
 
-# Two tracks seen together in this many frames are two different
-# physical things, whatever position and appearance say.
+# Two tracks seen together in this many frames are two different physical things, whatever
+# position and appearance say: nothing appears twice in the same photo.
 COOCURRENCIA_MIN = 3
 
-# ...unless the evidence screams "same person": the detector sometimes
-# emits duplicate boxes for one person, the tracker turns them into two
-# co-occurring tracks, and the veto then forbids the obvious merge (the
-# residual-double problem seen offline: the operator split #4/#6).
-# Override thresholds, from the measured embedding separation: same
-# identity scores distance <= 0.86, different identities >= 1.04, so
-# 0.70 is deep inside the same-identity zone; and the position gate is
-# far tighter than the fusion radius because a duplicate box lands on
-# the SAME spot, not merely nearby.
+# Exception to the veto: detectors sometimes emit duplicate boxes for one person, which the
+# tracker turns into two co-occurring tracks. The veto is lifted only when the evidence says
+# "same person" — nearly identical position AND an embedding distance deep inside the measured
+# same-identity zone.
 EMB_DIST_GEMELO = 0.70
 POS_FRAC_GEMELO = 0.4
 
 
 def _posicion_actual(ii: np.ndarray) -> np.ndarray:
-    """Where the track is NOW, from its recent impacts.
+    """
+    Estimates where a track is NOW from its recent impacts.
 
-    The naive answer -- median of the last quarter -- systematically
-    LAGS a walker: it is the centre of the recent past, so at 1 m/s and
-    a 30-observation window it points ~half a window behind the person.
-    A straight-line fit over the same window, evaluated at the last
-    sample, removes that lag while still averaging the projection
-    noise. (Observation index stands in for time: the camera timer
-    fires at a fixed rate, so samples are near-uniform.)
+    The median of the recent window systematically lags a moving target, since it is the center
+    of the recent past. A straight-line fit over the same window, evaluated at the last sample,
+    removes that lag while still averaging out projection noise. The observation index stands in
+    for time: samples arrive at a near-uniform rate.
     """
     q = max(2, len(ii) // 4)
     v = ii[-q:]
     if len(v) < 3:
         return np.median(v, axis=0)
     idx = np.arange(len(v), dtype=float)
-    ajuste = np.polynomial.polynomial.polyfit(idx, v, 1)   # (2, 2): b, m
+    ajuste = np.polynomial.polynomial.polyfit(idx, v, 1)  # rows: intercept, slope
     return np.asarray(ajuste[0] + ajuste[1] * idx[-1])
 
 
 class IdentidadIncremental:
-    """Accumulates tracked detections; produces candidates on demand.
+    """
+    Accumulates tracked detections and produces candidate POIs on demand.
 
-    observar() is O(1) per detection. candidatos() re-associates all
-    track summaries from scratch; tracks number in the tens, so doing
-    it at every report tick (2 s) is negligible next to the detector.
-    Re-deriving from summaries instead of patching a live clustering
-    keeps the semantics identical to the validated offline run.
+    observar() is O(1) per detection. candidatos() re-associates all track summaries from
+    scratch on each call; tracks number in the tens, so running it at every report tick is
+    negligible next to the detector. Re-deriving candidates from summaries, instead of patching
+    a live clustering, keeps the association rules simple and order-independent.
+
+    Args:
+        radio_fusion_m: expected ground-projection noise of the scene, in meters (roughly
+            gps_sigma + slant_range * yaw_sigma). Two static tracks closer than this may be the
+            same thing. No default: it is a property of the deployment, not of the algorithm.
+        fps: expected OBSERVATION rate in detections per second actually reaching observar().
+            This is not the camera frame rate: when detection is intermittent the observation
+            rate is lower, and thresholds scaled by camera rate would demand impossible
+            evidence. Measure detections per second and pass that.
+        emb_dist_max: appearance distance above which two tracks are never merged.
+        dur_pista_s: minimum accumulated observation time for a track to be considered.
+        dur_movil_s: minimum accumulated observation time to classify a track as mobile.
+        dur_reporte_s: minimum accumulated observation time for a candidate to be reported.
+        desplaz_movil_m: net displacement above which a track counts as moving. Defaults to
+            slightly above the fusion radius: a static track wanders by projection noise only.
     """
 
     def __init__(
@@ -117,9 +94,6 @@ class IdentidadIncremental:
     ) -> None:
         self.radio_fusion_m = radio_fusion_m
         self.emb_dist_max = emb_dist_max
-        # Static tracks wander by projection noise only, so anything
-        # moving farther than the fusion radius (plus margin) walked.
-        # 1.15 * 3.5 = 4.0, the value validated offline.
         self.desplaz_movil_m = (desplaz_movil_m if desplaz_movil_m is not None
                                 else 1.15 * radio_fusion_m)
         self.n_pista = max(3, round(dur_pista_s * fps))
@@ -138,7 +112,7 @@ class IdentidadIncremental:
         conf: float,
         emb: Optional[np.ndarray] = None,
     ) -> None:
-        """One tracked detection, already projected to the ground."""
+        """Records one tracked detection, already projected to the ground."""
         t = self._tracks.get(track_id)
         if t is None:
             t = {"imps": [], "conf_sum": 0.0,
@@ -152,7 +126,7 @@ class IdentidadIncremental:
             t["emb_sum"] = v.copy() if t["emb_sum"] is None else t["emb_sum"] + v
             t["n_emb"] += 1
 
-    # -- association (the offline rules, on current summaries) ------------
+    # -- association -------------------------------------------------------
 
     def _resumen_pistas(self) -> List[dict]:
         pistas = []
@@ -169,7 +143,7 @@ class IdentidadIncremental:
                 emb = t["emb_sum"] / (np.linalg.norm(t["emb_sum"]) + 1e-9)
             pistas.append({
                 "tid": tid, "n": n,
-                "pos": np.median(ii, axis=0),        # robust centre
+                "pos": np.median(ii, axis=0),  # robust lifetime center
                 "pos_actual": _posicion_actual(ii),
                 "desplaz": desplaz,
                 "conf": t["conf_sum"] / n,
@@ -179,14 +153,12 @@ class IdentidadIncremental:
         return pistas
 
     def candidatos(self) -> List[dict]:
-        """Current candidate list, biggest evidence first, mobiles first.
+        """
+        Returns the current candidate list, mobiles first, then by descending evidence.
 
-        Each candidate: {x, y, n_obs, conf, movil}. For a MOBILE
-        candidate (x, y) is its CURRENT position (median of the last
-        quarter of its impacts), not its lifetime median -- a walker's
-        lifetime median points at the middle of the path, which is
-        nowhere. Static candidates keep the lifetime median, which is
-        the whole point of accumulating views.
+        Each candidate: {x, y, n_obs, conf, movil}. For a mobile candidate (x, y) is its
+        CURRENT position (a mobile's lifetime median points at the middle of its path). Static
+        candidates report the lifetime median, which is the point of accumulating views.
         """
         cands: List[dict] = []
         for tk in sorted(self._resumen_pistas(), key=lambda p: -p["n"]):
@@ -201,8 +173,8 @@ class IdentidadIncremental:
                     continue
                 dp = float(np.linalg.norm(tk["pos"] - c["pos"]))
                 if len(tk["frames"] & c["frames"]) >= COOCURRENCIA_MIN:
-                    # seen together: two different things -- except the
-                    # duplicate-box case (same spot + same appearance)
+                    # Seen together: two different things — unless this is the duplicate-box
+                    # case (same spot, same appearance).
                     es_gemelo = (
                         dp < POS_FRAC_GEMELO * self.radio_fusion_m
                         and tk["emb"] is not None and c["emb"] is not None
