@@ -34,6 +34,13 @@ So here:
   declares. The defaults (8.6 s / 29 s / 36 s) reproduce exactly the
   validated offline counts (6 / 20 / 25) at that flight's 0.7 FPS, and
   scale correctly at the 5 Hz live rate.
+  IMPORTANT (learned on flights 1-2, C-5 validation): fps here means
+  the expected OBSERVATION rate -- detections per second actually
+  reaching observar() -- NOT the camera frame rate. On flight 1 the
+  camera ran at 8.7 FPS but the person was detected in ~30% of frames
+  (2.45 obs/s); thresholds scaled by camera fps demanded impossible
+  evidence and reported zero candidates. When detection is
+  intermittent, measure obs/s and pass that.
 - emb_dist_max comes from a measurement, not taste: on flight 02ago,
   same-identity crops score cosine 0.63-0.87 and different identities
   0.33-0.46 (no overlap). The midpoint of the gap, cosine 0.545, is
