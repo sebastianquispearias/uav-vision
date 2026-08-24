@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uav-vision"
+version = "0.1.0"
+description = "Deteccion y geometria de camara para geolocalizacion desde UAV. Misma interfaz en simulacion y en el dron real."
+requires-python = ">=3.9"
+dependencies = ["numpy"]
+
+# El dron real necesita ademas:  ultralytics, picamera2
+# No van aca porque no se instalan en una laptop.
+[project.optional-dependencies]
+dron = ["ultralytics"]
+
+[tool.setuptools.packages.find]
+include = ["uav_vision*"]
