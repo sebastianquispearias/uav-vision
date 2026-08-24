@@ -149,6 +149,12 @@ class VisionProtocol(IProtocol):
     report_period_s: float = 2.0
     ground_z: float = 0.0
     rng_seed: int = 0
+    # Optional IdentidadIncremental. When present AND detections carry a
+    # 'track_id', reports become multi-POI (statics + mobiles separated).
+    # Without it, everything goes into one RANSAC -- which on flight 3
+    # reproduces the original failure (POI lands nearer the equipment
+    # box than the operator; see scripts/replay_vuelo3.py).
+    identidad = None
 
     @classmethod
     def with_config(
@@ -160,6 +166,7 @@ class VisionProtocol(IProtocol):
         report_period_s: float = 2.0,
         ground_z: float = 0.0,
         rng_seed: int = 0,
+        identidad=None,
     ) -> Type["VisionProtocol"]:
         """Build a configured protocol class ready for the runner.
 
@@ -178,6 +185,7 @@ class VisionProtocol(IProtocol):
                 "report_period_s": report_period_s,
                 "ground_z": ground_z,
                 "rng_seed": rng_seed,
+                "identidad": identidad,
             },
         )
 
@@ -247,26 +255,44 @@ class VisionProtocol(IProtocol):
                 continue
             self._impacts.append(impact)
             self._confs.append(det["conf"])
+            track_id = det.get("track_id")
+            if self.identidad is not None and track_id is not None:
+                self.identidad.observar(
+                    frame=self._frames_seen,
+                    track_id=int(track_id),
+                    impacto_xy=impact,
+                    conf=det["conf"],
+                    emb=det.get("emb"),
+                )
 
     def _report(self) -> None:
-        """Fuse stored impacts and broadcast the current POI estimate."""
-        if len(self._impacts) < MIN_MEASUREMENTS:
-            return
-        impacts = np.asarray(self._impacts)
-        estimate, n_inliers = _ransac_consensus(impacts, self._rng)
+        """Broadcast the current POI list.
+
+        With an identity layer: one POI per candidate, mobiles first.
+        Without one (or before any candidate matures): single dominant
+        POI by RANSAC consensus over all impacts.
+        """
+        pois = self.identidad.candidatos() if self.identidad is not None else []
+
+        if not pois:
+            if len(self._impacts) < MIN_MEASUREMENTS:
+                return
+            impacts = np.asarray(self._impacts)
+            estimate, n_inliers = _ransac_consensus(impacts, self._rng)
+            pois = [{
+                "x": round(float(estimate[0]), 2),
+                "y": round(float(estimate[1]), 2),
+                "n_obs": int(len(impacts)),
+                "n_inliers": n_inliers,
+                "conf_mean": round(float(np.mean(self._confs)), 3),
+            }]
 
         message = {
             "type": "vision_poi",
             "sender": self.provider.get_id(),
             "time": self.provider.current_time(),
             "frames_seen": self._frames_seen,
-            "pois": [{
-                "x": round(float(estimate[0]), 2),
-                "y": round(float(estimate[1]), 2),
-                "n_obs": int(len(impacts)),
-                "n_inliers": n_inliers,
-                "conf_mean": round(float(np.mean(self._confs)), 3),
-            }],
+            "pois": pois,
         }
         self.provider.send_communication_command(
             BroadcastMessageCommand(json.dumps(message)))

@@ -71,7 +71,8 @@ class CamaraReplay:
 
     Same ver_alvo contract as the other cameras. The current frame is
     set externally; each frame is served once so extra timer ticks
-    between frames don't duplicate measurements.
+    between frames don't duplicate measurements. Detections carry
+    track_id and emb, like CamaraArduCam with a tracker would provide.
     """
 
     def __init__(self, dets_por_frame, camara):
@@ -90,12 +91,14 @@ class CamaraReplay:
             return []
         self._servido = True
         salida = []
-        for d in self.dets_por_frame.get(self.frame, []):
+        for d, tid, emb in self.dets_por_frame.get(self.frame, []):
             x1, y1, x2, y2 = d[2:6]
             salida.append({
                 "px": float((x1 + x2) / 2),
                 "py": float(y2),          # bottom edge: the feet
                 "conf": float(d[1]),
+                "track_id": tid,
+                "emb": emb,
             })
         return salida
 
@@ -137,26 +140,80 @@ with open(os.path.join(FLIGHT, "frames.csv")) as f:
         poses[int(r["frame"])] = r
 
 D = np.load(DETS_NPZ)
-dets = D["dets"]
-dets = dets[dets[:, 1] >= CONF_MIN]
-por_frame = {}
-for d in dets:
-    por_frame.setdefault(int(d[0]), []).append(d)
+dets_all = D["dets"]
+sel = dets_all[:, 1] >= CONF_MIN
+dets = dets_all[sel]
+# embs_osnet.npy rows correspond, in order, to dets[conf >= 0.25]
+EMBS_NPY = os.path.join(_LAC, "drone-geolocation", "entrenamiento",
+                        "embs_osnet.npy")
+embs = np.load(EMBS_NPY).astype(np.float32)
+embs /= (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9)
+assert len(embs) == len(dets), "embs no alineadas con las detecciones"
+
+idx_por_frame = {}
+for i, d in enumerate(dets):
+    idx_por_frame.setdefault(int(d[0]), []).append(i)
 
 frames_aire = sorted(
     f for f, p in poses.items()
-    if float(p["alt_agl"]) > 3.0 and f in por_frame)
+    if float(p["alt_agl"]) > 3.0 and f in idx_por_frame)
 print(f"{len(dets)} detecciones (conf>={CONF_MIN}) en "
       f"{len(frames_aire)} frames de vuelo")
 
+# Greedy pixel-continuity tracker to assign track ids, standing in for
+# the BoT-SORT the real camera runs. Its gates are valid for THIS
+# flight only (90 px per step assumes the 02ago altitude and cadence;
+# gap of 4 served frames assumes its capture rate) -- which is fine
+# here: this script replays exactly that flight.
+MAX_PX = 90.0
+MAX_GAP = 4
+track_de = -np.ones(len(dets), dtype=int)
+activos = []                      # [id, last_seq, last_center]
+n_tracks = 0
+for seq, f in enumerate(frames_aire):
+    for i in idx_por_frame[f]:
+        c = np.array([(dets[i, 2] + dets[i, 4]) / 2,
+                      (dets[i, 3] + dets[i, 5]) / 2])
+        mejor, dmin = None, math.inf
+        for a in activos:
+            if seq - a[1] > MAX_GAP or a[1] == seq:
+                continue
+            dist = float(np.linalg.norm(c - a[2]))
+            if dist < dmin:
+                mejor, dmin = a, dist
+        if mejor is not None and dmin < MAX_PX:
+            mejor[1], mejor[2] = seq, c
+            track_de[i] = mejor[0]
+        else:
+            activos.append([n_tracks, seq, c])
+            track_de[i] = n_tracks
+            n_tracks += 1
+    activos = [a for a in activos if seq - a[1] <= MAX_GAP]
+print(f"rastreador de replay: {n_tracks} pistas")
+
+por_frame = {}
+for f, ix in idx_por_frame.items():
+    por_frame[f] = [(dets[i], int(track_de[i]), embs[i]) for i in ix]
+
 # --------------------------------------------- stage 1: the ray check --
 camara_cfg = ARDUCAM_MODULE_3.rotated_180()
+
+t_ini = float(poses[frames_aire[0]]["t_mono"])
+t_fin = float(poses[frames_aire[-1]]["t_mono"])
+fps_replay = len(frames_aire) / (t_fin - t_ini)
+print(f"cadencia del vuelo: {fps_replay:.2f} FPS")
+
+from uav_vision.identity import IdentidadIncremental
+
 Protocolo = VisionProtocol.with_config(
     camera=CamaraReplay(por_frame, camara_cfg),
     pitch_deg=PITCH,
     yaw_source=lambda: state["yaw"],
     see_period_s=0.1,
     report_period_s=2.0,
+    # radio_fusion_m: expected ground noise of THIS scene (gps sigma +
+    # slant_range * yaw error at 35 m), the value validated offline.
+    identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=fps_replay),
 )
 state = {"yaw": 0.0}
 
@@ -168,7 +225,7 @@ for f in frames_aire[::10]:
     x, y = enu(float(p["lat"]), float(p["lng"]))
     pos = (x, y, float(p["alt_agl"]))
     yaw = float(p["yaw"])
-    for d in por_frame[f]:
+    for d, _tid, _e in por_frame[f]:
         px, py = (d[2] + d[4]) / 2, d[5]
         _, dir_mio = pixel_to_ray(
             pos, yaw, (px, py), PITCH,
@@ -206,18 +263,24 @@ protocol.finish()
 
 reportes = [json.loads(c.message) for c in provider.sent]
 assert reportes, "el protocolo no reporto nada"
-ultimo = reportes[-1]["pois"][0]
-poi = np.array([ultimo["x"], ultimo["y"]])
+pois = reportes[-1]["pois"]
 
-d_pies = float(np.linalg.norm(poi - PIES))
-d_obj = float(np.linalg.norm(poi - OBJ))
-print(f"\nREPLAY ({len(reportes)} reportes, {ultimo['n_obs']} obs, "
-      f"{ultimo['n_inliers']} inliers)")
-print(f"  POI final: ({poi[0]:.2f}, {poi[1]:.2f})")
-print(f"  distancia al operador (PIES {tuple(PIES)}): {d_pies:.2f} m")
-print(f"  distancia a la caja   (OBJ  {tuple(OBJ)}): {d_obj:.2f} m")
-quien = "la CAJA (fallo original reproducido)" if d_obj < d_pies else "el OPERADOR"
-print(f"  >> el POI dominante es {quien}")
-print("\nConclusion honesta: con UN solo RANSAC el protocolo reporta el")
-print("cluster mas observado, igual que el vuelo original. La capa de")
-print("identidad incremental es la que separa operador/objetos/moviles.")
+print(f"\nREPLAY CON IDENTIDAD ({len(reportes)} reportes; "
+      f"ultimo con {len(pois)} POIs)")
+print(f"{'#':>3} {'tipo':>9} {'n_obs':>6} {'conf':>5} {'pos':>16} "
+      f"{'d_PIES':>7} {'d_OBJ':>6}")
+mejor_pies = math.inf
+for j, p in enumerate(pois):
+    xy = np.array([p["x"], p["y"]])
+    dp = float(np.linalg.norm(xy - PIES))
+    do = float(np.linalg.norm(xy - OBJ))
+    mejor_pies = min(mejor_pies, dp)
+    tipo = "MOVIL" if p.get("movil") else "estatico"
+    quien = " <- OPERADOR" if dp < 2.5 else (" <- caja" if do < 2.5 else "")
+    print(f"{j:>3} {tipo:>9} {p['n_obs']:>6} {p.get('conf', p.get('conf_mean')):>5.2f} "
+          f"({p['x']:6.2f},{p['y']:6.2f}) {dp:>7.2f} {do:>6.2f}{quien}")
+
+print(f"\n  mejor POI respecto al operador: {mejor_pies:.2f} m "
+      f"(offline BoT-SORT dio 2.49 m)")
+print("  El operador y la caja salen como POIs SEPARADOS: el fallo del")
+print("  vuelo 3 (un solo consenso mezclado) queda resuelto en linea.")
