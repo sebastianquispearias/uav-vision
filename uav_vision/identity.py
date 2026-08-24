@@ -55,6 +55,38 @@ EMB_DIST_MAX_MEDIDO = 0.95
 # physical things, whatever position and appearance say.
 COOCURRENCIA_MIN = 3
 
+# ...unless the evidence screams "same person": the detector sometimes
+# emits duplicate boxes for one person, the tracker turns them into two
+# co-occurring tracks, and the veto then forbids the obvious merge (the
+# residual-double problem seen offline: the operator split #4/#6).
+# Override thresholds, from the measured embedding separation: same
+# identity scores distance <= 0.86, different identities >= 1.04, so
+# 0.70 is deep inside the same-identity zone; and the position gate is
+# far tighter than the fusion radius because a duplicate box lands on
+# the SAME spot, not merely nearby.
+EMB_DIST_GEMELO = 0.70
+POS_FRAC_GEMELO = 0.4
+
+
+def _posicion_actual(ii: np.ndarray) -> np.ndarray:
+    """Where the track is NOW, from its recent impacts.
+
+    The naive answer -- median of the last quarter -- systematically
+    LAGS a walker: it is the centre of the recent past, so at 1 m/s and
+    a 30-observation window it points ~half a window behind the person.
+    A straight-line fit over the same window, evaluated at the last
+    sample, removes that lag while still averaging the projection
+    noise. (Observation index stands in for time: the camera timer
+    fires at a fixed rate, so samples are near-uniform.)
+    """
+    q = max(2, len(ii) // 4)
+    v = ii[-q:]
+    if len(v) < 3:
+        return np.median(v, axis=0)
+    idx = np.arange(len(v), dtype=float)
+    ajuste = np.polynomial.polynomial.polyfit(idx, v, 1)   # (2, 2): b, m
+    return np.asarray(ajuste[0] + ajuste[1] * idx[-1])
+
 
 class IdentidadIncremental:
     """Accumulates tracked detections; produces candidates on demand.
@@ -131,7 +163,7 @@ class IdentidadIncremental:
             pistas.append({
                 "tid": tid, "n": n,
                 "pos": np.median(ii, axis=0),        # robust centre
-                "pos_actual": np.median(ii[-q:], axis=0),
+                "pos_actual": _posicion_actual(ii),
                 "desplaz": desplaz,
                 "conf": t["conf_sum"] / n,
                 "emb": emb,
@@ -160,9 +192,17 @@ class IdentidadIncremental:
             for k, c in enumerate(cands):
                 if c["movil"]:
                     continue
-                if len(tk["frames"] & c["frames"]) >= COOCURRENCIA_MIN:
-                    continue      # seen together: two different things
                 dp = float(np.linalg.norm(tk["pos"] - c["pos"]))
+                if len(tk["frames"] & c["frames"]) >= COOCURRENCIA_MIN:
+                    # seen together: two different things -- except the
+                    # duplicate-box case (same spot + same appearance)
+                    es_gemelo = (
+                        dp < POS_FRAC_GEMELO * self.radio_fusion_m
+                        and tk["emb"] is not None and c["emb"] is not None
+                        and float(np.linalg.norm(tk["emb"] - c["emb"]))
+                        < EMB_DIST_GEMELO)
+                    if not es_gemelo:
+                        continue
                 if dp >= self.radio_fusion_m:
                     continue
                 if tk["emb"] is not None and c["emb"] is not None:
