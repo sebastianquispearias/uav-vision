@@ -192,6 +192,10 @@ class VisionProtocol(IProtocol):
         # Slots the work overran. Not a curiosity: it is the difference between a drone that
         # is keeping up and one quietly two thirds as attentive as it claims to be.
         self._slots_perdidos = 0
+        # Start of the window the reported rate covers. Reset at every report.
+        self._t_ventana = now
+        self._frames_ventana = 0
+        self._slots_ventana = 0
         self._proximo_see = now + self.see_period_s
         self._proximo_report = now + self.report_period_s
         self.provider.schedule_timer(TIMER_SEE, self._proximo_see)
@@ -241,12 +245,31 @@ class VisionProtocol(IProtocol):
     def handle_packet(self, message: str) -> None:
         pass  # observe-only: no incoming commands in this version
 
-    def _fps_real(self):
-        """Frames per second actually delivered since the mission started."""
-        transcurrido = self.provider.current_time() - self._t_inicio
-        if transcurrido <= 0:
-            return None
-        return round(self._frames_seen / transcurrido, 2)
+    def _ritmo(self):
+        """
+        Rate and misses over the LAST report interval, not over the whole mission.
+
+        A lifetime average is the wrong statistic here, and measurably so. The camera takes
+        about 15 s to wake and the models to load, and on the Pi that one-off showed up as
+        2.42 fps and 46 lost slots on a loop that was in fact delivering 2.98 of a configured
+        3.00 -- an operator reading it would have seen a saturated drone that was running
+        perfectly. The startup is real but it is over; what matters in flight is the rate now.
+
+        The cumulative count is kept alongside, because after the flight the total is the
+        thing worth knowing.
+        """
+        ahora = self.provider.current_time()
+        dt = ahora - self._t_ventana
+        frames = self._frames_seen - self._frames_ventana
+        perdidos = self._slots_perdidos - self._slots_ventana
+        self._t_ventana = ahora
+        self._frames_ventana = self._frames_seen
+        self._slots_ventana = self._slots_perdidos
+        return {
+            "fps_real": round(frames / dt, 2) if dt > 0 else None,
+            "slots_perdidos": perdidos,
+            "slots_perdidos_total": self._slots_perdidos,
+        }
 
     def _origen_gps(self):
         """The mission's coordinate origin as [lat, lon, alt], or None outside the runner."""
@@ -341,15 +364,17 @@ class VisionProtocol(IProtocol):
             if recorte:
                 p["recorte"] = base64.b64encode(recorte).decode("ascii")
 
+        ritmo = self._ritmo()
         message = {
             "type": "vision_poi",
             "sender": self.provider.get_id(),
             "time": self.provider.current_time(),
             "frames_seen": self._frames_seen,
-            # What the loop actually delivered, so the gap between configured and real can
-            # never again be something only a stopwatch would find.
-            "fps_real": self._fps_real(),
-            "slots_perdidos": self._slots_perdidos,
+            # What the loop actually delivered over the last interval, so the gap between
+            # configured and real can never again be something only a stopwatch would find.
+            "fps_real": ritmo["fps_real"],
+            "slots_perdidos": ritmo["slots_perdidos"],
+            "slots_perdidos_total": ritmo["slots_perdidos_total"],
             "latido": latido,
             # The frame these metres are measured in, so the receiver never has to be told
             # separately. It cannot be: when the mission is loaded without an origin the

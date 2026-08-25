@@ -45,14 +45,22 @@ def revisar(condicion, descripcion, detalle=""):
 class CamaraQueTarda:
     """A camera whose work costs wall-clock time, because on real hardware it does."""
 
-    def __init__(self, provider, trabajo_s, detecciones=()):
+    def __init__(self, provider, trabajo_s, detecciones=(), trabajo_inicial_s=None):
         self.provider = provider
         self.trabajo_s = trabajo_s
+        # The real camera takes about 15 s on its first call: sensor warm-up plus loading the
+        # detector and the appearance model.
+        self.trabajo_inicial_s = trabajo_inicial_s
         self.detecciones = list(detecciones)
         self.camara = ARDUCAM_MODULE_3
+        self._primera = True
 
     def ver_alvo(self, pos, yaw):
-        self.provider.time += self.trabajo_s
+        if self._primera and self.trabajo_inicial_s is not None:
+            self._primera = False
+            self.provider.time += self.trabajo_inicial_s
+        else:
+            self.provider.time += self.trabajo_s
         return [dict(d) for d in self.detecciones]
 
 
@@ -65,10 +73,10 @@ DETECCION = {
 
 
 def correr(trabajo_s, periodo_s, hasta_s, detecciones=(), fps_declarado=None,
-           dur_reporte_s=36.0):
+           dur_reporte_s=36.0, trabajo_inicial_s=None):
     """Event-driven: the clock only moves to the next due timer, or forward through work."""
     provider = FakeProvider()
-    camara = CamaraQueTarda(provider, trabajo_s, detecciones)
+    camara = CamaraQueTarda(provider, trabajo_s, detecciones, trabajo_inicial_s)
     fps = fps_declarado if fps_declarado is not None else 1.0 / periodo_s
     Protocolo = VisionProtocol.with_config(
         camera=camara, pitch_deg=-55.0, yaw_source=lambda: 0.0,
@@ -126,8 +134,11 @@ revisar(ultimo.get("fps_real") is not None, "el mensaje lleva la tasa REAL")
 revisar(abs(ultimo["fps_real"] - real) < 0.2,
         "y la tasa que declara es la que entrego",
         "dice %.2f, entrego %.2f" % (ultimo["fps_real"], real))
-revisar(ultimo.get("slots_perdidos") == p._slots_perdidos,
-        "y las perdidas viajan tambien: desde tierra se ve un dron saturado")
+revisar(ultimo.get("slots_perdidos_total") == p._slots_perdidos,
+        "el acumulado de perdidas viaja entero")
+revisar(ultimo.get("slots_perdidos", 0) > 0,
+        "y el del ultimo intervalo tambien: desde tierra se ve un dron saturado AHORA",
+        "%s ranuras en el ultimo reporte" % ultimo.get("slots_perdidos"))
 revisar(real < 3.0, "   (no puede correr mas rapido que su propio trabajo)",
         "%.2f FPS con 450 ms por frame" % real)
 
@@ -158,6 +169,31 @@ for f in range(200):
 c = ident.candidatos()
 revisar(bool(c) and c[0]["maduro"],
         "sin reloj, la madurez sigue midiendose por span de frames (replays)")
+
+# ============================== 4. la tasa reportada es la de AHORA, no la del arranque
+print()
+print("=" * 68)
+print("4. El arranque no contamina la tasa que se reporta")
+print("=" * 68)
+
+# Measured on the Pi 25ago: a loop delivering 2.98 of a configured 3.00 reported itself as
+# 2.42 fps with 46 lost slots, because the 15 s camera warm-up was averaged in for the whole
+# mission. An operator would have read a saturated drone that was running perfectly.
+p, prov, msgs, _ = correr(0.05, 0.333, hasta_s=90.0, trabajo_inicial_s=15.0)
+tardios = [m for m in msgs if m["fps_real"] is not None][-10:]
+peor = min(m["fps_real"] for m in tardios)
+revisar(peor > 2.7,
+        "tras el arranque lento, los reportes dicen la tasa real",
+        "peor de los ultimos 10: %.2f FPS" % peor)
+revisar(all(m["slots_perdidos"] == 0 for m in tardios),
+        "y ya no arrastran las ranuras que se comio el arranque")
+total = tardios[-1].get("slots_perdidos_total")
+revisar(total is not None and total > 0,
+        "pero el acumulado se conserva, para despues del vuelo",
+        "%s ranuras en total" % total)
+primeros = [m for m in msgs if m["fps_real"] is not None][:3]
+revisar(any(m["slots_perdidos"] > 0 for m in primeros),
+        "   (y el arranque SI se ve, en su momento)")
 
 print()
 if FALLOS:

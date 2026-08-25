@@ -79,6 +79,7 @@ def ficha(ahora, mensaje):
         'frames_seen': mensaje.get('frames_seen'),
         'fps_real': mensaje.get('fps_real'),
         'slots_perdidos': mensaje.get('slots_perdidos'),
+        'slots_perdidos_total': mensaje.get('slots_perdidos_total'),
     }
 
 
