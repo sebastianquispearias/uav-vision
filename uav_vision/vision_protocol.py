@@ -82,9 +82,10 @@ class UavApiYaw:
     """
     Yaw source for the real drone: polls the uav_api service on localhost.
 
-    GET /telemetry/general returns a JSON object whose "heading" field is the yaw in degrees
-    (0 = North, clockwise). Returns None on any failure so a transient HTTP error skips one
-    frame instead of crashing the protocol.
+    GET /telemetry/general returns {"result": "Success", "info": {"heading": <deg>, ...}} —
+    the heading (0 = North, clockwise) lives inside "info". Verified against the real service
+    on 2026-08-24; a mock that serves a flat {"heading": ...} is also accepted. Returns None on
+    any failure so a transient HTTP error skips one frame instead of crashing the protocol.
     """
 
     def __init__(self, base_url: str = "http://localhost:8000", timeout_s: float = 0.5):
@@ -96,7 +97,8 @@ class UavApiYaw:
 
         try:
             with urllib.request.urlopen(self.url, timeout=self.timeout_s) as r:
-                return float(json.loads(r.read())["heading"])
+                payload = json.loads(r.read())
+                return float(payload.get("info", payload)["heading"])
         except Exception:
             return None
 

@@ -40,7 +40,8 @@ class Handler(server.BaseHTTPRequestHandler):
                 "heading": HEADING,
             }})
         elif ruta == "/telemetry/general":
-            self._json({"heading": HEADING})
+            # Same shape as the real uav_api: heading nested under "info".
+            self._json({"result": "Success", "info": {"heading": HEADING}})
         elif ruta == "/command/arm":
             self._json({"status": "armed"})
         elif ruta == "/command/takeoff":

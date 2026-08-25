@@ -1,0 +1,4 @@
+node_id = 1
+uav_api_port = 8001
+control_api_port = 8100
+data_port = 8200
