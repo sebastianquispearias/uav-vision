@@ -102,4 +102,37 @@ print(f"  candidatos: {len(c)} con n_obs={[p['n_obs'] for p in c]}")
 assert len(c) == 1, "el gemelo no se fusiono (regla A-1 rota)"
 
 print()
+print("=" * 64)
+print("5. PASADA CORTA: nada maduro, pero SI un preliminar que verificar")
+print("=" * 64)
+# The sweep case, measured on flight 3: a pass of 30 s never matures a candidate. A track
+# forms and then the drone is gone. Without preliminaries the system says nothing at all
+# about a person it tracked perfectly well for half a minute.
+ident = IdentidadIncremental(radio_fusion_m=3.5, fps=FPS, dur_reporte_s=36.0)
+P = np.array([4.0, -2.0])
+ep = emb_de(9)
+n_pasada = int(20 * FPS)          # 20 s of pass, well under the 36 s report bar
+for f in range(n_pasada):
+    ident.observar(f, 70, P + ruido(), 0.6, ep + 0.03 * RNG.normal(size=512))
+
+maduros = ident.candidatos()
+todos = ident.candidatos(preliminares=True)
+print(f"  maduros: {len(maduros)}   con preliminares: {len(todos)}")
+assert len(maduros) == 0, "una pasada de 20 s no deberia madurar nada"
+assert len(todos) == 1, "la pasada corta debe dejar UN preliminar que verificar"
+assert todos[0]["maduro"] is False, "el preliminar debe venir marcado maduro=False"
+d = float(np.linalg.norm(np.array([todos[0]["x"], todos[0]["y"]]) - P))
+print(f"  preliminar en ({todos[0]['x']}, {todos[0]['y']}), a {d:.2f} m del real, "
+      f"n_obs={todos[0]['n_obs']}")
+assert d < 1.0, "el preliminar apunta al lugar equivocado"
+
+# And the guarantee that keeps preliminaries honest: once evidence accumulates, the same
+# candidate matures, and the two calls agree.
+for f in range(n_pasada, int(60 * FPS)):
+    ident.observar(f, 70, P + ruido(), 0.6, ep + 0.03 * RNG.normal(size=512))
+maduros = ident.candidatos()
+assert len(maduros) == 1 and maduros[0]["maduro"] is True,     "con evidencia suficiente el preliminar tiene que madurar"
+print(f"  tras 60 s: maduro=True, n_obs={maduros[0]['n_obs']}")
+
+print()
 print("TODO OK")

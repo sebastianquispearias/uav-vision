@@ -176,13 +176,25 @@ class IdentidadIncremental:
             })
         return pistas
 
-    def candidatos(self) -> List[dict]:
+    def candidatos(self, preliminares: bool = False) -> List[dict]:
         """
         Returns the current candidate list, mobiles first, then by descending evidence.
 
-        Each candidate: {x, y, n_obs, conf, movil}. For a mobile candidate (x, y) is its
-        CURRENT position (a mobile's lifetime median points at the middle of its path). Static
-        candidates report the lifetime median, which is the point of accumulating views.
+        Each candidate: {x, y, n_obs, conf, movil, maduro}. For a mobile candidate (x, y) is
+        its CURRENT position (a mobile's lifetime median points at the middle of its path).
+        Static candidates report the lifetime median, which is the point of accumulating views.
+
+        Args:
+            preliminares: also return candidates that have formed a track but not yet earned
+                a report, marked maduro=False. They exist for the sweep case. Measured on
+                flight 3, a pass of 30 s over a person NEVER produces a mature candidate and
+                a pass of 60 s produces one 47% of the time: a search that crosses each point
+                once and moves on would stay silent over a victim it saw perfectly well.
+                Maturity is the right bar for a loitering drone, which can afford to wait and
+                should not cry wolf; it is the wrong bar for a sweep, where the only chance to
+                say anything is now. A preliminary candidate is not an alert -- it is a
+                request for verification, to be sent with the detection crop so the ground
+                station decides. Never present one to an operator as a confirmed find.
         """
         cands: List[dict] = []
         for tk in sorted(self._resumen_pistas(), key=lambda p: -p["n"]):
@@ -233,14 +245,19 @@ class IdentidadIncremental:
                 c["n"] += tk["n"]
                 c["frames"] |= tk["frames"]
 
-        listos = [c for c in cands
-                  if c["n"] >= self.n_reporte
-                  and self._span(c["frames"]) >= self.span_reporte]
-        listos.sort(key=lambda c: (not c["movil"], -c["n"]))
+        def maduro(c):
+            return (c["n"] >= self.n_reporte
+                    and self._span(c["frames"]) >= self.span_reporte)
+
+        salida = [c for c in cands if maduro(c) or preliminares]
+        # Mature first, then mobiles, then by evidence: whatever the caller truncates, it
+        # truncates the least certain rows.
+        salida.sort(key=lambda c: (not maduro(c), not c["movil"], -c["n"]))
         return [{
             "x": round(float(c["pos"][0]), 2),
             "y": round(float(c["pos"][1]), 2),
             "n_obs": int(c["n"]),
             "conf": round(float(c["conf"]), 3),
             "movil": bool(c["movil"]),
-        } for c in listos]
+            "maduro": maduro(c),
+        } for c in salida]

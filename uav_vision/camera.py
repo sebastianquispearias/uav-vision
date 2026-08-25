@@ -111,6 +111,8 @@ class CamaraArduCam:
         - rastreador: run BoT-SORT over the detections and attach a stable 'track_id' per
           detection. Requires fps, because the tracker's memory is measured in frames and only
           the declared rate makes a buffer duration meaningful.
+        - recortes: attach a small JPEG of each detection ('recorte' field), for the ground
+          station to verify what the onboard detector could not settle by itself.
     """
 
     # Class names that count as a person. Detection models trained on different datasets name
@@ -130,6 +132,10 @@ class CamaraArduCam:
         fps: Optional[float] = None,
         buffer_pista_s: float = 8.0,
         compensar_camara: bool = False,
+        recortes: bool = False,
+        recorte_lado_px: int = 128,
+        recorte_calidad: int = 70,
+        recorte_margen: float = 0.25,
     ) -> None:
         self.modelo = modelo
         self.umbral = umbral
@@ -150,6 +156,17 @@ class CamaraArduCam:
         # Camera-motion compensation improves tracking from a moving camera but costs CPU;
         # disabled until measured on the target hardware.
         self.compensar_camara = compensar_camara
+        # A crop is the cheapest thing the drone can say that the ground can check. The link
+        # budget is the constraint the whole architecture was built around -- video off the
+        # drone is not affordable -- so these are sized in kilobytes, not megabytes: a 128 px
+        # JPEG at quality 70 lands around 2-5 KB, which is one small packet per detection
+        # rather than a stream.
+        self.recortes = recortes
+        self.recorte_lado_px = recorte_lado_px
+        self.recorte_calidad = recorte_calidad
+        # A box drawn tight on a person at altitude cuts off the context that makes the
+        # verifier's job possible; a margin buys that back for almost no bytes.
+        self.recorte_margen = recorte_margen
         self._picam: Any = None
         self._yolo: Any = None
         self._reid: Any = None
@@ -248,7 +265,39 @@ class CamaraArduCam:
         if self._tracker is not None:
             self._rastrear(frame, detecciones, cajas, huellas)
 
+        if self.recortes and detecciones:
+            for det, caja in zip(detecciones, cajas):
+                det["recorte"] = self._recortar(frame, caja)
+
         return detecciones
+
+    def _recortar(self, frame, caja) -> bytes:
+        """
+        Returns a small JPEG around one detection, for the ground station to verify.
+
+        The crop is squared before scaling: a person's box is tall and thin, and letting the
+        resize squash it hands the verifier a distorted body it was never trained on.
+        """
+        import cv2
+
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = [float(v) for v in caja]
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        lado = max(x2 - x1, y2 - y1) * (1.0 + 2.0 * self.recorte_margen)
+        # Clamped to the frame: a detection at the edge yields a smaller crop, not a crash.
+        a = max(0, int(cx - lado / 2)), max(0, int(cy - lado / 2))
+        b = min(w, int(cx + lado / 2)), min(h, int(cy + lado / 2))
+        parche = frame[a[1]:b[1], a[0]:b[0]]
+        if parche.size == 0:
+            return b""
+        if max(parche.shape[:2]) > self.recorte_lado_px:
+            e = self.recorte_lado_px / max(parche.shape[:2])
+            parche = cv2.resize(parche, (max(1, int(parche.shape[1] * e)),
+                                         max(1, int(parche.shape[0] * e))),
+                                interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", parche,
+                               [int(cv2.IMWRITE_JPEG_QUALITY), self.recorte_calidad])
+        return buf.tobytes() if ok else b""
 
     def _rastrear(
         self,
