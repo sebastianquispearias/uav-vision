@@ -209,6 +209,9 @@ class CamaraArduCam:
     def apagar(self) -> None:
         if self._picam is not None:
             self._picam.stop()
+            # stop() alone keeps the device acquired; without close() no other
+            # Picamera2 instance (a later CamaraArduCam included) can open it.
+            self._picam.close()
             self._picam = None
 
     # -- contract ---------------------------------------------------------
