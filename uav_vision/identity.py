@@ -31,6 +31,11 @@ EMB_DIST_MAX_MEDIDO = 0.95
 # position and appearance say: nothing appears twice in the same photo.
 COOCURRENCIA_MIN = 3
 
+# Minimum fraction of the frames a track spans in which it must actually have been detected.
+# Below it the track is a handful of sightings spread thin, and its frame span overstates the
+# evidence behind it.
+DUTY_MIN = 0.10
+
 # Exception to the veto: detectors sometimes emit duplicate boxes for one person, which the
 # tracker turns into two co-occurring tracks. The veto is lifted only when the evidence says
 # "same person" — nearly identical position AND an embedding distance deep inside the measured
@@ -70,10 +75,14 @@ class IdentidadIncremental:
         radio_fusion_m: expected ground-projection noise of the scene, in meters (roughly
             gps_sigma + slant_range * yaw_sigma). Two static tracks closer than this may be the
             same thing. No default: it is a property of the deployment, not of the algorithm.
-        fps: expected OBSERVATION rate in detections per second actually reaching observar().
-            This is not the camera frame rate: when detection is intermittent the observation
-            rate is lower, and thresholds scaled by camera rate would demand impossible
-            evidence. Measure detections per second and pass that.
+        fps: the rate at which FRAMES are offered to the detector -- the vision timer, which
+            the caller sets and therefore knows exactly. It is NOT the rate of detections:
+            detection is intermittent, and how intermittent is a property of the scene that
+            nobody can know in advance. The durations below are converted to frame spans with
+            this rate, and each track is judged by the span of frames it covers, so a track
+            detected in half the frames still matures in the same wall-clock time. Earlier
+            versions asked for the observation rate here and were misconfigured twice; the
+            frame rate is the number a caller can actually get right.
         emb_dist_max: appearance distance above which two tracks are never merged.
         dur_pista_s: minimum accumulated observation time for a track to be considered.
         dur_movil_s: minimum accumulated observation time to classify a track as mobile.
@@ -96,11 +105,26 @@ class IdentidadIncremental:
         self.emb_dist_max = emb_dist_max
         self.desplaz_movil_m = (desplaz_movil_m if desplaz_movil_m is not None
                                 else 1.15 * radio_fusion_m)
-        self.n_pista = max(3, round(dur_pista_s * fps))
-        self.n_movil = max(6, round(dur_movil_s * fps))
-        self.n_reporte = max(8, round(dur_reporte_s * fps))
+        # Maturity is measured as a span of frames, not as a count of detections. Both say
+        # "enough evidence", but only the span says it in wall-clock terms: a target found in
+        # every frame and one found in every third frame become reportable at the same moment,
+        # which is what an operator waiting for an alert expects.
+        self.span_pista = max(3, round(dur_pista_s * fps))
+        self.span_movil = max(6, round(dur_movil_s * fps))
+        self.span_reporte = max(8, round(dur_reporte_s * fps))
+
+        # A track detected in a tenth of the frames it spans is not being tracked, it is being
+        # rediscovered; the span would flatter it. This floor keeps that out.
+        self.n_pista = max(3, round(DUTY_MIN * self.span_pista))
+        self.n_movil = max(4, round(DUTY_MIN * self.span_movil))
+        self.n_reporte = max(5, round(DUTY_MIN * self.span_reporte))
 
         self._tracks: Dict[int, dict] = {}
+
+    @staticmethod
+    def _span(frames) -> int:
+        """Frames covered by a track, from first sighting to last."""
+        return (max(frames) - min(frames) + 1) if frames else 0
 
     # -- ingest ------------------------------------------------------------
 
@@ -132,7 +156,7 @@ class IdentidadIncremental:
         pistas = []
         for tid, t in self._tracks.items():
             n = len(t["imps"])
-            if n < self.n_pista:
+            if n < self.n_pista or self._span(t["frames"]) < self.span_pista:
                 continue
             ii = np.asarray(t["imps"])
             q = max(1, n // 4)
@@ -162,7 +186,8 @@ class IdentidadIncremental:
         """
         cands: List[dict] = []
         for tk in sorted(self._resumen_pistas(), key=lambda p: -p["n"]):
-            if tk["desplaz"] > self.desplaz_movil_m and tk["n"] >= self.n_movil:
+            if (tk["desplaz"] > self.desplaz_movil_m and tk["n"] >= self.n_movil
+                    and self._span(tk["frames"]) >= self.span_movil):
                 cands.append({"movil": True, "pos": tk["pos_actual"].copy(),
                               "emb": tk["emb"], "conf": tk["conf"],
                               "n": tk["n"], "frames": set(tk["frames"])})
@@ -208,7 +233,9 @@ class IdentidadIncremental:
                 c["n"] += tk["n"]
                 c["frames"] |= tk["frames"]
 
-        listos = [c for c in cands if c["n"] >= self.n_reporte]
+        listos = [c for c in cands
+                  if c["n"] >= self.n_reporte
+                  and self._span(c["frames"]) >= self.span_reporte]
         listos.sort(key=lambda c: (not c["movil"], -c["n"]))
         return [{
             "x": round(float(c["pos"][0]), 2),
