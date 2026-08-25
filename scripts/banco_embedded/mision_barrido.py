@@ -68,20 +68,18 @@ Where each number comes from:
                      Still below the ~5 FPS voltage-collapse point measured with the 5 A UBEC,
                      with more room than before.
 
-                     KNOWN WRONG, measured 25ago and not yet fixed: this number is a
-                     DECLARATION, and nothing enforces it. The loop is driven by
-                     see_period_s, a separate parameter this file never sets, so it sits at
-                     its 0.25 s default; and handle_timer reschedules AFTER the work, so the
-                     real period is work + 0.25 s, not 1/fps. Measured on the board with an
-                     empty scene: 2.31 FPS delivered against 3.00 declared. Since every
-                     maturity threshold is scaled by the fps declared here, "36 s" currently
-                     takes about 47 s of wall clock. It was worse before -- at fps=4.0 the
-                     same loop delivered ~2.3 and "36 s" meant ~64 s.
+                     This number used to be a promise nothing kept. Measured on the board:
+                     2.31 FPS delivered against 3.00 declared, because the loop rescheduled as
+                     `now + period` (real interval = work + period) and because see_period_s,
+                     the parameter that actually drives the timer, was never set here at all.
+                     Every maturity threshold was scaled by the declared rate, so "36 s" took
+                     about 47. Fixed 25ago in both places -- fixed-cadence scheduling, and
+                     maturity measured off the clock -- and see_period_s is now set below, so
+                     this value and the timer cannot drift apart. tests/test_tasa.py holds
+                     both ends: at half the frame rate, "36 s" still lands within 2 s.
 
-                     This is the third time this exact class of bug has appeared (see C-5 in
-                     PROGRESO.md, and the 25ago fix). The real repair is to drive the loop at
-                     a fixed RATE instead of a fixed delay, and to derive fps from
-                     see_period_s rather than letting a caller state them independently.
+                     It had gone wrong three ways before that (see C-5 in PROGRESO.md), which
+                     is why the identity layer no longer depends on it for timing at all.
     radio_fusion 3.5 the scene's ground-projection noise at mission altitude. Roughly the GPS
                      bias plus slant range times yaw error; the measured spread on flight 3 was
                      1.6 m around a 2.3 m offset.
@@ -113,6 +111,10 @@ ProtocoloBarridoLAC = VisionProtocol.with_config(
         recortes=True,
     ),
     pitch_deg=-55.0,
+    # The timer that actually drives the loop. Left unset it defaults to 0.25 s (4 Hz), which
+    # is how the fps above quietly meant nothing: a config could ask for 3 and get 4, or --
+    # before the scheduler was fixed -- ask for 3 and get 2.31. Set it, and set it to match.
+    see_period_s=1.0 / 3.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
     identidad=IdentidadIncremental(
         radio_fusion_m=3.5,

@@ -34,6 +34,9 @@ ProtocoloBancoBarrido = VisionProtocol.with_config(
         recortes=True,
     ),
     pitch_deg=-55.0,
+    # Matches the fps declared above: the timer is what sets the rate, the fps is only the
+    # duty-cycle floor now. COCO is cheap enough here that 4 Hz fits with room to spare.
+    see_period_s=0.25,
     yaw_source=UavApiYaw("http://localhost:8000"),
     identidad=IdentidadIncremental(
         radio_fusion_m=3.5,

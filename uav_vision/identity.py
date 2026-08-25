@@ -75,14 +75,19 @@ class IdentidadIncremental:
         radio_fusion_m: expected ground-projection noise of the scene, in meters (roughly
             gps_sigma + slant_range * yaw_sigma). Two static tracks closer than this may be the
             same thing. No default: it is a property of the deployment, not of the algorithm.
-        fps: the rate at which FRAMES are offered to the detector -- the vision timer, which
-            the caller sets and therefore knows exactly. It is NOT the rate of detections:
-            detection is intermittent, and how intermittent is a property of the scene that
-            nobody can know in advance. The durations below are converted to frame spans with
-            this rate, and each track is judged by the span of frames it covers, so a track
-            detected in half the frames still matures in the same wall-clock time. Earlier
-            versions asked for the observation rate here and were misconfigured twice; the
-            frame rate is the number a caller can actually get right.
+        fps: the rate at which FRAMES are offered to the detector. A FALLBACK now, and only
+            for callers with no clock to offer: pass `t` to observar() and maturity is measured
+            in seconds, leaving this number used for nothing but the duty-cycle floor.
+
+            The history is worth keeping, because this parameter has now been wrong three
+            ways. It first meant the detection rate, which nobody can know in advance since it
+            depends on how intermittent the scene is. On 25ago it was redefined as the FRAME
+            rate, on the grounds that the caller sets the vision timer and therefore knows it
+            exactly. Measured the same evening, that was false too: the loop rescheduled
+            itself as `now + period`, delivering 2.31 frames per second against 3.00
+            configured, and every threshold derived from the declared rate stretched by a
+            third. Both loop and callers are fixed -- but a number wrong three ways is a
+            number to stop depending on. A clock cannot be misconfigured.
         emb_dist_max: appearance distance above which two tracks are never merged.
         dur_pista_s: minimum accumulated observation time for a track to be considered.
         dur_movil_s: minimum accumulated observation time to classify a track as mobile.
@@ -109,6 +114,9 @@ class IdentidadIncremental:
         # "enough evidence", but only the span says it in wall-clock terms: a target found in
         # every frame and one found in every third frame become reportable at the same moment,
         # which is what an operator waiting for an alert expects.
+        self.dur_pista_s = dur_pista_s
+        self.dur_movil_s = dur_movil_s
+        self.dur_reporte_s = dur_reporte_s
         self.span_pista = max(3, round(dur_pista_s * fps))
         self.span_movil = max(6, round(dur_movil_s * fps))
         self.span_reporte = max(8, round(dur_reporte_s * fps))
@@ -126,6 +134,20 @@ class IdentidadIncremental:
         """Frames covered by a track, from first sighting to last."""
         return (max(frames) - min(frames) + 1) if frames else 0
 
+    @staticmethod
+    def _alcanza(pista, dur_s: float, span_frames: int) -> bool:
+        """
+        Has this track covered enough time?
+
+        Measured off the clock whenever the caller supplied one, which is the only version a
+        loop running slower than configured cannot distort. The frame span stays as the
+        fallback for callers replaying recorded data with no timestamps.
+        """
+        t0, t1 = pista.get("t0"), pista.get("t1")
+        if t0 is not None and t1 is not None:
+            return (t1 - t0) >= dur_s
+        return IdentidadIncremental._span(pista["frames"]) >= span_frames
+
     # -- ingest ------------------------------------------------------------
 
     def observar(
@@ -136,6 +158,7 @@ class IdentidadIncremental:
         conf: float,
         emb: Optional[np.ndarray] = None,
         recorte: Optional[bytes] = None,
+        t: Optional[float] = None,
     ) -> None:
         """
         Records one tracked detection, already projected to the ground.
@@ -146,15 +169,21 @@ class IdentidadIncremental:
         the target leaving the frame. Keeping one bounded the message at roughly 3 KB per
         candidate, which is what the whole architecture was sized around.
         """
+        sello = t          # `t` below is the track record; keep the timestamp first
         t = self._tracks.get(track_id)
         if t is None:
             t = {"imps": [], "conf_sum": 0.0,
                  "emb_sum": None, "n_emb": 0, "frames": set(),
-                 "recorte": None, "recorte_conf": -1.0}
+                 "recorte": None, "recorte_conf": -1.0,
+                 "t0": None, "t1": None}
             self._tracks[track_id] = t
         t["imps"].append((float(impacto_xy[0]), float(impacto_xy[1])))
         t["conf_sum"] += float(conf)
         t["frames"].add(int(frame))
+        if sello is not None:
+            ts = float(sello)
+            t["t0"] = ts if t["t0"] is None else min(t["t0"], ts)
+            t["t1"] = ts if t["t1"] is None else max(t["t1"], ts)
         if recorte and float(conf) > t["recorte_conf"]:
             t["recorte"], t["recorte_conf"] = recorte, float(conf)
         if emb is not None:
@@ -168,7 +197,7 @@ class IdentidadIncremental:
         pistas = []
         for tid, t in self._tracks.items():
             n = len(t["imps"])
-            if n < self.n_pista or self._span(t["frames"]) < self.span_pista:
+            if n < self.n_pista or not self._alcanza(t, self.dur_pista_s, self.span_pista):
                 continue
             ii = np.asarray(t["imps"])
             q = max(1, n // 4)
@@ -187,6 +216,8 @@ class IdentidadIncremental:
                 "frames": t["frames"],
                 "recorte": t.get("recorte"),
                 "recorte_conf": t.get("recorte_conf", -1.0),
+                "t0": t.get("t0"),
+                "t1": t.get("t1"),
             })
         return pistas
 
@@ -213,12 +244,13 @@ class IdentidadIncremental:
         cands: List[dict] = []
         for tk in sorted(self._resumen_pistas(), key=lambda p: -p["n"]):
             if (tk["desplaz"] > self.desplaz_movil_m and tk["n"] >= self.n_movil
-                    and self._span(tk["frames"]) >= self.span_movil):
+                    and self._alcanza(tk, self.dur_movil_s, self.span_movil)):
                 cands.append({"movil": True, "pos": tk["pos_actual"].copy(),
                               "emb": tk["emb"], "conf": tk["conf"],
                               "n": tk["n"], "frames": set(tk["frames"]),
                               "recorte": tk["recorte"],
-                              "recorte_conf": tk["recorte_conf"]})
+                              "recorte_conf": tk["recorte_conf"],
+                              "t0": tk["t0"], "t1": tk["t1"]})
                 continue
             mejor, smin = None, math.inf
             for k, c in enumerate(cands):
@@ -251,7 +283,8 @@ class IdentidadIncremental:
                               "emb": tk["emb"], "conf": tk["conf"],
                               "n": tk["n"], "frames": set(tk["frames"]),
                               "recorte": tk["recorte"],
-                              "recorte_conf": tk["recorte_conf"]})
+                              "recorte_conf": tk["recorte_conf"],
+                              "t0": tk["t0"], "t1": tk["t1"]})
             else:
                 c = cands[mejor]
                 w = c["n"] / (c["n"] + tk["n"])
@@ -266,10 +299,14 @@ class IdentidadIncremental:
                 # of the two, which is the one the verifier would have chosen.
                 if tk["recorte"] and tk["recorte_conf"] > c["recorte_conf"]:
                     c["recorte"], c["recorte_conf"] = tk["recorte"], tk["recorte_conf"]
+                # Two tracks of one target: the evidence spans the union of their intervals.
+                if tk["t0"] is not None:
+                    c["t0"] = tk["t0"] if c["t0"] is None else min(c["t0"], tk["t0"])
+                    c["t1"] = tk["t1"] if c["t1"] is None else max(c["t1"], tk["t1"])
 
         def maduro(c):
             return (c["n"] >= self.n_reporte
-                    and self._span(c["frames"]) >= self.span_reporte)
+                    and self._alcanza(c, self.dur_reporte_s, self.span_reporte))
 
         salida = [c for c in cands if maduro(c) or preliminares]
         # Mature first, then mobiles, then by evidence: whatever the caller truncates, it

@@ -188,8 +188,14 @@ class VisionProtocol(IProtocol):
         self._rng = np.random.default_rng(self.rng_seed)
 
         now = self.provider.current_time()
-        self.provider.schedule_timer(TIMER_SEE, now + self.see_period_s)
-        self.provider.schedule_timer(TIMER_REPORT, now + self.report_period_s)
+        self._t_inicio = now
+        # Slots the work overran. Not a curiosity: it is the difference between a drone that
+        # is keeping up and one quietly two thirds as attentive as it claims to be.
+        self._slots_perdidos = 0
+        self._proximo_see = now + self.see_period_s
+        self._proximo_report = now + self.report_period_s
+        self.provider.schedule_timer(TIMER_SEE, self._proximo_see)
+        self.provider.schedule_timer(TIMER_REPORT, self._proximo_report)
 
     def handle_telemetry(self, telemetry: Telemetry) -> None:
         self._position = telemetry.current_position
@@ -197,15 +203,50 @@ class VisionProtocol(IProtocol):
     def handle_timer(self, timer: str) -> None:
         if timer == TIMER_SEE:
             self._see()
-            self.provider.schedule_timer(
-                TIMER_SEE, self.provider.current_time() + self.see_period_s)
+            self._proximo_see = self._siguiente_ranura(
+                self._proximo_see, self.see_period_s, contar=True)
+            self.provider.schedule_timer(TIMER_SEE, self._proximo_see)
         elif timer == TIMER_REPORT:
             self._report()
-            self.provider.schedule_timer(
-                TIMER_REPORT, self.provider.current_time() + self.report_period_s)
+            self._proximo_report = self._siguiente_ranura(
+                self._proximo_report, self.report_period_s)
+            self.provider.schedule_timer(TIMER_REPORT, self._proximo_report)
+
+    def _siguiente_ranura(self, previsto: float, periodo: float,
+                          contar: bool = False) -> float:
+        """
+        The next slot on a fixed cadence, skipping any the work ran past.
+
+        Rescheduling as `now + period` -- which is what this did until 25ago -- makes the real
+        interval `work + period`, so the loop never runs at the rate it was asked for. Measured
+        on the Pi: 2.31 frames per second against 3.00 configured, on an empty scene. That
+        matters beyond throughput, because the identity layer scaled every maturity threshold
+        by the declared rate, so a loop slower than it claimed silently stretched what
+        "36 seconds of evidence" meant -- to about 47.
+
+        When the work does overrun a slot, the missed ones are skipped rather than queued. A
+        backlog of camera frames cannot be worked off: each would be stale by the time it ran,
+        and firing them back to back would starve everything else. It can only be counted and
+        reported, which is what slots_perdidos is for.
+        """
+        ahora = self.provider.current_time()
+        proximo = previsto + periodo
+        if proximo > ahora:
+            return proximo
+        perdidos = int((ahora - proximo) // periodo) + 1
+        if contar:
+            self._slots_perdidos += perdidos
+        return proximo + perdidos * periodo
 
     def handle_packet(self, message: str) -> None:
         pass  # observe-only: no incoming commands in this version
+
+    def _fps_real(self):
+        """Frames per second actually delivered since the mission started."""
+        transcurrido = self.provider.current_time() - self._t_inicio
+        if transcurrido <= 0:
+            return None
+        return round(self._frames_seen / transcurrido, 2)
 
     def _origen_gps(self):
         """The mission's coordinate origin as [lat, lon, alt], or None outside the runner."""
@@ -257,6 +298,9 @@ class VisionProtocol(IProtocol):
                     conf=det["conf"],
                     emb=det.get("emb"),
                     recorte=det.get("recorte"),
+                    # The clock, so maturity is measured rather than inferred from a frame
+                    # count times a rate the caller merely promised.
+                    t=self.provider.current_time(),
                 )
 
     def _report(self) -> None:
@@ -302,6 +346,10 @@ class VisionProtocol(IProtocol):
             "sender": self.provider.get_id(),
             "time": self.provider.current_time(),
             "frames_seen": self._frames_seen,
+            # What the loop actually delivered, so the gap between configured and real can
+            # never again be something only a stopwatch would find.
+            "fps_real": self._fps_real(),
+            "slots_perdidos": self._slots_perdidos,
             "latido": latido,
             # The frame these metres are measured in, so the receiver never has to be told
             # separately. It cannot be: when the mission is loaded without an origin the
