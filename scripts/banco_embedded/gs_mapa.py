@@ -262,6 +262,7 @@ PAGINA = r"""<!doctype html>
   <div class="estado">
     <span><span class="punto" id="luz"></span><span id="enlace">esperando al dron</span></span>
     <span id="cuenta">0 POI</span>
+    <span id="ritmo"></span>
     <span id="reportes">0 reportes</span>
   </div>
 </header>
@@ -422,6 +423,15 @@ async function refrescar() {
         + `paso en --origen. Manda el del dron; revisa el de tierra.`;
       al.style.display = 'block';
     } else { al.style.display = 'none'; }
+    // The rate the drone is actually managing. A saturated drone looks exactly like a
+    // healthy one -- same pins, same reports, fewer looks taken -- unless it is shown.
+    const d0 = drones[0];
+    const rit = document.getElementById('ritmo');
+    if (d0 && d0.fps_real != null) {
+      const perdidas = d0.slots_perdidos || 0;
+      rit.textContent = `${d0.fps_real} FPS` + (perdidas ? ` · ${perdidas} perdidas` : '');
+      rit.style.color = perdidas ? 'var(--duda)' : '';
+    } else { rit.textContent = ''; }
     document.getElementById('cuenta').textContent = estado.pois.length + ' POI';
     document.getElementById('reportes').textContent = estado.reportes + ' reportes';
     ajustarVista(estado.pois);
