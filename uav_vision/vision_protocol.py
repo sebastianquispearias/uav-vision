@@ -132,6 +132,13 @@ class VisionProtocol(IProtocol):
     # become multi-POI (statics and mobiles separated). Without it, all impacts go into one
     # RANSAC and the report is the single dominant POI.
     identidad = None
+    # Report tracks that have formed but not yet matured, flagged maduro=False. Off by default
+    # because for a loitering drone it only adds noise -- it can afford to wait for certainty.
+    # Turn it on for a SWEEP: measured on flight 3, a 30 s pass over a person never matures a
+    # candidate, so a search that crosses each point once and moves on reports nothing at all.
+    # The ground station must show these differently; they are requests for verification, not
+    # finds.
+    reportar_preliminares: bool = False
 
     @classmethod
     def with_config(
@@ -144,6 +151,7 @@ class VisionProtocol(IProtocol):
         ground_z: float = 0.0,
         rng_seed: int = 0,
         identidad=None,
+        reportar_preliminares: bool = False,
     ) -> Type["VisionProtocol"]:
         """
         Builds a configured protocol class ready for the runner. pitch_deg is explicit and has
@@ -161,6 +169,7 @@ class VisionProtocol(IProtocol):
                 "ground_z": ground_z,
                 "rng_seed": rng_seed,
                 "identidad": identidad,
+                "reportar_preliminares": reportar_preliminares,
             },
         )
 
@@ -245,7 +254,8 @@ class VisionProtocol(IProtocol):
         first. Without one, or before any candidate has enough evidence: the single dominant POI
         by RANSAC consensus over all stored impacts.
         """
-        pois = self.identidad.candidatos() if self.identidad is not None else []
+        pois = (self.identidad.candidatos(preliminares=self.reportar_preliminares)
+                if self.identidad is not None else [])
 
         if not pois:
             if len(self._impacts) < MIN_MEASUREMENTS:
