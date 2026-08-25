@@ -207,6 +207,16 @@ class VisionProtocol(IProtocol):
     def handle_packet(self, message: str) -> None:
         pass  # observe-only: no incoming commands in this version
 
+    def _origen_gps(self):
+        """The mission's coordinate origin as [lat, lon, alt], or None outside the runner."""
+        origen = getattr(self.provider, "origin_gps_coordinates", None)
+        if origen is None:
+            return None
+        try:
+            return [float(v) for v in origen]
+        except (TypeError, ValueError):
+            return None
+
     def finish(self) -> None:
         pass
 
@@ -246,6 +256,7 @@ class VisionProtocol(IProtocol):
                     impacto_xy=impact,
                     conf=det["conf"],
                     emb=det.get("emb"),
+                    recorte=det.get("recorte"),
                 )
 
     def _report(self) -> None:
@@ -254,27 +265,53 @@ class VisionProtocol(IProtocol):
         first. Without one, or before any candidate has enough evidence: the single dominant POI
         by RANSAC consensus over all stored impacts.
         """
+        import base64
+
         pois = (self.identidad.candidatos(preliminares=self.reportar_preliminares)
                 if self.identidad is not None else [])
+        latido = False
 
         if not pois:
             if len(self._impacts) < MIN_MEASUREMENTS:
-                return
-            impacts = np.asarray(self._impacts)
-            estimate, n_inliers = _ransac_consensus(impacts, self._rng)
-            pois = [{
-                "x": round(float(estimate[0]), 2),
-                "y": round(float(estimate[1]), 2),
-                "n_obs": int(len(impacts)),
-                "n_inliers": n_inliers,
-                "conf_mean": round(float(np.mean(self._confs)), 3),
-            }]
+                # Nothing found -- and that is exactly when the drone must still speak. From
+                # the ground, a drone that sees nobody and a drone that has died look
+                # identical: both are silence. An operator who cannot tell them apart has to
+                # assume the worst and abort. One empty beat per report period buys the
+                # difference for a few dozen bytes.
+                latido = True
+            else:
+                impacts = np.asarray(self._impacts)
+                estimate, n_inliers = _ransac_consensus(impacts, self._rng)
+                pois = [{
+                    "x": round(float(estimate[0]), 2),
+                    "y": round(float(estimate[1]), 2),
+                    "n_obs": int(len(impacts)),
+                    "n_inliers": n_inliers,
+                    "conf_mean": round(float(np.mean(self._confs)), 3),
+                }]
+
+        # The identity layer hands over raw JPEG bytes; JSON needs text. Encoded here rather
+        # than there so the identity layer stays free of transport concerns.
+        for p in pois:
+            recorte = p.pop("recorte", None)
+            if recorte:
+                p["recorte"] = base64.b64encode(recorte).decode("ascii")
 
         message = {
             "type": "vision_poi",
             "sender": self.provider.get_id(),
             "time": self.provider.current_time(),
             "frames_seen": self._frames_seen,
+            "latido": latido,
+            # The frame these metres are measured in, so the receiver never has to be told
+            # separately. It cannot be: when the mission is loaded without an origin the
+            # runner resolves one from the GPS fix at that moment, which nobody can know in
+            # advance to type into a ground station. Send it and the question disappears.
+            #
+            # Read defensively: IProvider does not declare it -- the embedded runtime's
+            # provider carries it, a test harness does not. None is a valid answer and means
+            # "local metres only", which is what every desk run has ever produced.
+            "origen_gps": self._origen_gps(),
             "pois": pois,
         }
         self.provider.send_communication_command(

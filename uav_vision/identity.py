@@ -135,16 +135,28 @@ class IdentidadIncremental:
         impacto_xy: Tuple[float, float],
         conf: float,
         emb: Optional[np.ndarray] = None,
+        recorte: Optional[bytes] = None,
     ) -> None:
-        """Records one tracked detection, already projected to the ground."""
+        """
+        Records one tracked detection, already projected to the ground.
+
+        The crop is optional and only one is kept per track: the one from the most confident
+        sighting. A preliminary candidate is a request for verification, and what a verifier
+        needs is the clearest look the drone ever got, not the latest -- the latest is often
+        the target leaving the frame. Keeping one bounded the message at roughly 3 KB per
+        candidate, which is what the whole architecture was sized around.
+        """
         t = self._tracks.get(track_id)
         if t is None:
             t = {"imps": [], "conf_sum": 0.0,
-                 "emb_sum": None, "n_emb": 0, "frames": set()}
+                 "emb_sum": None, "n_emb": 0, "frames": set(),
+                 "recorte": None, "recorte_conf": -1.0}
             self._tracks[track_id] = t
         t["imps"].append((float(impacto_xy[0]), float(impacto_xy[1])))
         t["conf_sum"] += float(conf)
         t["frames"].add(int(frame))
+        if recorte and float(conf) > t["recorte_conf"]:
+            t["recorte"], t["recorte_conf"] = recorte, float(conf)
         if emb is not None:
             v = np.asarray(emb, dtype=np.float32)
             t["emb_sum"] = v.copy() if t["emb_sum"] is None else t["emb_sum"] + v
@@ -173,6 +185,8 @@ class IdentidadIncremental:
                 "conf": t["conf_sum"] / n,
                 "emb": emb,
                 "frames": t["frames"],
+                "recorte": t.get("recorte"),
+                "recorte_conf": t.get("recorte_conf", -1.0),
             })
         return pistas
 
@@ -180,7 +194,7 @@ class IdentidadIncremental:
         """
         Returns the current candidate list, mobiles first, then by descending evidence.
 
-        Each candidate: {x, y, n_obs, conf, movil, maduro}. For a mobile candidate (x, y) is
+        Each candidate: {x, y, n_obs, conf, movil, maduro, recorte}. For a mobile candidate (x, y) is
         its CURRENT position (a mobile's lifetime median points at the middle of its path).
         Static candidates report the lifetime median, which is the point of accumulating views.
 
@@ -202,7 +216,9 @@ class IdentidadIncremental:
                     and self._span(tk["frames"]) >= self.span_movil):
                 cands.append({"movil": True, "pos": tk["pos_actual"].copy(),
                               "emb": tk["emb"], "conf": tk["conf"],
-                              "n": tk["n"], "frames": set(tk["frames"])})
+                              "n": tk["n"], "frames": set(tk["frames"]),
+                              "recorte": tk["recorte"],
+                              "recorte_conf": tk["recorte_conf"]})
                 continue
             mejor, smin = None, math.inf
             for k, c in enumerate(cands):
@@ -233,7 +249,9 @@ class IdentidadIncremental:
             if mejor is None:
                 cands.append({"movil": False, "pos": tk["pos"].copy(),
                               "emb": tk["emb"], "conf": tk["conf"],
-                              "n": tk["n"], "frames": set(tk["frames"])})
+                              "n": tk["n"], "frames": set(tk["frames"]),
+                              "recorte": tk["recorte"],
+                              "recorte_conf": tk["recorte_conf"]})
             else:
                 c = cands[mejor]
                 w = c["n"] / (c["n"] + tk["n"])
@@ -244,6 +262,10 @@ class IdentidadIncremental:
                 c["conf"] = w * c["conf"] + (1 - w) * tk["conf"]
                 c["n"] += tk["n"]
                 c["frames"] |= tk["frames"]
+                # Positions and appearances average; a photograph cannot. Keep the clearest
+                # of the two, which is the one the verifier would have chosen.
+                if tk["recorte"] and tk["recorte_conf"] > c["recorte_conf"]:
+                    c["recorte"], c["recorte_conf"] = tk["recorte"], tk["recorte_conf"]
 
         def maduro(c):
             return (c["n"] >= self.n_reporte
@@ -260,4 +282,7 @@ class IdentidadIncremental:
             "conf": round(float(c["conf"]), 3),
             "movil": bool(c["movil"]),
             "maduro": maduro(c),
+            # Raw JPEG bytes, or None. Serialising it is the transport's problem, not this
+            # layer's; the protocol base64-encodes it on the way out.
+            "recorte": c.get("recorte"),
         } for c in salida]

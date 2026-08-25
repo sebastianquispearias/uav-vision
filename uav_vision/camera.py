@@ -286,8 +286,25 @@ class CamaraArduCam:
         # the signature so the contract matches the simulated camera.
         del pos, yaw
 
+        import cv2
+
         self._encender()
-        frame = self._picam.capture_array()
+        # picamera2 labels this configuration "BGR888", but that name is libcamera's and lists
+        # the components in the opposite order to the one the array actually arrives in: what
+        # comes back is R,G,B. Everything downstream is OpenCV-shaped and expects B,G,R --
+        # ultralytics assumes it for a raw array, the ReID model assumes it, and cv2.imencode
+        # assumes it when the crop is written. Left alone, red and blue are swapped for all
+        # three at once.
+        #
+        # Measured on the real board (25ago): a person the detector found at 0.887 with the
+        # channels swapped scores 0.909 once corrected -- small, and not the reason the
+        # VisDrone weights find nothing indoors, which is a domain gap. The reason to fix it
+        # is the crop: it is the photograph an operator looks at to decide whether to send
+        # someone to that point, and it was arriving with blue skin.
+        #
+        # Converting the whole frame once, here, is what keeps the three consumers agreeing.
+        # It costs 1.70 ms against 184 ms of inference on the Pi 5 -- 0.9% of the frame.
+        frame = cv2.cvtColor(self._picam.capture_array(), cv2.COLOR_RGB2BGR)
         resultados = self._yolo(frame, verbose=False, conf=self.umbral)
 
         detecciones: List[Deteccion] = []

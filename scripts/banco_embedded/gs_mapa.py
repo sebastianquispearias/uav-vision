@@ -46,7 +46,10 @@ ESTADO = {
     'pois': [],            # last list received, annotated
     'historia': [],        # every report, for the trail
     'drones': {},          # id -> last seen
-    'origen': None,
+    'origen': None,        # in use: the drone's, if it declares one
+    'origen_cli': None,    # what the operator typed, kept to check the drone against
+    'desacuerdo': None,    # metres between the two, when they disagree
+
     'georef': None,
     'fondo': None,
     'arranque': time.time(),
@@ -64,8 +67,50 @@ def a_latlng(x, y, origen):
     return round(lat, 7), round(lng, 7)
 
 
+def separacion_m(a, b):
+    """Ground distance between two lat/lng pairs, flat-earth: only used for small gaps."""
+    dlat = math.radians(b[0] - a[0]) * R_TIERRA
+    dlng = math.radians(b[1] - a[1]) * R_TIERRA * math.cos(math.radians(a[0]))
+    return math.hypot(dlat, dlng)
+
+
+def adoptar_origen(mensaje):
+    """
+    Takes the frame from the drone, and says so when it contradicts the operator.
+
+    The drone's origin is not an opinion: it is the frame its metres are actually measured
+    in. A value typed on the ground is a guess about that frame, and when the mission is
+    loaded without an origin the runner resolves one from the GPS fix, which no operator can
+    know in advance. So the drone wins -- but silently overriding would hide the very mistake
+    worth catching, so the disagreement is recorded and shown.
+    """
+    origen = mensaje.get('origen_gps')
+    if not origen or len(origen) < 2:
+        return
+    nuevo = (float(origen[0]), float(origen[1]))
+    if ESTADO['origen_cli'] is not None:
+        d = separacion_m(ESTADO['origen_cli'], nuevo)
+        # A metre is well under the system's own error and far above float noise.
+        ESTADO['desacuerdo'] = round(d, 1) if d > 1.0 else None
+    if ESTADO['origen'] != nuevo:
+        ESTADO['origen'] = nuevo
+        print('origen tomado del dron: %.7f, %.7f%s' % (
+            nuevo[0], nuevo[1],
+            '' if not ESTADO['desacuerdo']
+            else '  <-- NO COINCIDE con --origen, %s m' % ESTADO['desacuerdo']), flush=True)
+
+
 def registrar(mensaje, fuente):
     ahora = time.time()
+    with CANDADO:
+        adoptar_origen(mensaje)
+    if mensaje.get('latido'):
+        # An empty beat says "still here", not "there is nothing". Touching the pin list on
+        # one would wipe the map every time a target left the frame for a second.
+        with CANDADO:
+            ESTADO['drones'][str(fuente)] = {
+                't': ahora, 'frames_seen': mensaje.get('frames_seen')}
+        return
     pois = []
     for p in mensaje.get('pois', []):
         lat, lng = a_latlng(p.get('x', 0.0), p.get('y', 0.0), ESTADO['origen'])
@@ -79,6 +124,7 @@ def registrar(mensaje, fuente):
             'conf': p.get('conf', p.get('conf_mean')),
             'movil': p.get('movil'),
             'maduro': bool(p.get('maduro', False)),
+            'recorte': p.get('recorte'),
             'dron': fuente,
             't': ahora,
         })
@@ -133,6 +179,8 @@ class Handler(server.BaseHTTPRequestHandler):
                     'pois': ESTADO['pois'],
                     'drones': ESTADO['drones'],
                     'origen': ESTADO['origen'],
+                    'origen_cli': ESTADO['origen_cli'],
+                    'desacuerdo': ESTADO['desacuerdo'],
                     'georef': ESTADO['georef'],
                     'tiene_fondo': ESTADO['fondo'] is not None,
                     'ahora': time.time(),
@@ -184,11 +232,17 @@ PAGINA = r"""<!doctype html>
             gap:2px 10px; font-size:13px; }
   .poi dt { color:var(--tenue); }
   .poi dd { margin:0; font-variant-numeric:tabular-nums; }
+  .recorte { display:block; margin:10px 0 0; width:128px; max-width:100%;
+             border-radius:4px; border:1px solid var(--linea); background:#0b0d12; }
+  .sinrecorte { margin:8px 0 0; font-size:12px; color:var(--tenue); font-style:italic; }
   .vacio { color:var(--tenue); font-style:italic; padding:20px 0; text-align:center; }
   .nota { color:var(--tenue); font-size:12px; margin-top:14px;
           padding-top:12px; border-top:1px solid var(--linea); }
+  #alarma { background:#7f1d1d; color:#fee2e2; padding:9px 16px; font-size:13px;
+            font-weight:600; border-bottom:1px solid #991b1b; }
 </style></head>
 <body>
+<div id="alarma" style="display:none"></div>
 <header>
   <h1>Ground Station</h1>
   <div class="estado">
@@ -322,6 +376,9 @@ function pintarLista(pois) {
         <dt>evidencia</dt><dd>${p.n_obs} obs${p.conf != null ? ', conf ' + p.conf : ''}</dd>
         <dt>dron</dt><dd>${p.dron}</dd>
       </dl>
+      ${p.recorte
+        ? `<img class="recorte" src="data:image/jpeg;base64,${p.recorte}" alt="lo que vio el dron">`
+        : (p.maduro ? '' : '<div class="sinrecorte">sin recorte: no se puede verificar</div>')}
     </div>`).join('');
 }
 
@@ -343,6 +400,14 @@ async function refrescar() {
       ? 'esperando al dron'
       : (vivo ? `dron activo (hace ${edad.toFixed(0)} s)`
               : `sin señal hace ${edad.toFixed(0)} s`);
+    const al = document.getElementById('alarma');
+    if (estado.desacuerdo) {
+      // Silence here would be the expensive kind: every pin lands somewhere plausible and
+      // wrong, and nothing on the page looks broken.
+      al.textContent = `El origen que declara el dron esta a ${estado.desacuerdo} m del que se `
+        + `paso en --origen. Manda el del dron; revisa el de tierra.`;
+      al.style.display = 'block';
+    } else { al.style.display = 'none'; }
     document.getElementById('cuenta').textContent = estado.pois.length + ' POI';
     document.getElementById('reportes').textContent = estado.reportes + ' reportes';
     ajustarVista(estado.pois);
@@ -401,8 +466,12 @@ if __name__ == '__main__':
     elif args.fondo:
         print('AVISO: no existe %s; se dibuja solo la cuadricula.' % args.fondo)
 
+    # Kept apart from the origin actually in use: --origen is what the operator believes,
+    # and the whole point is to be able to tell the two apart once a drone declares its own.
+    # Until one speaks, the typed value is all there is, so it seeds the one in use.
     if args.origen:
-        ESTADO['origen'] = tuple(float(x) for x in args.origen.split(','))
+        ESTADO['origen_cli'] = tuple(float(x) for x in args.origen.split(','))
+        ESTADO['origen'] = ESTADO['origen_cli']
     elif ESTADO['fondo']:
         print('AVISO: sin --origen no se puede ubicar el fondo ni dar coordenadas.')
         ESTADO['fondo'] = None
