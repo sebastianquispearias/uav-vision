@@ -39,7 +39,8 @@ requisitos:
   hardware: Raspberry Pi 5 + ArduCam Module 3 (montaje rot180, pitch -55)
   energia: >
     fuente 5 V estable. Con UBEC 5 A el sistema colapsa por caida de
-    voltaje sobre ~5 FPS; la tasa de vision esta fijada en 5 Hz por eso.
+    voltaje sobre ~5 FPS; la tasa de vision por defecto es 4 Hz para
+    operar con margen bajo ese punto.
   servicios:
     - uav_api corriendo en localhost:8000 (unico dueno del MAVLink;
       este modulo le pide el yaw por GET /telemetry/general)
@@ -60,10 +61,10 @@ activacion:
 
     Protocolo = VisionProtocol.with_config(
         camera=CamaraArduCam(modelo="best_ncnn_model", rastreador=True,
-                             fps=5.0, reid_modelo="osnet_x0_25_msmt17.pt"),
+                             fps=4.0, reid_modelo="osnet_x0_25_msmt17.pt"),
         pitch_deg=-55.0,
         yaw_source=UavApiYaw(),
-        identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=5.0),
+        identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=4.0),
     )
 
 mensajes:

@@ -7,7 +7,7 @@ importable on machines without the GrADyS ecosystem installed.
 The protocol is observe-only: it never sends mobility commands, so it can run alongside
 whatever mobility protocol the mission uses. Its cycle:
 
-    timer "see" (default 5 Hz):
+    timer "see" (default 4 Hz):
         camera.ver_alvo(pos, yaw) -> detections -> pixel_to_ray -> ground impact -> store
     timer "report" (default every 2 s):
         candidate list (identity layer) or single RANSAC consensus -> broadcast JSON
@@ -120,7 +120,9 @@ class VisionProtocol(IProtocol):
     camera = None                                  # ver_alvo(pos, yaw) provider
     pitch_deg: Optional[float] = None              # camera mount pitch; no default
     yaw_source: Optional[Callable[[], Optional[float]]] = None
-    see_period_s: float = 0.2
+    # 4 Hz: below the ~5 FPS voltage-collapse point measured with the 5 A UBEC,
+    # so the default never operates at the edge of the power budget.
+    see_period_s: float = 0.25
     report_period_s: float = 2.0
     ground_z: float = 0.0
     rng_seed: int = 0
@@ -135,7 +137,7 @@ class VisionProtocol(IProtocol):
         camera,
         pitch_deg: float,
         yaw_source: Callable[[], Optional[float]],
-        see_period_s: float = 0.2,
+        see_period_s: float = 0.25,
         report_period_s: float = 2.0,
         ground_z: float = 0.0,
         rng_seed: int = 0,

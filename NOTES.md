@@ -85,8 +85,13 @@ dicen QUÉ hace cada cosa; este archivo dice POR QUÉ y CUÁNDO.
 - Térmico: 3 fps → 47 °C / 20% CPU · 5 fps → 52 °C / 33% ·
   10 fps → 58 °C / 76%.
 - Con UBEC 5 A el voltaje se hunde sobre ~5 FPS y el sistema colapsa;
-  por eso la tasa de visión por defecto es 5 Hz. Prueba con UBEC 7 A
-  pendiente.
+  por eso la tasa de visión por defecto es 4 Hz (bajada de 5 a 4 el
+  24-ago-2026 para operar con margen bajo el punto de colapso). Prueba
+  con UBEC 7 A pendiente.
+- Ensayo cadena completa en vivo (24-ago-2026, alimentación de pared):
+  detector solo 7.23 FPS / CPU 54% · +BoT-SORT 8.84 FPS / 65% ·
+  +OSNet 6.59 FPS / 75.5%. OSNet ≈ +40 ms/frame con 1 persona. La
+  capacidad (6.59) supera la demanda (4 Hz) incluso con huellas.
 - 24-ago-2026: `CamaraArduCam` corrió en la Pi real a 5.58 FPS
   (contrato probado en hardware). Config: `camera_auto_detect=0` +
   `dtoverlay=imx708` en config.txt (el auto-detect no reconoce el

@@ -49,7 +49,7 @@ from uav_vision.camera import CamaraSimulada, CamaraArduCam
 camara = CamaraSimulada(alvo=(0.0, 0.0, 0.0), pitch_deg=-55.0)
 
 # real drone, full pipeline: detector + embeddings + tracker
-camara = CamaraArduCam(modelo="best_ncnn_model", rastreador=True, fps=5.0,
+camara = CamaraArduCam(modelo="best_ncnn_model", rastreador=True, fps=4.0,
                        reid_modelo="osnet_x0_25_msmt17.pt")
 
 # from here on the consumer code is identical
