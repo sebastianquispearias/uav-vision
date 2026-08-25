@@ -58,16 +58,26 @@ def banderas():
     return leer('vcgencmd get_throttled', 'throttled=?')
 
 
-def cpu_pct(t_muestra=0.4):
-    def leer_jiffies():
-        with open('/proc/stat') as fh:
-            v = [float(x) for x in fh.readline().split()[1:]]
-        return sum(v), v[3]
-    t0, i0 = leer_jiffies()
-    time.sleep(t_muestra)
-    t1, i1 = leer_jiffies()
-    dt, di = t1 - t0, i1 - i0
+def jiffies():
+    with open('/proc/stat') as fh:
+        v = [float(x) for x in fh.readline().split()[1:]]
+    return sum(v), v[3]
+
+
+def cpu_entre(antes, despues):
+    """CPU used between two jiffy readings.
+
+    Sampling for a moment AFTER the run reports the idle that follows it, not the work: the
+    window has to span the loop itself.
+    """
+    dt, di = despues[0] - antes[0], despues[1] - antes[1]
     return 100.0 * (1.0 - di / dt) if dt > 0 else float('nan')
+
+
+def cpu_pct(t_muestra=0.4):
+    a = jiffies()
+    time.sleep(t_muestra)
+    return cpu_entre(a, jiffies())
 
 
 def medir(modelo, picam, frames, imgsz):
@@ -87,6 +97,7 @@ def medir(modelo, picam, frames, imgsz):
     arranque = time.time() - t0
 
     temp0 = temperatura()
+    j0 = jiffies()
     for _ in range(frames):
         img = picam.capture_array()
         if img.ndim == 3 and img.shape[2] == 4:
@@ -96,6 +107,7 @@ def medir(modelo, picam, frames, imgsz):
         lat.append((time.time() - t0) * 1000.0)
         n_det += len(r.boxes)
     lat = np.asarray(lat)
+    uso_cpu = cpu_entre(j0, jiffies())
 
     return {
         'modelo': os.path.basename(modelo),
@@ -105,7 +117,7 @@ def medir(modelo, picam, frames, imgsz):
         'lat_p90_ms': round(float(np.percentile(lat, 90)), 1),
         'fps': round(1000.0 / float(np.median(lat)), 2),
         'detecciones': n_det,
-        'cpu_%': round(cpu_pct(), 1),
+        'cpu_%': round(uso_cpu, 1),
         'temp_inicio_C': round(temp0, 1),
         'temp_fin_C': round(temperatura(), 1),
         'reloj_MHz': round(reloj_mhz(), 0),

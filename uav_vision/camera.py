@@ -195,8 +195,9 @@ class CamaraArduCam:
         )
         picam.start()
         time.sleep(2)  # the sensor needs time to stabilize exposure
-
         self._picam = picam
+        self._primer_frame(picam)
+
         self._yolo = YOLO(self.modelo)
 
         if self.reid_modelo is not None:
@@ -205,6 +206,53 @@ class CamaraArduCam:
 
         if self.rastreador_habilitado:
             self._crear_rastreador()
+
+    # The sensor is detected over I2C and enumerated long before it will actually stream, and
+    # sometimes it does not stream at all: libcamera reports "Camera frontend has timed out"
+    # and the capture call never returns. Observed on 25ago -- five failures in a row within a
+    # minute of boot and right after a process was killed mid-capture, then five successes out
+    # of five once the board had been up a few minutes. Nothing in the configuration changed.
+    #
+    # Without this, that failure mode is a mission lost with no diagnosis: the Pi alive, the
+    # protocol running its timer, and zero detections forever, because the first capture never
+    # returned. Better to spend a few seconds retrying, and to fail loudly if it will not come.
+    ESPERA_PRIMER_FRAME_S = 8.0
+    INTENTOS_ENCENDIDO = 3
+
+    def _primer_frame(self, picam) -> None:
+        """Warm-up capture with a watchdog: retries the camera instead of hanging on it."""
+        import threading
+        import time
+
+        for intento in range(1, self.INTENTOS_ENCENDIDO + 1):
+            listo = threading.Event()
+
+            def capturar():
+                try:
+                    picam.capture_array()
+                finally:
+                    listo.set()
+
+            # A daemon thread, because if the capture is wedged inside the driver it may never
+            # return and must not keep the process alive.
+            threading.Thread(target=capturar, daemon=True).start()
+            if listo.wait(self.ESPERA_PRIMER_FRAME_S):
+                return
+            if intento == self.INTENTOS_ENCENDIDO:
+                raise RuntimeError(
+                    "la camara no entrego un frame en %d intentos de %.0f s. El sensor "
+                    "responde por I2C pero no transmite: probar de nuevo en unos segundos, y "
+                    "si persiste revisar el cable plano (I2C tolera un contacto marginal, las "
+                    "lineas CSI no)." % (self.INTENTOS_ENCENDIDO, self.ESPERA_PRIMER_FRAME_S))
+            # stop() alone keeps the device acquired; without close() the reopen fails too.
+            try:
+                picam.stop()
+                picam.close()
+            except Exception:
+                pass
+            time.sleep(2.0)
+            picam.start()
+            time.sleep(2.0)
 
     def _crear_rastreador(self) -> None:
         """Builds the BoT-SORT tracker, with the buffer converted from seconds to frames."""
