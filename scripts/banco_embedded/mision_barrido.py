@@ -37,13 +37,51 @@ Where each number comes from:
     umbral 0.25      swept in punto_operacion.py. It dominates: raising it to 0.40-0.50 loses
                      recall AND adds a false alert, because dropping mid-confidence detections
                      fragments tracks and the fragments stop merging.
-    fps 4.0          the vision timer, below the ~5 FPS voltage-collapse point measured with
-                     the 5 A UBEC. It also fits: one frame every 250 ms against ~201 ms of work
-                     leaves 20% of headroom. Since the 25ago fix this is the FRAME rate, which
-                     the caller sets and therefore knows exactly -- not a guessed detection
-                     rate. Switching to the 1280 would mean dropping this to 3.0, in the camera
-                     AND in the identity: declaring 4 Hz while delivering 2.8 makes the loop
-                     fall behind and mis-scales every maturity threshold.
+    reid_modelo      OSNet, on. Without it `emb` comes back None and the identity layer's
+                     appearance veto skips itself -- silently, since the check is written as
+                     "if both embeddings exist". That veto is what separates a person from the
+                     equipment box that captured RANSAC consensus over 930 observations on
+                     flight 3, which is the single worst failure this system has produced. The
+                     bench sat unpaid for it: this docstring budgeted OSNet's cost while the
+                     config never passed the argument.
+    fps 3.0          NOT 4.0, and the difference is the whole reason the line above is safe.
+                     Measured on the board (25ago, charger, throttled=0x0):
+
+                         960 detector alone, empty frame        196.1 ms   78% of a 250 ms window
+                         OSNet, per loaded frame, one box       +33.9 ms
+                         960 + OSNet, one person                 230.0 ms   92%
+                         960 + OSNet, two people                ~264.0 ms   does not fit
+
+                     At 4 Hz a sweep that finds one person barely fits and a sweep that finds
+                     two falls behind -- and falling behind is not a dropped frame, it is a
+                     miscalibration: every maturity threshold is scaled by the fps declared
+                     here, so a loop delivering 3.8 Hz while claiming 4 makes "36 s" mean
+                     something else. At 3 Hz the window is 333 ms and about four people fit.
+
+                     Wall-clock maturity is unchanged: since the 25ago fix the identity layer
+                     measures a span of FRAMES, and fps is the rate the caller sets and
+                     therefore knows exactly, so 36 s stays 36 s at either rate. What does
+                     change is observations per pass -- roughly a quarter fewer. The
+                     pass-length figures quoted below (a 60 s pass finds 47%) were derived at
+                     a higher rate and have NOT been re-derived at 3 Hz.
+
+                     Still below the ~5 FPS voltage-collapse point measured with the 5 A UBEC,
+                     with more room than before.
+
+                     KNOWN WRONG, measured 25ago and not yet fixed: this number is a
+                     DECLARATION, and nothing enforces it. The loop is driven by
+                     see_period_s, a separate parameter this file never sets, so it sits at
+                     its 0.25 s default; and handle_timer reschedules AFTER the work, so the
+                     real period is work + 0.25 s, not 1/fps. Measured on the board with an
+                     empty scene: 2.31 FPS delivered against 3.00 declared. Since every
+                     maturity threshold is scaled by the fps declared here, "36 s" currently
+                     takes about 47 s of wall clock. It was worse before -- at fps=4.0 the
+                     same loop delivered ~2.3 and "36 s" meant ~64 s.
+
+                     This is the third time this exact class of bug has appeared (see C-5 in
+                     PROGRESO.md, and the 25ago fix). The real repair is to drive the loop at
+                     a fixed RATE instead of a fixed delay, and to derive fps from
+                     see_period_s rather than letting a caller state them independently.
     radio_fusion 3.5 the scene's ground-projection noise at mission altitude. Roughly the GPS
                      bias plus slant range times yaw error; the measured spread on flight 3 was
                      1.6 m around a 2.3 m offset.
@@ -66,7 +104,8 @@ ProtocoloBarridoLAC = VisionProtocol.with_config(
         modelo="/home/pi/modelos_visdrone/y960_ncnn_model",
         umbral=0.25,
         rastreador=True,
-        fps=4.0,
+        reid_modelo="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
+        fps=3.0,
         # The crop is what makes a preliminary useful: the drone says "something here, look at
         # this", and RF-DETR on the ground rules. Measured on real flight boxes at 128 px and
         # quality 70: median 2.7 KB, max 3.3 KB -- one small packet, not a video stream, which
@@ -77,7 +116,9 @@ ProtocoloBarridoLAC = VisionProtocol.with_config(
     yaw_source=UavApiYaw("http://localhost:8000"),
     identidad=IdentidadIncremental(
         radio_fusion_m=3.5,
-        fps=4.0,
+        # Must match the camera's fps exactly: this is the number every maturity threshold is
+        # scaled by, and the two drifting apart is how "36 s" quietly stops meaning 36 s.
+        fps=3.0,
         dur_reporte_s=36.0,
     ),
     reportar_preliminares=True,
