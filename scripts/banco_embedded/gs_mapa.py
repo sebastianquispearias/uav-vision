@@ -67,6 +67,21 @@ def a_latlng(x, y, origen):
     return round(lat, 7), round(lng, 7)
 
 
+def ficha(ahora, mensaje):
+    """What the ground station knows about a drone from its last message.
+
+    fps_real and slots_perdidos are here because a drone that cannot keep up does not look
+    any different from one that can: same pins, same cadence of reports, fewer looks taken.
+    Until 25ago that gap was only findable with a stopwatch.
+    """
+    return {
+        't': ahora,
+        'frames_seen': mensaje.get('frames_seen'),
+        'fps_real': mensaje.get('fps_real'),
+        'slots_perdidos': mensaje.get('slots_perdidos'),
+    }
+
+
 def separacion_m(a, b):
     """Ground distance between two lat/lng pairs, flat-earth: only used for small gaps."""
     dlat = math.radians(b[0] - a[0]) * R_TIERRA
@@ -108,8 +123,7 @@ def registrar(mensaje, fuente):
         # An empty beat says "still here", not "there is nothing". Touching the pin list on
         # one would wipe the map every time a target left the frame for a second.
         with CANDADO:
-            ESTADO['drones'][str(fuente)] = {
-                't': ahora, 'frames_seen': mensaje.get('frames_seen')}
+            ESTADO['drones'][str(fuente)] = ficha(ahora, mensaje)
         return
     pois = []
     for p in mensaje.get('pois', []):
@@ -133,8 +147,7 @@ def registrar(mensaje, fuente):
         ESTADO['historia'].append({'t': ahora, 'n': len(pois),
                                    'frames': mensaje.get('frames_seen')})
         ESTADO['historia'][:] = ESTADO['historia'][-500:]
-        ESTADO['drones'][str(fuente)] = {
-            't': ahora, 'frames_seen': mensaje.get('frames_seen')}
+        ESTADO['drones'][str(fuente)] = ficha(ahora, mensaje)
     hora = datetime.now().strftime('%H:%M:%S')
     print('[%s] dron %s | %d POI(s) | frames %s' %
           (hora, fuente, len(pois), mensaje.get('frames_seen')), flush=True)
