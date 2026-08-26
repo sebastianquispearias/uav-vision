@@ -132,6 +132,7 @@ class CamaraArduCam:
         fps: Optional[float] = None,
         buffer_pista_s: float = 8.0,
         compensar_camara: bool = False,
+        pausa_arranque_s: float = 0.0,
         recortes: bool = False,
         recorte_lado_px: int = 128,
         recorte_calidad: int = 70,
@@ -161,6 +162,13 @@ class CamaraArduCam:
         # drone is not affordable -- so these are sized in kilobytes, not megabytes: a 128 px
         # JPEG at quality 70 lands around 2-5 KB, which is one small packet per detection
         # rather than a stream.
+        # Seconds to sit idle between the heavy start-up steps. Default 0: no change for
+        # anything on mains. On battery it is the only lever software has against the failure
+        # measured on 25ago -- the board died 3 s into opening the camera and loading the two
+        # models, on a FULL pack, drawing 3.47 W. That is nowhere near saturating a 5 A UBEC,
+        # so what kills it is the step itself, not the level. Opening the camera and loading
+        # the models back to back stacks those steps; this pulls them apart.
+        self.pausa_arranque_s = pausa_arranque_s
         self.recortes = recortes
         self.recorte_lado_px = recorte_lado_px
         self.recorte_calidad = recorte_calidad
@@ -198,9 +206,11 @@ class CamaraArduCam:
         self._picam = picam
         self._primer_frame(picam)
 
+        self._respirar("camara arriba")
         self._yolo = YOLO(self.modelo)
 
         if self.reid_modelo is not None:
+            self._respirar("detector cargado")
             from boxmot.reid.core.reid import ReID
             self._reid = ReID(self.reid_modelo, device="cpu", half=False)
 
@@ -216,6 +226,15 @@ class CamaraArduCam:
     # Without this, that failure mode is a mission lost with no diagnosis: the Pi alive, the
     # protocol running its timer, and zero detections forever, because the first capture never
     # returned. Better to spend a few seconds retrying, and to fail loudly if it will not come.
+    def _respirar(self, tras: str) -> None:
+        """Lets the supply recover before the next heavy step, when asked to."""
+        if self.pausa_arranque_s <= 0:
+            return
+        import time
+        print("[camara] %s: %.1f s de respiro antes del siguiente escalon"
+              % (tras, self.pausa_arranque_s), flush=True)
+        time.sleep(self.pausa_arranque_s)
+
     ESPERA_PRIMER_FRAME_S = 8.0
     INTENTOS_ENCENDIDO = 3
 

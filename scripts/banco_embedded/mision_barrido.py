@@ -104,6 +104,11 @@ ProtocoloBarridoLAC = VisionProtocol.with_config(
         rastreador=True,
         reid_modelo="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
         fps=3.0,
+        # pausa_arranque_s stays OFF, and the measurement is why. Splitting the start-up into
+        # three steps 4 s apart was tried on 25ago against the battery failure: it moved the
+        # death from opening the camera (3 s) to loading the detector (9 s) and did not stop
+        # it. Each step alone is enough. Buying 8 s of mission time for nothing would only
+        # leave a knob that looks like a fix.
         # The crop is what makes a preliminary useful: the drone says "something here, look at
         # this", and RF-DETR on the ground rules. Measured on real flight boxes at 128 px and
         # quality 70: median 2.7 KB, max 3.3 KB -- one small packet, not a video stream, which
