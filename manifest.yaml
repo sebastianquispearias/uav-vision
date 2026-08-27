@@ -23,8 +23,8 @@ skill:
     asi que se puede sumar a cualquier mision existente como un sensor
     mas. Cada 200 ms captura y detecta (YOLO afinado en vistas aereas);
     cada deteccion se convierte en un rayo 3D y se cruza con el suelo.
-    Un rastreador (BoT-SORT) mantiene la identidad de cada persona entre
-    frames, y la capa de identidad separa objetivos estaticos de moviles
+    Un tracker (BoT-SORT) mantiene la identity de cada persona entre
+    frames, y la capa de identity separa objetivos estaticos de moviles
     y fusiona observaciones repetidas. Cada 2 s transmite la lista de
     POIs consolidada.
 
@@ -32,7 +32,7 @@ capacidades:
   - detectar personas en imagen aerea (modelo propio afinado en VisDrone)
   - geolocalizar cada deteccion en coordenadas locales del enjambre
   - distinguir individuos (track_id estable + huella de apariencia OSNet)
-  - clasificar POIs: estatico (posicion consolidada) vs movil (posicion actual)
+  - clasificar POIs: estatico (posicion consolidada) vs mobile (posicion actual)
   - reportar por el sistema de mensajes de GrADyS (broadcast JSON)
 
 requisitos:
@@ -52,19 +52,19 @@ activacion:
   como: >
     construir la clase configurada con VisionProtocol.with_config(...)
     y entregarsela al runner del dron. Parametros obligatorios: camera,
-    pitch_deg, yaw_source. Opcional: identidad (IdentidadIncremental)
+    pitch_deg, yaw_source. Opcional: identity (IncrementalIdentity)
     para reportes multi-POI; sin ella reporta el POI dominante.
   ejemplo: |
-    from uav_vision.camera import CamaraArduCam
-    from uav_vision.identity import IdentidadIncremental
+    from uav_vision.camera import OnboardCamera
+    from uav_vision.identity import IncrementalIdentity
     from uav_vision.vision_protocol import VisionProtocol, UavApiYaw
 
     Protocolo = VisionProtocol.with_config(
-        camera=CamaraArduCam(modelo="best_ncnn_model", rastreador=True,
-                             fps=4.0, reid_modelo="osnet_x0_25_msmt17.pt"),
+        camera=OnboardCamera(modelo="best_ncnn_model", tracker=True,
+                             fps=4.0, reid_model="osnet_x0_25_msmt17.pt"),
         pitch_deg=-55.0,
         yaw_source=UavApiYaw(),
-        identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=4.0),
+        identity=IncrementalIdentity(fusion_radius_m=3.5, fps=4.0),
     )
 
 mensajes:
@@ -83,12 +83,12 @@ mensajes:
         y: norte en metros (float)
         n_obs: observaciones acumuladas — mas es mas confiable (int)
         conf: confianza media del detector, 0-1 (float)
-        movil: true si se esta moviendo; su (x,y) es la posicion ACTUAL
+        mobile: true si se esta moviendo; su (x,y) es la posicion ACTUAL
     ejemplo: |
       {"type": "vision_poi", "sender": 3, "time": 128.4,
        "frames_seen": 610,
        "pois": [{"x": -0.44, "y": 6.66, "n_obs": 467,
-                 "conf": 0.52, "movil": false}]}
+                 "conf": 0.52, "mobile": false}]}
   recibe: "nada (version 0.1: observador puro, sin comandos remotos)"
 
 validacion:
@@ -96,7 +96,7 @@ validacion:
   - "geometria identica al vuelo real 02ago (0.000 grados en 268 rayos)"
   - "replay del vuelo 02ago: operador reportado como POI separado a
     2.31 m (el analisis offline dio 2.49 m)"
-  - "rastreador: ids estables 30/30 frames en secuencia sintetica"
+  - "tracker: ids estables 30/30 frames en secuencia sintetica"
   - "banco de energia y temperatura: data/bench_rpi (22ago2026)"
 
 limitaciones:
@@ -108,5 +108,5 @@ limitaciones:
   - "costo de OSNet y de compensacion de camara en la Pi sin medir:
     ambos apagados por defecto hasta que el banco los apruebe"
   - "terreno plano (z=0): sin modelo de elevacion"
-  - "la cadena completa junta (camara+tracker+identidad en la Pi) aun
+  - "la cadena completa junta (camara+tracker+identity en la Pi) aun
     no se ensayo de punta a punta"

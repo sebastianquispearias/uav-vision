@@ -12,7 +12,7 @@ installed on its own.
 The whole module reduces to one method, exposed identically by both cameras:
 
 ```python
-camara.ver_alvo(pos, yaw) -> list[dict]
+camera.detect(pos, yaw) -> list[dict]
 ```
 
 | Input | Type | Meaning |
@@ -43,23 +43,23 @@ read them with `det.get(...)`, never `det[...]`.
 ## Usage
 
 ```python
-from uav_vision.camera import CamaraSimulada, CamaraArduCam
+from uav_vision.camera import SimulatedCamera, OnboardCamera
 
 # simulation
-camara = CamaraSimulada(alvo=(0.0, 0.0, 0.0), pitch_deg=-55.0)
+camera = SimulatedCamera(target=(0.0, 0.0, 0.0), pitch_deg=-55.0)
 
 # real drone, full pipeline: detector + embeddings + tracker
-camara = CamaraArduCam(modelo="best_ncnn_model", rastreador=True, fps=4.0,
-                       reid_modelo="osnet_x0_25_msmt17.pt")
+camera = OnboardCamera(model="best_ncnn_model", tracker=True, fps=4.0,
+                       reid_model="osnet_x0_25_msmt17.pt")
 
 # from here on the consumer code is identical
-for det in camara.ver_alvo(pos, yaw):
+for det in camera.detect(pos, yaw):
     ...
 ```
 
 The constructors differ on purpose — the simulated camera needs to know where
-the target is, the real one needs a detector model. Only `ver_alvo` must
-match. `CamaraArduCam` imports `picamera2`, `ultralytics` and `boxmot` on the
+the target is, the real one needs a detector model. Only `detect` must
+match. `OnboardCamera` imports `picamera2`, `ultralytics` and `boxmot` on the
 first capture, so the package imports cleanly on machines without them.
 
 `correr.py` runs the full geolocation pipeline of the paper in either world:
@@ -104,10 +104,10 @@ pip install -e ".[dron]"      # + ultralytics, boxmot (picamera2 ships with Rasp
 ## Tests
 
 ```bash
-python tests/test_contrato.py          # both cameras honor the same contract
-python tests/test_identidad.py         # identity rules against known ground truth
+python tests/test_contract.py          # both cameras honor the same contract
+python tests/test_identity.py         # identity rules against known ground truth
 python tests/test_vision_protocol.py   # end-to-end synthetic flight (needs ../gradys-embedded)
-python tests/test_rastreador.py        # tracker wiring (needs boxmot)
+python tests/test_tracker.py        # tracker wiring (needs boxmot)
 python scripts/replay_vuelo3.py        # replay of a recorded real flight through the protocol
 ```
 
@@ -124,8 +124,17 @@ python scripts/replay_vuelo3.py        # replay of a recorded real flight throug
 | `fusion.py` | robust multi-view triangulation (RANSAC and variants) |
 | `view_selection.py` | joint geometry+confidence view selector |
 | `noise.py` | sensor noise models for simulation |
+| `invariants.py` | guards for derived quantities: rates, declared-vs-delivered, stamped caches |
 | `manifest.yaml` | skill manifest for the LLM agent |
 | `NOTES.md` | decision log: where every calibrated number comes from |
+
+## Naming
+
+The package API is English throughout — module names, classes, methods and keyword
+arguments — so that a reader who does not speak Spanish can use it from the README
+alone. The operational scripts under `scripts/` keep Spanish command-line flags and
+messages: they are field tools, run from memory by the team that flies the drone,
+and their commands appear in the flight checklists.
 
 ## Why this package exists
 

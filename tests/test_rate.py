@@ -12,7 +12,7 @@ they advance time in fixed steps and call handle_timer, so the work is free and 
 never fall behind. The harness here is event-driven and the camera BURNS CLOCK, which is the
 only way the fault is visible at all.
 
-Run with: python tests/test_tasa.py
+Run with: python tests/test_rate.py
 """
 import json
 import os
@@ -27,7 +27,7 @@ if os.path.isdir(_GRADYS):
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
 from uav_vision.camera_config import ARDUCAM_MODULE_3
-from uav_vision.identity import IdentidadIncremental
+from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import VisionProtocol
 
 from test_vision_protocol import FakeProvider  # noqa: E402
@@ -52,10 +52,10 @@ class CamaraQueTarda:
         # detector and the appearance model.
         self.trabajo_inicial_s = trabajo_inicial_s
         self.detecciones = list(detecciones)
-        self.camara = ARDUCAM_MODULE_3
+        self.camera = ARDUCAM_MODULE_3
         self._primera = True
 
-    def ver_alvo(self, pos, yaw):
+    def detect(self, pos, yaw):
         if self._primera and self.trabajo_inicial_s is not None:
             self._primera = False
             self.provider.time += self.trabajo_inicial_s
@@ -73,17 +73,17 @@ DETECCION = {
 
 
 def correr(trabajo_s, periodo_s, hasta_s, detecciones=(), fps_declarado=None,
-           dur_reporte_s=36.0, trabajo_inicial_s=None):
+           report_dur_s=36.0, trabajo_inicial_s=None):
     """Event-driven: the clock only moves to the next due timer, or forward through work."""
     provider = FakeProvider()
-    camara = CamaraQueTarda(provider, trabajo_s, detecciones, trabajo_inicial_s)
+    camera = CamaraQueTarda(provider, trabajo_s, detecciones, trabajo_inicial_s)
     fps = fps_declarado if fps_declarado is not None else 1.0 / periodo_s
     Protocolo = VisionProtocol.with_config(
-        camera=camara, pitch_deg=-55.0, yaw_source=lambda: 0.0,
+        camera=camera, pitch_deg=-55.0, yaw_source=lambda: 0.0,
         see_period_s=periodo_s, report_period_s=2.0,
-        identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=fps,
-                                       dur_reporte_s=dur_reporte_s),
-        reportar_preliminares=True)
+        identity=IncrementalIdentity(fusion_radius_m=3.5, fps=fps,
+                                       report_dur_s=report_dur_s),
+        report_preliminary=True)
     protocolo = Protocolo.instantiate(provider)
     protocolo.initialize()
     protocolo.handle_telemetry(Telemetry(current_position=(0.0, 0.0, 35.0)))
@@ -98,7 +98,7 @@ def correr(trabajo_s, periodo_s, hasta_s, detecciones=(), fps_declarado=None,
         protocolo.handle_timer(nombre)
         if t_maduro is None and provider.sent:
             m = json.loads(provider.sent[-1].message)
-            if any(p.get("maduro") for p in m.get("pois", [])):
+            if any(p.get("mature") for p in m.get("pois", [])):
                 t_maduro = provider.time
     mensajes = [json.loads(c.message) for c in provider.sent]
     return protocolo, provider, mensajes, t_maduro
@@ -163,11 +163,11 @@ for trabajo, etiqueta in [(0.05, "lazo holgado"), (0.45, "lazo saturado")]:
             "objetivo 36.0 s")
 
 # And the fallback still works for callers replaying recorded data with no clock at all.
-ident = IdentidadIncremental(radio_fusion_m=3.5, fps=4.0, dur_reporte_s=10.0)
+ident = IncrementalIdentity(fusion_radius_m=3.5, fps=4.0, report_dur_s=10.0)
 for f in range(200):
-    ident.observar(frame=f, track_id=1, impacto_xy=(5.0, 5.0), conf=0.9)
-c = ident.candidatos()
-revisar(bool(c) and c[0]["maduro"],
+    ident.observe(frame=f, track_id=1, ground_xy=(5.0, 5.0), conf=0.9)
+c = ident.candidates()
+revisar(bool(c) and c[0]["mature"],
         "sin reloj, la madurez sigue midiendose por span de frames (replays)")
 
 # ============================== 4. la tasa reportada es la de AHORA, no la del arranque

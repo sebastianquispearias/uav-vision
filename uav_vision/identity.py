@@ -44,7 +44,7 @@ EMB_DIST_GEMELO = 0.70
 POS_FRAC_GEMELO = 0.4
 
 
-def _posicion_actual(ii: np.ndarray) -> np.ndarray:
+def _current_position(ii: np.ndarray) -> np.ndarray:
     """
     Estimates where a track is NOW from its recent impacts.
 
@@ -62,21 +62,21 @@ def _posicion_actual(ii: np.ndarray) -> np.ndarray:
     return np.asarray(ajuste[0] + ajuste[1] * idx[-1])
 
 
-class IdentidadIncremental:
+class IncrementalIdentity:
     """
     Accumulates tracked detections and produces candidate POIs on demand.
 
-    observar() is O(1) per detection. candidatos() re-associates all track summaries from
+    observe() is O(1) per detection. candidates() re-associates all track summaries from
     scratch on each call; tracks number in the tens, so running it at every report tick is
     negligible next to the detector. Re-deriving candidates from summaries, instead of patching
     a live clustering, keeps the association rules simple and order-independent.
 
     Args:
-        radio_fusion_m: expected ground-projection noise of the scene, in meters (roughly
+        fusion_radius_m: expected ground-projection noise of the scene, in meters (roughly
             gps_sigma + slant_range * yaw_sigma). Two static tracks closer than this may be the
             same thing. No default: it is a property of the deployment, not of the algorithm.
         fps: the rate at which FRAMES are offered to the detector. A FALLBACK now, and only
-            for callers with no clock to offer: pass `t` to observar() and maturity is measured
+            for callers with no clock to offer: pass `t` to observe() and maturity is measured
             in seconds, leaving this number used for nothing but the duty-cycle floor.
 
             The history is worth keeping, because this parameter has now been wrong three
@@ -89,37 +89,37 @@ class IdentidadIncremental:
             third. Both loop and callers are fixed -- but a number wrong three ways is a
             number to stop depending on. A clock cannot be misconfigured.
         emb_dist_max: appearance distance above which two tracks are never merged.
-        dur_pista_s: minimum accumulated observation time for a track to be considered.
-        dur_movil_s: minimum accumulated observation time to classify a track as mobile.
-        dur_reporte_s: minimum accumulated observation time for a candidate to be reported.
-        desplaz_movil_m: net displacement above which a track counts as moving. Defaults to
+        track_dur_s: minimum accumulated observation time for a track to be considered.
+        mobile_dur_s: minimum accumulated observation time to classify a track as mobile.
+        report_dur_s: minimum accumulated observation time for a candidate to be reported.
+        mobile_disp_m: net displacement above which a track counts as moving. Defaults to
             slightly above the fusion radius: a static track wanders by projection noise only.
     """
 
     def __init__(
         self,
-        radio_fusion_m: float,
+        fusion_radius_m: float,
         fps: float,
         emb_dist_max: float = EMB_DIST_MAX_MEDIDO,
-        dur_pista_s: float = 8.6,
-        dur_movil_s: float = 29.0,
-        dur_reporte_s: float = 36.0,
-        desplaz_movil_m: Optional[float] = None,
+        track_dur_s: float = 8.6,
+        mobile_dur_s: float = 29.0,
+        report_dur_s: float = 36.0,
+        mobile_disp_m: Optional[float] = None,
     ) -> None:
-        self.radio_fusion_m = radio_fusion_m
+        self.fusion_radius_m = fusion_radius_m
         self.emb_dist_max = emb_dist_max
-        self.desplaz_movil_m = (desplaz_movil_m if desplaz_movil_m is not None
-                                else 1.15 * radio_fusion_m)
+        self.mobile_disp_m = (mobile_disp_m if mobile_disp_m is not None
+                                else 1.15 * fusion_radius_m)
         # Maturity is measured as a span of frames, not as a count of detections. Both say
         # "enough evidence", but only the span says it in wall-clock terms: a target found in
         # every frame and one found in every third frame become reportable at the same moment,
         # which is what an operator waiting for an alert expects.
-        self.dur_pista_s = dur_pista_s
-        self.dur_movil_s = dur_movil_s
-        self.dur_reporte_s = dur_reporte_s
-        self.span_pista = max(3, round(dur_pista_s * fps))
-        self.span_movil = max(6, round(dur_movil_s * fps))
-        self.span_reporte = max(8, round(dur_reporte_s * fps))
+        self.track_dur_s = track_dur_s
+        self.mobile_dur_s = mobile_dur_s
+        self.report_dur_s = report_dur_s
+        self.span_pista = max(3, round(track_dur_s * fps))
+        self.span_movil = max(6, round(mobile_dur_s * fps))
+        self.span_reporte = max(8, round(report_dur_s * fps))
 
         # A track detected in a tenth of the frames it spans is not being tracked, it is being
         # rediscovered; the span would flatter it. This floor keeps that out.
@@ -135,7 +135,7 @@ class IdentidadIncremental:
         return (max(frames) - min(frames) + 1) if frames else 0
 
     @staticmethod
-    def _alcanza(pista, dur_s: float, span_frames: int) -> bool:
+    def _has_covered(track, dur_s: float, span_frames: int) -> bool:
         """
         Has this track covered enough time?
 
@@ -143,21 +143,21 @@ class IdentidadIncremental:
         loop running slower than configured cannot distort. The frame span stays as the
         fallback for callers replaying recorded data with no timestamps.
         """
-        t0, t1 = pista.get("t0"), pista.get("t1")
+        t0, t1 = track.get("t0"), track.get("t1")
         if t0 is not None and t1 is not None:
             return (t1 - t0) >= dur_s
-        return IdentidadIncremental._span(pista["frames"]) >= span_frames
+        return IncrementalIdentity._span(track["frames"]) >= span_frames
 
     # -- ingest ------------------------------------------------------------
 
-    def observar(
+    def observe(
         self,
         frame: int,
         track_id: int,
-        impacto_xy: Tuple[float, float],
+        ground_xy: Tuple[float, float],
         conf: float,
         emb: Optional[np.ndarray] = None,
-        recorte: Optional[bytes] = None,
+        crop: Optional[bytes] = None,
         t: Optional[float] = None,
     ) -> None:
         """
@@ -174,18 +174,18 @@ class IdentidadIncremental:
         if t is None:
             t = {"imps": [], "conf_sum": 0.0,
                  "emb_sum": None, "n_emb": 0, "frames": set(),
-                 "recorte": None, "recorte_conf": -1.0,
+                 "crop": None, "recorte_conf": -1.0,
                  "t0": None, "t1": None}
             self._tracks[track_id] = t
-        t["imps"].append((float(impacto_xy[0]), float(impacto_xy[1])))
+        t["imps"].append((float(ground_xy[0]), float(ground_xy[1])))
         t["conf_sum"] += float(conf)
         t["frames"].add(int(frame))
         if sello is not None:
             ts = float(sello)
             t["t0"] = ts if t["t0"] is None else min(t["t0"], ts)
             t["t1"] = ts if t["t1"] is None else max(t["t1"], ts)
-        if recorte and float(conf) > t["recorte_conf"]:
-            t["recorte"], t["recorte_conf"] = recorte, float(conf)
+        if crop and float(conf) > t["recorte_conf"]:
+            t["crop"], t["recorte_conf"] = crop, float(conf)
         if emb is not None:
             v = np.asarray(emb, dtype=np.float32)
             t["emb_sum"] = v.copy() if t["emb_sum"] is None else t["emb_sum"] + v
@@ -193,11 +193,11 @@ class IdentidadIncremental:
 
     # -- association -------------------------------------------------------
 
-    def _resumen_pistas(self) -> List[dict]:
-        pistas = []
+    def _track_summaries(self) -> List[dict]:
+        tracks = []
         for tid, t in self._tracks.items():
             n = len(t["imps"])
-            if n < self.n_pista or not self._alcanza(t, self.dur_pista_s, self.span_pista):
+            if n < self.n_pista or not self._has_covered(t, self.track_dur_s, self.span_pista):
                 continue
             ii = np.asarray(t["imps"])
             q = max(1, n // 4)
@@ -206,32 +206,32 @@ class IdentidadIncremental:
             emb = None
             if t["n_emb"] > 0:
                 emb = t["emb_sum"] / (np.linalg.norm(t["emb_sum"]) + 1e-9)
-            pistas.append({
+            tracks.append({
                 "tid": tid, "n": n,
                 "pos": np.median(ii, axis=0),  # robust lifetime center
-                "pos_actual": _posicion_actual(ii),
+                "pos_actual": _current_position(ii),
                 "desplaz": desplaz,
                 "conf": t["conf_sum"] / n,
                 "emb": emb,
                 "frames": t["frames"],
-                "recorte": t.get("recorte"),
+                "crop": t.get("crop"),
                 "recorte_conf": t.get("recorte_conf", -1.0),
                 "t0": t.get("t0"),
                 "t1": t.get("t1"),
             })
-        return pistas
+        return tracks
 
-    def candidatos(self, preliminares: bool = False) -> List[dict]:
+    def candidates(self, preliminary: bool = False) -> List[dict]:
         """
         Returns the current candidate list, mobiles first, then by descending evidence.
 
-        Each candidate: {x, y, n_obs, conf, movil, maduro, recorte}. For a mobile candidate (x, y) is
+        Each candidate: {x, y, n_obs, conf, mobile, mature, crop}. For a mobile candidate (x, y) is
         its CURRENT position (a mobile's lifetime median points at the middle of its path).
         Static candidates report the lifetime median, which is the point of accumulating views.
 
         Args:
-            preliminares: also return candidates that have formed a track but not yet earned
-                a report, marked maduro=False. They exist for the sweep case. Measured on
+            preliminary: also return candidates that have formed a track but not yet earned
+                a report, marked mature=False. They exist for the sweep case. Measured on
                 flight 3, a pass of 30 s over a person NEVER produces a mature candidate and
                 a pass of 60 s produces one 47% of the time: a search that crosses each point
                 once and moves on would stay silent over a victim it saw perfectly well.
@@ -242,47 +242,47 @@ class IdentidadIncremental:
                 station decides. Never present one to an operator as a confirmed find.
         """
         cands: List[dict] = []
-        for tk in sorted(self._resumen_pistas(), key=lambda p: -p["n"]):
-            if (tk["desplaz"] > self.desplaz_movil_m and tk["n"] >= self.n_movil
-                    and self._alcanza(tk, self.dur_movil_s, self.span_movil)):
-                cands.append({"movil": True, "pos": tk["pos_actual"].copy(),
+        for tk in sorted(self._track_summaries(), key=lambda p: -p["n"]):
+            if (tk["desplaz"] > self.mobile_disp_m and tk["n"] >= self.n_movil
+                    and self._has_covered(tk, self.mobile_dur_s, self.span_movil)):
+                cands.append({"mobile": True, "pos": tk["pos_actual"].copy(),
                               "emb": tk["emb"], "conf": tk["conf"],
                               "n": tk["n"], "frames": set(tk["frames"]),
-                              "recorte": tk["recorte"],
+                              "crop": tk["crop"],
                               "recorte_conf": tk["recorte_conf"],
                               "t0": tk["t0"], "t1": tk["t1"]})
                 continue
             mejor, smin = None, math.inf
             for k, c in enumerate(cands):
-                if c["movil"]:
+                if c["mobile"]:
                     continue
                 dp = float(np.linalg.norm(tk["pos"] - c["pos"]))
                 if len(tk["frames"] & c["frames"]) >= COOCURRENCIA_MIN:
                     # Seen together: two different things — unless this is the duplicate-box
                     # case (same spot, same appearance).
                     es_gemelo = (
-                        dp < POS_FRAC_GEMELO * self.radio_fusion_m
+                        dp < POS_FRAC_GEMELO * self.fusion_radius_m
                         and tk["emb"] is not None and c["emb"] is not None
                         and float(np.linalg.norm(tk["emb"] - c["emb"]))
                         < EMB_DIST_GEMELO)
                     if not es_gemelo:
                         continue
-                if dp >= self.radio_fusion_m:
+                if dp >= self.fusion_radius_m:
                     continue
                 if tk["emb"] is not None and c["emb"] is not None:
                     de = float(np.linalg.norm(tk["emb"] - c["emb"]))
                     if de >= self.emb_dist_max:
                         continue
-                    s = dp / self.radio_fusion_m + 0.5 * de / self.emb_dist_max
+                    s = dp / self.fusion_radius_m + 0.5 * de / self.emb_dist_max
                 else:
-                    s = dp / self.radio_fusion_m
+                    s = dp / self.fusion_radius_m
                 if s < smin:
                     mejor, smin = k, s
             if mejor is None:
-                cands.append({"movil": False, "pos": tk["pos"].copy(),
+                cands.append({"mobile": False, "pos": tk["pos"].copy(),
                               "emb": tk["emb"], "conf": tk["conf"],
                               "n": tk["n"], "frames": set(tk["frames"]),
-                              "recorte": tk["recorte"],
+                              "crop": tk["crop"],
                               "recorte_conf": tk["recorte_conf"],
                               "t0": tk["t0"], "t1": tk["t1"]})
             else:
@@ -297,29 +297,29 @@ class IdentidadIncremental:
                 c["frames"] |= tk["frames"]
                 # Positions and appearances average; a photograph cannot. Keep the clearest
                 # of the two, which is the one the verifier would have chosen.
-                if tk["recorte"] and tk["recorte_conf"] > c["recorte_conf"]:
-                    c["recorte"], c["recorte_conf"] = tk["recorte"], tk["recorte_conf"]
+                if tk["crop"] and tk["recorte_conf"] > c["recorte_conf"]:
+                    c["crop"], c["recorte_conf"] = tk["crop"], tk["recorte_conf"]
                 # Two tracks of one target: the evidence spans the union of their intervals.
                 if tk["t0"] is not None:
                     c["t0"] = tk["t0"] if c["t0"] is None else min(c["t0"], tk["t0"])
                     c["t1"] = tk["t1"] if c["t1"] is None else max(c["t1"], tk["t1"])
 
-        def maduro(c):
+        def mature(c):
             return (c["n"] >= self.n_reporte
-                    and self._alcanza(c, self.dur_reporte_s, self.span_reporte))
+                    and self._has_covered(c, self.report_dur_s, self.span_reporte))
 
-        salida = [c for c in cands if maduro(c) or preliminares]
+        out = [c for c in cands if mature(c) or preliminary]
         # Mature first, then mobiles, then by evidence: whatever the caller truncates, it
         # truncates the least certain rows.
-        salida.sort(key=lambda c: (not maduro(c), not c["movil"], -c["n"]))
+        out.sort(key=lambda c: (not mature(c), not c["mobile"], -c["n"]))
         return [{
             "x": round(float(c["pos"][0]), 2),
             "y": round(float(c["pos"][1]), 2),
             "n_obs": int(c["n"]),
             "conf": round(float(c["conf"]), 3),
-            "movil": bool(c["movil"]),
-            "maduro": maduro(c),
+            "mobile": bool(c["mobile"]),
+            "mature": mature(c),
             # Raw JPEG bytes, or None. Serialising it is the transport's problem, not this
             # layer's; the protocol base64-encodes it on the way out.
-            "recorte": c.get("recorte"),
-        } for c in salida]
+            "crop": c.get("crop"),
+        } for c in out]

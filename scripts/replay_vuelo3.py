@@ -3,7 +3,7 @@ Replays a recorded real flight through VisionProtocol, no drone needed.
 
 The recording provides everything the protocol would get live: frames.csv has the pose per
 frame and the cached detections are what the detector saw. A replay camera hands those
-detections to the protocol exactly as CamaraArduCam would, and a fake provider plays the clock.
+detections to the protocol exactly as OnboardCamera would, and a fake provider plays the clock.
 
 Two-stage verification, in order of trust:
 
@@ -60,15 +60,15 @@ def enu(lat, lng):
 class CamaraReplay:
     """Feeds recorded detections to the protocol, one frame at a time.
 
-    Same ver_alvo contract as the other cameras. The current frame is
+    Same detect contract as the other cameras. The current frame is
     set externally; each frame is served once so extra timer ticks
     between frames don't duplicate measurements. Detections carry
-    track_id and emb, like CamaraArduCam with a tracker would provide.
+    track_id and emb, like OnboardCamera with a tracker would provide.
     """
 
-    def __init__(self, dets_por_frame, camara):
+    def __init__(self, dets_por_frame, camera):
         self.dets_por_frame = dets_por_frame
-        self.camara = camara
+        self.camera = camera
         self.frame = None
         self._servido = True
 
@@ -76,7 +76,7 @@ class CamaraReplay:
         self.frame = frame
         self._servido = False
 
-    def ver_alvo(self, pos, yaw):
+    def detect(self, pos, yaw):
         del pos, yaw
         if self._servido:
             return []
@@ -180,7 +180,7 @@ for seq, f in enumerate(frames_aire):
             track_de[i] = n_tracks
             n_tracks += 1
     activos = [a for a in activos if seq - a[1] <= MAX_GAP]
-print(f"rastreador de replay: {n_tracks} pistas")
+print(f"tracker de replay: {n_tracks} pistas")
 
 por_frame = {}
 for f, ix in idx_por_frame.items():
@@ -194,7 +194,7 @@ t_fin = float(poses[frames_aire[-1]]["t_mono"])
 fps_replay = len(frames_aire) / (t_fin - t_ini)
 print(f"cadencia del vuelo: {fps_replay:.2f} FPS")
 
-from uav_vision.identity import IdentidadIncremental
+from uav_vision.identity import IncrementalIdentity
 
 Protocolo = VisionProtocol.with_config(
     camera=CamaraReplay(por_frame, camara_cfg),
@@ -202,9 +202,9 @@ Protocolo = VisionProtocol.with_config(
     yaw_source=lambda: state["yaw"],
     see_period_s=0.1,
     report_period_s=2.0,
-    # radio_fusion_m: expected ground noise of THIS scene (gps sigma +
+    # fusion_radius_m: expected ground noise of THIS scene (gps sigma +
     # slant_range * yaw error at 35 m), the value validated offline.
-    identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=fps_replay),
+    identity=IncrementalIdentity(fusion_radius_m=3.5, fps=fps_replay),
 )
 state = {"yaw": 0.0}
 
@@ -239,7 +239,7 @@ print("  >> rayos del protocolo coinciden con los del vuelo real")
 provider = FakeProvider()
 protocol = Protocolo.instantiate(provider)
 protocol.initialize()
-camara = protocol.camera
+camera = protocol.camera
 
 t0 = float(poses[frames_aire[0]]["t_mono"])
 for f in frames_aire:
@@ -248,7 +248,7 @@ for f in frames_aire:
     x, y = enu(float(p["lat"]), float(p["lng"]))
     state["yaw"] = float(p["yaw"])
     protocol.handle_telemetry(Telemetry(current_position=(x, y, float(p["alt_agl"]))))
-    camara.set_frame(f)
+    camera.set_frame(f)
     provider.fire_due(protocol)
 protocol.finish()
 
@@ -266,7 +266,7 @@ for j, p in enumerate(pois):
     dp = float(np.linalg.norm(xy - PIES))
     do = float(np.linalg.norm(xy - OBJ))
     mejor_pies = min(mejor_pies, dp)
-    tipo = "MOVIL" if p.get("movil") else "estatico"
+    tipo = "MOVIL" if p.get("mobile") else "estatico"
     quien = " <- OPERADOR" if dp < 2.5 else (" <- caja" if do < 2.5 else "")
     print(f"{j:>3} {tipo:>9} {p['n_obs']:>6} {p.get('conf', p.get('conf_mean')):>5.2f} "
           f"({p['x']:6.2f},{p['y']:6.2f}) {dp:>7.2f} {do:>6.2f}{quien}")

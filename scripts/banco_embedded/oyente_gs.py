@@ -35,8 +35,8 @@ class Handler(server.BaseHTTPRequestHandler):
             print(f"[{hora}] vision_poi del dron {payload.get('source')} | "
                   f"frames vistos: {mensaje.get('frames_seen')} | {len(pois)} POI(s)")
             for p in pois:
-                movil = p.get("movil")
-                etiqueta = ("MOVIL " if movil else "estatico " if movil is not None
+                mobile = p.get("mobile")
+                etiqueta = ("MOVIL " if mobile else "estatico " if mobile is not None
                             else "consenso ")
                 print(f"    {etiqueta} x={p.get('x')} y={p.get('y')} "
                       f"n_obs={p.get('n_obs')} conf={p.get('conf', p.get('conf_mean'))}")

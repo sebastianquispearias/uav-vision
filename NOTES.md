@@ -15,7 +15,7 @@ dicen QUÉ hace cada cosa; este archivo dice POR QUÉ y CUÁNDO.
   en captura (hflip+vflip), lo que refleja el punto principal:
   `(945.7, 547.1) → (973.3, 531.9)` con la fórmula `tamaño − 1 − c`.
   Ese es el motivo de `CameraConfig.rotated_180()` y de que
-  `CamaraSimulada.pitch_deg` no tenga valor por defecto: un default
+  `SimulatedCamera.pitch_deg` no tenga valor por defecto: un default
   escondido con el pitch viejo produjo 6.287 m de error en su momento.
 
 | Vuelo | focal_px | principal_point | pitch |
@@ -35,21 +35,21 @@ dicen QUÉ hace cada cosa; este archivo dice POR QUÉ y CUÁNDO.
 
 - Modelo: `osnet_x0_25_msmt17` vía boxmot, CPU, un batch por imagen,
   vectores normalizados.
-- Separación medida sobre el vuelo 02-ago (coseno): misma identidad
+- Separación medida sobre el vuelo 02-ago (coseno): misma identity
   0.63–0.87; identidades distintas 0.33–0.46. No se solapan.
   - Umbral de fusión `emb_dist_max = 0.95` = punto medio del hueco
     (coseno 0.545) convertido a distancia L2.
   - Umbral del gemelo `EMB_DIST_GEMELO = 0.70` = zona profunda de
-    misma-identidad (misma ≤ 0.86, distintas ≥ 1.04 en distancia).
-- 24-ago-2026: verificado que `CamaraArduCam._huellas` reproduce
+    misma-identity (misma ≤ 0.86, distintas ≥ 1.04 en distancia).
+- 24-ago-2026: verificado que `OnboardCamera._fingerprints` reproduce
   exactamente las huellas del análisis offline (coseno 1.000000).
 - Decisión (23-ago-2026): la huella se calcula EN la cámara; la imagen
   no sale del módulo. Por radio viajan 512 float32 (2048 B) o 128 B con
   PCA int8 (validado offline en la tesis de handoff). Alternativa
-  futura: recorte bajo demanda (2–5 KB una vez) cuando la Ground
+  futura: crop bajo demanda (2–5 KB una vez) cuando la Ground
   Station quiera verificar un POI con un detector pesado.
 
-## Umbrales de la identidad
+## Umbrales de la identity
 
 - Reglas y valores base validados offline sobre el vuelo 02-ago
   (`drone-geolocation/entrenamiento/correr_botsort.py`): radio de
@@ -60,11 +60,11 @@ dicen QUÉ hace cada cosa; este archivo dice POR QUÉ y CUÁNDO.
   de OBSERVACIONES reales, no la de cámara. El vuelo 1 capturaba a
   8.7 FPS pero la persona se detectaba en ~30% de los frames
   (2.45 obs/s); con fps de cámara los umbrales exigían evidencia
-  imposible y salían 0 candidatos.
+  imposible y salían 0 candidates.
 - Posición actual de un MÓVIL: la mediana de la ventana reciente
   retrasa al caminante media ventana (medido: 7.40 m de retraso a
   1 m/s); el ajuste lineal evaluado en la última muestra lo reduce a
-  0.48 m. De ahí `_posicion_actual`.
+  0.48 m. De ahí `_current_position`.
 - Umbral MÓVIL 4.0 m ≈ 1.15 × radio de fusión: una pista quieta solo
   "tiembla" por ruido de proyección; más que eso, caminó.
 
@@ -92,7 +92,7 @@ dicen QUÉ hace cada cosa; este archivo dice POR QUÉ y CUÁNDO.
   detector solo 7.23 FPS / CPU 54% · +BoT-SORT 8.84 FPS / 65% ·
   +OSNet 6.59 FPS / 75.5%. OSNet ≈ +40 ms/frame con 1 persona. La
   capacidad (6.59) supera la demanda (4 Hz) incluso con huellas.
-- 24-ago-2026: `CamaraArduCam` corrió en la Pi real a 5.58 FPS
+- 24-ago-2026: `OnboardCamera` corrió en la Pi real a 5.58 FPS
   (contrato probado en hardware). Config: `camera_auto_detect=0` +
   `dtoverlay=imx708` en config.txt (el auto-detect no reconoce el
   IMX708 de Arducam); `numpy<2` requerido por picamera2/simplejpeg.
@@ -101,7 +101,7 @@ dicen QUÉ hace cada cosa; este archivo dice POR QUÉ y CUÁNDO.
 
 - Geometría: rayos del protocolo vs rayos del vuelo real = 0.000° de
   diferencia (268 muestras).
-- Replay con identidad: operador como POI separado a 2.32 m
+- Replay con identity: operador como POI separado a 2.32 m
   (análisis offline: 2.49 m); la caja de equipos ya no roba el consenso.
 - Stack con RF-DETR como detector: 2.39 m, 1106 obs, conf 0.80, caja
   ausente — empate en precisión (el piso ~2.3–2.5 m lo pone el sesgo
@@ -109,6 +109,6 @@ dicen QUÉ hace cada cosa; este archivo dice POR QUÉ y CUÁNDO.
   Ground Station.
 - Vuelos sanos 1-2 (C-5): candidato dominante limpio en las 3 corridas
   — 0.41 / 3.13 / 1.43 m (fusión simple: 1.03 / 2.08 / 0.59).
-- Gates sintéticos de la identidad (`tests/test_identidad.py`):
+- Gates sintéticos de la identity (`tests/test_identity.py`):
   estático 0.09 m; móvil sin retraso; veto de co-ocurrencia mantiene 2;
   gemelas fusionan a 1.

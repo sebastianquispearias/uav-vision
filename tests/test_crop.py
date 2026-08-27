@@ -10,7 +10,7 @@ What is asserted here is deliberately end-of-pipe: not that the crop is stored, 
 comes out the far end, in the message, decodable. A test on the storage would have passed
 happily all along while the field saw nothing.
 
-Run with: python tests/test_recorte.py
+Run with: python tests/test_crop.py
 """
 import base64
 import json
@@ -26,7 +26,7 @@ if os.path.isdir(_GRADYS):
 import numpy as np
 
 from uav_vision.camera_config import ARDUCAM_MODULE_3
-from uav_vision.identity import IdentidadIncremental
+from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import VisionProtocol
 
 from test_vision_protocol import FakeProvider  # noqa: E402  (same directory)
@@ -41,66 +41,66 @@ def revisar(condicion, descripcion, detalle=""):
         FALLOS.append(descripcion)
 
 
-# ============================================================ 1. la identidad
+# ============================================================ 1. la identity
 print("=" * 64)
-print("1. El recorte sobrevive la fusion, y gana el de la vista mas clara")
+print("1. El crop sobrevive la fusion, y gana el de la vista mas clara")
 print("=" * 64)
 
 BORROSO, NITIDO = b"\xff\xd8jpeg-borroso", b"\xff\xd8jpeg-nitido"
 
-ident = IdentidadIncremental(radio_fusion_m=3.5, fps=4.0)
+ident = IncrementalIdentity(fusion_radius_m=3.5, fps=4.0)
 # Two tracks on the same spot: BoT-SORT breaks a track and renumbers it all the time, which
 # is exactly the case where the two halves carry different-quality photographs.
 for f in range(80):
-    ident.observar(frame=f, track_id=1, impacto_xy=(10.0, 5.0), conf=0.40, recorte=BORROSO)
+    ident.observe(frame=f, track_id=1, ground_xy=(10.0, 5.0), conf=0.40, crop=BORROSO)
 for f in range(80, 160):
-    ident.observar(frame=f, track_id=2, impacto_xy=(10.2, 5.1), conf=0.91, recorte=NITIDO)
+    ident.observe(frame=f, track_id=2, ground_xy=(10.2, 5.1), conf=0.91, crop=NITIDO)
 
-cands = ident.candidatos(preliminares=True)
+cands = ident.candidates(preliminary=True)
 revisar(len(cands) == 1, "las dos pistas fusionan en un candidato", "n=%d" % len(cands))
 if cands:
     c = cands[0]
-    revisar("recorte" in c, "el candidato trae el campo 'recorte'")
-    revisar(c.get("recorte") == NITIDO,
-            "sobrevive el recorte de la deteccion mas confiada",
+    revisar("crop" in c, "el candidato trae el campo 'crop'")
+    revisar(c.get("crop") == NITIDO,
+            "sobrevive el crop de la deteccion mas confiada",
             "conf 0.91 gana a 0.40")
 
 # A track with no crop must not invent one, and must not crash on the comparison.
-ident_sin = IdentidadIncremental(radio_fusion_m=3.5, fps=4.0)
+ident_sin = IncrementalIdentity(fusion_radius_m=3.5, fps=4.0)
 for f in range(80):
-    ident_sin.observar(frame=f, track_id=1, impacto_xy=(1.0, 1.0), conf=0.8)
-sin = ident_sin.candidatos(preliminares=True)
-revisar(bool(sin) and sin[0].get("recorte") is None,
-        "sin recorte el campo viaja como None, sin romper nada")
+    ident_sin.observe(frame=f, track_id=1, ground_xy=(1.0, 1.0), conf=0.8)
+sin = ident_sin.candidates(preliminary=True)
+revisar(bool(sin) and sin[0].get("crop") is None,
+        "sin crop el campo viaja como None, sin romper nada")
 
 
 # ============================================================= 2. el mensaje
 print()
 print("=" * 64)
-print("2. El recorte llega al mensaje, y el silencio se convierte en latido")
+print("2. El crop llega al mensaje, y el silencio se convierte en latido")
 print("=" * 64)
 
 RECORTE = b"\xff\xd8\xff\xe0" + b"bytes-crudos-de-un-jpeg" * 4
 
 
 class CamaraDeMentira:
-    """Stands in for CamaraArduCam: returns whatever the test tells it to."""
+    """Stands in for OnboardCamera: returns whatever the test tells it to."""
 
     def __init__(self):
-        self.camara = ARDUCAM_MODULE_3
+        self.camera = ARDUCAM_MODULE_3
         self.detecciones = []
 
-    def ver_alvo(self, pos, yaw):
+    def detect(self, pos, yaw):
         return [dict(d) for d in self.detecciones]
 
 
-def correr(camara, segundos, reportar_preliminares=True):
+def correr(camera, segundos, report_preliminary=True):
     Protocolo = VisionProtocol.with_config(
-        camera=camara,
+        camera=camera,
         pitch_deg=-55.0,
         yaw_source=lambda: 0.0,
-        identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=4.0),
-        reportar_preliminares=reportar_preliminares,
+        identity=IncrementalIdentity(fusion_radius_m=3.5, fps=4.0),
+        report_preliminary=report_preliminary,
     )
     provider = FakeProvider()
     protocolo = Protocolo.instantiate(provider)
@@ -118,7 +118,7 @@ def correr(camara, segundos, reportar_preliminares=True):
 # -- nothing in frame: the drone must still speak --------------------------
 vacia = CamaraDeMentira()
 mensajes = correr(vacia, 12.0)
-revisar(len(mensajes) > 0, "con la camara vacia igual se emiten mensajes",
+revisar(len(mensajes) > 0, "con la camera vacia igual se emiten mensajes",
         "%d en 12 s" % len(mensajes))
 revisar(bool(mensajes) and all(m.get("latido") for m in mensajes),
         "todos vienen marcados como latido")
@@ -132,7 +132,7 @@ vista.detecciones = [{
     "py": ARDUCAM_MODULE_3.image_height * 0.62,
     "conf": 0.88,
     "track_id": 1,
-    "recorte": RECORTE,
+    "crop": RECORTE,
 }]
 mensajes = correr(vista, 20.0)
 con_pois = [m for m in mensajes if m.get("pois")]
@@ -142,8 +142,8 @@ revisar(bool(con_pois), "con una deteccion sostenida sale al menos un POI",
 if con_pois:
     poi = con_pois[-1]["pois"][0]
     revisar(not con_pois[-1].get("latido"), "un mensaje con POIs no se marca como latido")
-    revisar("recorte" in poi, "el POI del mensaje trae el recorte")
-    crudo = poi.get("recorte")
+    revisar("crop" in poi, "el POI del mensaje trae el crop")
+    crudo = poi.get("crop")
     revisar(isinstance(crudo, str), "viaja como texto, no como bytes",
             "tipo %s" % type(crudo).__name__)
     try:
@@ -175,11 +175,11 @@ class ProveedorConMarco(FakeProvider):
     origin_gps_coordinates = (-22.9793, -43.2325, 0.0)
 
 
-def correr_con(provider_cls, camara, segundos):
+def correr_con(provider_cls, camera, segundos):
     Protocolo = VisionProtocol.with_config(
-        camera=camara, pitch_deg=-55.0, yaw_source=lambda: 0.0,
-        identidad=IdentidadIncremental(radio_fusion_m=3.5, fps=4.0),
-        reportar_preliminares=True)
+        camera=camera, pitch_deg=-55.0, yaw_source=lambda: 0.0,
+        identity=IncrementalIdentity(fusion_radius_m=3.5, fps=4.0),
+        report_preliminary=True)
     provider = provider_cls()
     protocolo = Protocolo.instantiate(provider)
     protocolo.initialize()

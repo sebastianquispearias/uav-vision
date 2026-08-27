@@ -9,24 +9,24 @@ mission produces reported candidates. Flight missions swap the model, the pitch
 and the identity thresholds — the protocol itself is unchanged.
 """
 
-from uav_vision.camera import CamaraArduCam
-from uav_vision.identity import IdentidadIncremental
+from uav_vision.camera import OnboardCamera
+from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import VisionProtocol, UavApiYaw
 
 ProtocoloVisionLAC = VisionProtocol.with_config(
-    camera=CamaraArduCam(
-        modelo="/home/pi/yolov8n_ncnn_model",
-        umbral=0.3,
-        rastreador=True,
+    camera=OnboardCamera(
+        model="/home/pi/yolov8n_ncnn_model",
+        threshold=0.3,
+        tracker=True,
         fps=4.0,
     ),
     pitch_deg=-20.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
-    identidad=IdentidadIncremental(
-        radio_fusion_m=0.6,
+    identity=IncrementalIdentity(
+        fusion_radius_m=0.6,
         fps=4.0,
-        dur_pista_s=4.0,
-        dur_movil_s=15.0,
-        dur_reporte_s=20.0,
+        track_dur_s=4.0,
+        mobile_dur_s=15.0,
+        report_dur_s=20.0,
     ),
 )

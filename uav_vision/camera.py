@@ -1,11 +1,11 @@
 """
 Camera providers for vision-based geolocation.
 
-Two classes expose the same method, ver_alvo(pos, yaw). Consumers never learn which one they
-received: simulation code gets CamaraSimulada, the real drone gets CamaraArduCam, and the consumer
+Two classes expose the same method, detect(pos, yaw). Consumers never learn which one they
+received: simulation code gets SimulatedCamera, the real drone gets OnboardCamera, and the consumer
 code is identical in both cases.
 
-Contract of ver_alvo(pos, yaw):
+Contract of detect(pos, yaw):
     Input:
         pos: (x, y, z) in meters, local ENU frame (x=East, y=North, z=Up).
         yaw: degrees. 0 = North, 90 = East, clockwise.
@@ -35,10 +35,10 @@ from uav_vision.camera_config import ARDUCAM_MODULE_3, DEFAULT_CAMERA, CameraCon
 from uav_vision.confidence import confidence_to_pixel_sigma_model, simulate_confidence
 from uav_vision.pinhole_local import project_to_pixel
 
-Deteccion = Dict[str, float]
+Detection = Dict[str, float]
 
 
-class CamaraSimulada:
+class SimulatedCamera:
     """
     Simulation camera: there is no image, the pixel is computed geometrically by projecting a
     known target position through the camera model.
@@ -50,56 +50,56 @@ class CamaraSimulada:
 
     def __init__(
         self,
-        alvo: Sequence[float],
+        target: Sequence[float],
         pitch_deg: float,
-        camara: CameraConfig = DEFAULT_CAMERA,
+        camera: CameraConfig = DEFAULT_CAMERA,
         rng: Optional[np.random.Generator] = None,
-        ruido_pixel: bool = True,
-        modelo_ruido: str = "heuristic",
+        pixel_noise: bool = True,
+        noise_model: str = "heuristic",
     ) -> None:
-        self.alvo = tuple(alvo)
+        self.target = tuple(target)
         self.pitch_deg = pitch_deg
-        self.camara = camara
+        self.camera = camera
         self.rng = rng if rng is not None else np.random.default_rng()
         # A real detector does not return the exact pixel. Pixel noise follows
         # sigma = C / confidence, so low-confidence detections are noisier. Disable only for
         # pure-geometry tests: without noise the fusion stage has nothing to reject and
         # simulation results become meaningless.
-        self.ruido_pixel = ruido_pixel
+        self.pixel_noise = pixel_noise
         # Noise model name, resolved by confidence.confidence_to_pixel_sigma_model.
-        self.modelo_ruido = modelo_ruido
+        self.noise_model = noise_model
 
-    def ver_alvo(self, pos: Sequence[float], yaw: float) -> List[Deteccion]:
+    def detect(self, pos: Sequence[float], yaw: float) -> List[Detection]:
         pixel = project_to_pixel(
             pos,
-            self.alvo,
+            self.target,
             yaw,
             self.pitch_deg,
-            self.camara.focal_length_px,
-            self.camara.image_width,
-            self.camara.image_height,
-            self.camara.principal_point,
+            self.camera.focal_length_px,
+            self.camera.image_width,
+            self.camera.image_height,
+            self.camera.principal_point,
         )
         if pixel is None:  # out of frame or behind the camera
             return []
 
         conf = simulate_confidence(
             pixel,
-            self.camara.image_center,
-            self.camara.max_radius,
+            self.camera.image_center,
+            self.camera.max_radius,
             self.rng,
         )
         px, py = pixel
-        if self.ruido_pixel:
-            sigma = confidence_to_pixel_sigma_model(conf, self.modelo_ruido)
+        if self.pixel_noise:
+            sigma = confidence_to_pixel_sigma_model(conf, self.noise_model)
             px = float(np.clip(px + self.rng.normal(0, sigma),
-                               0, self.camara.image_width - 1))
+                               0, self.camera.image_width - 1))
             py = float(np.clip(py + self.rng.normal(0, sigma),
-                               0, self.camara.image_height - 1))
+                               0, self.camera.image_height - 1))
         return [{"px": px, "py": py, "conf": conf}]
 
 
-class CamaraArduCam:
+class OnboardCamera:
     """
     Real camera: captures a frame with picamera2 and runs a YOLO detector on it.
 
@@ -107,11 +107,11 @@ class CamaraArduCam:
     this module can be imported on machines that do not have them installed.
 
     Optional stages, enabled by constructor arguments:
-        - reid_modelo: compute an OSNet appearance embedding per detection ('emb' field).
-        - rastreador: run BoT-SORT over the detections and attach a stable 'track_id' per
+        - reid_model: compute an OSNet appearance embedding per detection ('emb' field).
+        - tracker: run BoT-SORT over the detections and attach a stable 'track_id' per
           detection. Requires fps, because the tracker's memory is measured in frames and only
           the declared rate makes a buffer duration meaningful.
-        - recortes: attach a small JPEG of each detection ('recorte' field), for the ground
+        - crops: attach a small JPEG of each detection ('crop' field), for the ground
           station to verify what the onboard detector could not settle by itself.
     """
 
@@ -122,41 +122,41 @@ class CamaraArduCam:
 
     def __init__(
         self,
-        modelo: str,
-        umbral: float = 0.3,
-        clases: Optional[Sequence[str]] = None,
-        camara: CameraConfig = ARDUCAM_MODULE_3,
+        model: str,
+        threshold: float = 0.3,
+        classes: Optional[Sequence[str]] = None,
+        camera: CameraConfig = ARDUCAM_MODULE_3,
         rot180: bool = True,
-        reid_modelo: Optional[str] = None,
-        rastreador: bool = False,
+        reid_model: Optional[str] = None,
+        tracker: bool = False,
         fps: Optional[float] = None,
-        buffer_pista_s: float = 8.0,
-        compensar_camara: bool = False,
-        pausa_arranque_s: float = 0.0,
-        recortes: bool = False,
-        recorte_lado_px: int = 128,
-        recorte_calidad: int = 70,
-        recorte_margen: float = 0.25,
+        track_buffer_s: float = 8.0,
+        compensate_motion: bool = False,
+        startup_pause_s: float = 0.0,
+        crops: bool = False,
+        crop_side_px: int = 128,
+        crop_quality: int = 70,
+        crop_margin: float = 0.25,
     ) -> None:
-        self.modelo = modelo
-        self.umbral = umbral
-        self.clases = frozenset(clases) if clases is not None else self.CLASES_PERSONA
+        self.model = model
+        self.threshold = threshold
+        self.classes = frozenset(classes) if classes is not None else self.CLASES_PERSONA
         # When the camera is mounted upside-down the ISP un-flips the image at capture time
         # (hflip+vflip). That remapping moves the calibrated principal point, so the effective
         # config must be the reflected one; see CameraConfig.rotated_180().
-        self.camara = camara.rotated_180() if rot180 else camara
+        self.camera = camera.rotated_180() if rot180 else camera
         self.rot180 = rot180
-        self.reid_modelo = reid_modelo
-        if rastreador and fps is None:
+        self.reid_model = reid_model
+        if tracker and fps is None:
             raise ValueError(
-                "rastreador=True requires fps: the tracker buffer is measured in frames and "
+                "tracker=True requires fps: the tracker buffer is measured in frames and "
                 "has no meaning without the capture rate.")
-        self.rastreador_habilitado = rastreador
+        self.rastreador_habilitado = tracker
         self.fps = fps
-        self.buffer_pista_s = buffer_pista_s
+        self.track_buffer_s = track_buffer_s
         # Camera-motion compensation improves tracking from a moving camera but costs CPU;
         # disabled until measured on the target hardware.
-        self.compensar_camara = compensar_camara
+        self.compensate_motion = compensate_motion
         # A crop is the cheapest thing the drone can say that the ground can check. The link
         # budget is the constraint the whole architecture was built around -- video off the
         # drone is not affordable -- so these are sized in kilobytes, not megabytes: a 128 px
@@ -168,13 +168,13 @@ class CamaraArduCam:
         # models, on a FULL pack, drawing 3.47 W. That is nowhere near saturating a 5 A UBEC,
         # so what kills it is the step itself, not the level. Opening the camera and loading
         # the models back to back stacks those steps; this pulls them apart.
-        self.pausa_arranque_s = pausa_arranque_s
-        self.recortes = recortes
-        self.recorte_lado_px = recorte_lado_px
-        self.recorte_calidad = recorte_calidad
+        self.startup_pause_s = startup_pause_s
+        self.crops = crops
+        self.crop_side_px = crop_side_px
+        self.crop_quality = crop_quality
         # A box drawn tight on a person at altitude cuts off the context that makes the
         # verifier's job possible; a margin buys that back for almost no bytes.
-        self.recorte_margen = recorte_margen
+        self.crop_margin = crop_margin
         self._picam: Any = None
         self._yolo: Any = None
         self._reid: Any = None
@@ -182,7 +182,7 @@ class CamaraArduCam:
 
     # -- hardware ---------------------------------------------------------
 
-    def _encender(self) -> None:
+    def _power_on(self) -> None:
         """Starts the camera and loads the models. Called automatically on the first capture."""
         if self._picam is not None:
             return
@@ -197,25 +197,25 @@ class CamaraArduCam:
         tf = Transform(hflip=1, vflip=1) if self.rot180 else Transform()
         picam.configure(
             picam.create_still_configuration(
-                main={"size": (self.camara.image_width, self.camara.image_height)},
+                main={"size": (self.camera.image_width, self.camera.image_height)},
                 transform=tf,
             )
         )
         picam.start()
         time.sleep(2)  # the sensor needs time to stabilize exposure
         self._picam = picam
-        self._primer_frame(picam)
+        self._first_frame(picam)
 
-        self._respirar("camara arriba")
-        self._yolo = YOLO(self.modelo)
+        self._settle("camera arriba")
+        self._yolo = YOLO(self.model)
 
-        if self.reid_modelo is not None:
-            self._respirar("detector cargado")
+        if self.reid_model is not None:
+            self._settle("detector cargado")
             from boxmot.reid.core.reid import ReID
-            self._reid = ReID(self.reid_modelo, device="cpu", half=False)
+            self._reid = ReID(self.reid_model, device="cpu", half=False)
 
         if self.rastreador_habilitado:
-            self._crear_rastreador()
+            self._build_tracker()
 
     # The sensor is detected over I2C and enumerated long before it will actually stream, and
     # sometimes it does not stream at all: libcamera reports "Camera frontend has timed out"
@@ -226,19 +226,19 @@ class CamaraArduCam:
     # Without this, that failure mode is a mission lost with no diagnosis: the Pi alive, the
     # protocol running its timer, and zero detections forever, because the first capture never
     # returned. Better to spend a few seconds retrying, and to fail loudly if it will not come.
-    def _respirar(self, tras: str) -> None:
+    def _settle(self, tras: str) -> None:
         """Lets the supply recover before the next heavy step, when asked to."""
-        if self.pausa_arranque_s <= 0:
+        if self.startup_pause_s <= 0:
             return
         import time
-        print("[camara] %s: %.1f s de respiro antes del siguiente escalon"
-              % (tras, self.pausa_arranque_s), flush=True)
-        time.sleep(self.pausa_arranque_s)
+        print("[camera] %s: %.1f s de respiro antes del siguiente escalon"
+              % (tras, self.startup_pause_s), flush=True)
+        time.sleep(self.startup_pause_s)
 
     ESPERA_PRIMER_FRAME_S = 8.0
     INTENTOS_ENCENDIDO = 3
 
-    def _primer_frame(self, picam) -> None:
+    def _first_frame(self, picam) -> None:
         """Warm-up capture with a watchdog: retries the camera instead of hanging on it."""
         import threading
         import time
@@ -246,7 +246,7 @@ class CamaraArduCam:
         for intento in range(1, self.INTENTOS_ENCENDIDO + 1):
             listo = threading.Event()
 
-            def capturar():
+            def capture():
                 try:
                     picam.capture_array()
                 finally:
@@ -254,12 +254,12 @@ class CamaraArduCam:
 
             # A daemon thread, because if the capture is wedged inside the driver it may never
             # return and must not keep the process alive.
-            threading.Thread(target=capturar, daemon=True).start()
+            threading.Thread(target=capture, daemon=True).start()
             if listo.wait(self.ESPERA_PRIMER_FRAME_S):
                 return
             if intento == self.INTENTOS_ENCENDIDO:
                 raise RuntimeError(
-                    "la camara no entrego un frame en %d intentos de %.0f s. El sensor "
+                    "la camera no entrego un frame en %d intentos de %.0f s. El sensor "
                     "responde por I2C pero no transmite: probar de nuevo en unos segundos, y "
                     "si persiste revisar el cable plano (I2C tolera un contacto marginal, las "
                     "lineas CSI no)." % (self.INTENTOS_ENCENDIDO, self.ESPERA_PRIMER_FRAME_S))
@@ -273,7 +273,7 @@ class CamaraArduCam:
             picam.start()
             time.sleep(2.0)
 
-    def _crear_rastreador(self) -> None:
+    def _build_tracker(self) -> None:
         """Builds the BoT-SORT tracker, with the buffer converted from seconds to frames."""
         from boxmot.trackers.bbox.botsort import BotSort
 
@@ -281,33 +281,33 @@ class CamaraArduCam:
             reid_model=None,  # embeddings are supplied externally via embs=
             # BotSort requires embeddings when appearance matching is on; without a ReID model
             # it must run motion-only.
-            with_reid=self.reid_modelo is not None,
-            use_cmc=self.compensar_camara,
+            with_reid=self.reid_model is not None,
+            use_cmc=self.compensate_motion,
             track_high_thresh=0.35,
             track_low_thresh=0.2,
             new_track_thresh=0.4,
-            track_buffer=max(2, round(self.buffer_pista_s * self.fps)),
+            track_buffer=max(2, round(self.track_buffer_s * self.fps)),
             match_thresh=0.85,
         )
 
-    def apagar(self) -> None:
+    def close(self) -> None:
         if self._picam is not None:
             self._picam.stop()
             # stop() alone keeps the device acquired; without close() no other
-            # Picamera2 instance (a later CamaraArduCam included) can open it.
+            # Picamera2 instance (a later OnboardCamera included) can open it.
             self._picam.close()
             self._picam = None
 
     # -- contract ---------------------------------------------------------
 
-    def ver_alvo(self, pos: Sequence[float], yaw: float) -> List[Deteccion]:
+    def detect(self, pos: Sequence[float], yaw: float) -> List[Detection]:
         # pos and yaw are unused: the real photo already contains what it contains. They are in
         # the signature so the contract matches the simulated camera.
         del pos, yaw
 
         import cv2
 
-        self._encender()
+        self._power_on()
         # picamera2 labels this configuration "BGR888", but that name is libcamera's and lists
         # the components in the opposite order to the one the array actually arrives in: what
         # comes back is R,G,B. Everything downstream is OpenCV-shaped and expects B,G,R --
@@ -324,38 +324,38 @@ class CamaraArduCam:
         # Converting the whole frame once, here, is what keeps the three consumers agreeing.
         # It costs 1.70 ms against 184 ms of inference on the Pi 5 -- 0.9% of the frame.
         frame = cv2.cvtColor(self._picam.capture_array(), cv2.COLOR_RGB2BGR)
-        resultados = self._yolo(frame, verbose=False, conf=self.umbral)
+        resultados = self._yolo(frame, verbose=False, conf=self.threshold)
 
-        detecciones: List[Deteccion] = []
+        detections: List[Detection] = []
         cajas: List[np.ndarray] = []
         for caja in resultados[0].boxes:
-            if self._yolo.names[int(caja.cls[0])] not in self.clases:
+            if self._yolo.names[int(caja.cls[0])] not in self.classes:
                 continue
             xyxy = caja.xyxy[0].cpu().numpy()
             x1, _y1, x2, y2 = xyxy
-            detecciones.append({
+            detections.append({
                 "px": float((x1 + x2) / 2),
                 "py": float(y2),  # bottom edge: the point touching the ground
                 "conf": round(float(caja.conf[0]), 3),
             })
             cajas.append(xyxy)
 
-        huellas: List[np.ndarray] = []
-        if self._reid is not None and detecciones:
-            huellas = self._huellas(frame, cajas)
-            for det, emb in zip(detecciones, huellas):
+        fingerprints: List[np.ndarray] = []
+        if self._reid is not None and detections:
+            fingerprints = self._fingerprints(frame, cajas)
+            for det, emb in zip(detections, fingerprints):
                 det["emb"] = emb
 
         if self._tracker is not None:
-            self._rastrear(frame, detecciones, cajas, huellas)
+            self._track(frame, detections, cajas, fingerprints)
 
-        if self.recortes and detecciones:
-            for det, caja in zip(detecciones, cajas):
-                det["recorte"] = self._recortar(frame, caja)
+        if self.crops and detections:
+            for det, caja in zip(detections, cajas):
+                det["crop"] = self._crop(frame, caja)
 
-        return detecciones
+        return detections
 
-    def _recortar(self, frame, caja) -> bytes:
+    def _crop(self, frame, caja) -> bytes:
         """
         Returns a small JPEG around one detection, for the ground station to verify.
 
@@ -367,28 +367,28 @@ class CamaraArduCam:
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = [float(v) for v in caja]
         cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-        lado = max(x2 - x1, y2 - y1) * (1.0 + 2.0 * self.recorte_margen)
+        lado = max(x2 - x1, y2 - y1) * (1.0 + 2.0 * self.crop_margin)
         # Clamped to the frame: a detection at the edge yields a smaller crop, not a crash.
         a = max(0, int(cx - lado / 2)), max(0, int(cy - lado / 2))
         b = min(w, int(cx + lado / 2)), min(h, int(cy + lado / 2))
         parche = frame[a[1]:b[1], a[0]:b[0]]
         if parche.size == 0:
             return b""
-        if max(parche.shape[:2]) > self.recorte_lado_px:
-            e = self.recorte_lado_px / max(parche.shape[:2])
+        if max(parche.shape[:2]) > self.crop_side_px:
+            e = self.crop_side_px / max(parche.shape[:2])
             parche = cv2.resize(parche, (max(1, int(parche.shape[1] * e)),
                                          max(1, int(parche.shape[0] * e))),
                                 interpolation=cv2.INTER_AREA)
         ok, buf = cv2.imencode(".jpg", parche,
-                               [int(cv2.IMWRITE_JPEG_QUALITY), self.recorte_calidad])
+                               [int(cv2.IMWRITE_JPEG_QUALITY), self.crop_quality])
         return buf.tobytes() if ok else b""
 
-    def _rastrear(
+    def _track(
         self,
         frame,
-        detecciones: List[Deteccion],
+        detections: List[Detection],
         cajas: List[np.ndarray],
-        huellas: List[np.ndarray],
+        fingerprints: List[np.ndarray],
     ) -> None:
         """
         Runs the tracker on this frame's boxes and attaches 'track_id' to each detection.
@@ -399,9 +399,9 @@ class CamaraArduCam:
         """
         if cajas:
             dts = np.array(
-                [[*c, det["conf"], 0] for c, det in zip(cajas, detecciones)],
+                [[*c, det["conf"], 0] for c, det in zip(cajas, detections)],
                 dtype="float32")
-            embs = np.asarray(huellas, dtype="float32") if huellas else None
+            embs = np.asarray(fingerprints, dtype="float32") if fingerprints else None
         else:
             dts = np.empty((0, 6), dtype="float32")
             embs = None
@@ -409,23 +409,23 @@ class CamaraArduCam:
         res = np.asarray(self._tracker.update(dts, frame, embs=embs))
         for fila in res:
             det_idx = int(fila[7])
-            if 0 <= det_idx < len(detecciones):
-                detecciones[det_idx]["track_id"] = int(fila[4])
+            if 0 <= det_idx < len(detections):
+                detections[det_idx]["track_id"] = int(fila[4])
 
-    def _huellas(self, frame, cajas: List[np.ndarray]) -> List[np.ndarray]:
+    def _fingerprints(self, frame, cajas: List[np.ndarray]) -> List[np.ndarray]:
         """
         OSNet embeddings for all boxes of the frame, computed in a single batch. Vectors are
         normalized to unit length so cosine similarity reduces to a dot product.
         """
-        salida = self._reid.process({
+        out = self._reid.process({
             "fallback": True,
             "boxes": np.asarray(cajas, dtype="float32"),
             "image": frame,
         })
-        feats = np.asarray(salida["_features"], dtype="float32")
+        feats = np.asarray(out["_features"], dtype="float32")
 
-        huellas = []
+        fingerprints = []
         for v in feats:
             n = float(np.linalg.norm(v))
-            huellas.append(v / n if n > 0 else v)
-        return huellas
+            fingerprints.append(v / n if n > 0 else v)
+        return fingerprints

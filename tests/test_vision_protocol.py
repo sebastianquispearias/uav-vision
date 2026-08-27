@@ -24,7 +24,7 @@ import numpy as np
 
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
-from uav_vision.camera import CamaraSimulada
+from uav_vision.camera import SimulatedCamera
 from uav_vision.camera_config import ARDUCAM_MODULE_3
 from uav_vision.vision_protocol import VisionProtocol
 
@@ -85,17 +85,17 @@ def drone_pose(t):
 
 
 print("=" * 64)
-print("VisionProtocol: vuelo sintetico de 60 s, camara con ruido")
+print("VisionProtocol: vuelo sintetico de 60 s, camera con ruido")
 print("=" * 64)
 
-camara = CamaraSimulada(
-    alvo=ALVO,
+camera = SimulatedCamera(
+    target=ALVO,
     pitch_deg=PITCH,
-    camara=ARDUCAM_MODULE_3,
+    camera=ARDUCAM_MODULE_3,
     rng=np.random.default_rng(1),
 )
 Protocolo = VisionProtocol.with_config(
-    camera=camara,
+    camera=camera,
     pitch_deg=PITCH,
     yaw_source=yaw_actual,
 )

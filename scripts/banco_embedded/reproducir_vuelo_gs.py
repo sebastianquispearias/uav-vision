@@ -34,7 +34,7 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _REPO)
-from uav_vision.identity import IdentidadIncremental
+from uav_vision.identity import IncrementalIdentity
 
 # The recording lives in the companion data repository, a sibling of this one. Overridable with
 # UAV_DATOS so the replay runs wherever the flight data was put.
@@ -86,7 +86,7 @@ if __name__ == '__main__':
     dt = np.diff(t_air)
     fps = float(1.0 / np.median(dt[dt > 0]))
 
-    ident = IdentidadIncremental(radio_fusion_m=3.5, fps=fps)
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=fps)
     T = obs[:, 0]
     dur = float(T.max())
     print('vuelo de %.0f s, %d observaciones, cadencia %.2f Hz' % (dur, len(obs), fps))
@@ -105,17 +105,17 @@ if __name__ == '__main__':
         # feed everything that had happened by now
         while i < len(obs) and T[i] <= t_vuelo:
             _t, k, tid, x, y, cf, idx = obs[i]
-            ident.observar(frame=int(k), track_id=int(tid), impacto_xy=(x, y),
+            ident.observe(frame=int(k), track_id=int(tid), ground_xy=(x, y),
                            conf=float(cf), emb=embs[int(idx)])
             i += 1
         if t_vuelo - t_reporte >= args.periodo_reporte:
             t_reporte = t_vuelo
-            pois = ident.candidatos(preliminares=args.preliminares)
+            pois = ident.candidates(preliminary=args.preliminares)
             mensaje = {'type': 'vision_poi', 'sender': args.dron,
                        'time': round(t_vuelo, 2), 'frames_seen': int(i), 'pois': pois}
             if enviar(args.gs, mensaje, args.dron):
                 n_env += 1
-            maduros = sum(1 for p in pois if p.get('maduro'))
+            maduros = sum(1 for p in pois if p.get('mature'))
             print('  t=%6.1f s | %d POI (%d maduros, %d por verificar) | obs %d'
                   % (t_vuelo, len(pois), maduros, len(pois) - maduros, i), flush=True)
         if t_vuelo >= dur:

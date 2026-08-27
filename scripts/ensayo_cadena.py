@@ -2,7 +2,7 @@
 
 Runs the deployment chain live on the real hardware:
 
-    ArduCam -> YOLO (VisDrone NCNN) -> BoT-SORT -> ground impact -> IdentidadIncremental
+    ArduCam -> YOLO (VisDrone NCNN) -> BoT-SORT -> ground impact -> IncrementalIdentity
 
 Three phases, one per optional stage, so the cost of each stage is isolated:
 
@@ -11,7 +11,7 @@ Three phases, one per optional stage, so the cost of each stage is isolated:
     C  detector + BoT-SORT + OSNet embeddings
 
 Per phase it reports latency (median/p90), achieved FPS, CPU %, RAM, temperature
-and throttling flags. Phases B and C also feed IdentidadIncremental and print the
+and throttling flags. Phases B and C also feed IncrementalIdentity and print the
 candidate list at the end: with a person walking in front of the camera the
 expected outcome is a stable track_id and one dominant candidate.
 
@@ -27,8 +27,8 @@ import time
 
 import numpy as np
 
-from uav_vision.camera import CamaraArduCam
-from uav_vision.identity import IdentidadIncremental
+from uav_vision.camera import OnboardCamera
+from uav_vision.identity import IncrementalIdentity
 from uav_vision.pinhole_local import pixel_to_ray
 
 MODELO = "/home/pi/modelos_visdrone/best_ncnn_model"
@@ -76,35 +76,35 @@ def throttled():
 def impacto_suelo(det, cam):
     (ox, oy, oz), (dx, dy, dz) = pixel_to_ray(
         POS, YAW, (det["px"], det["py"]), PITCH,
-        cam.camara.focal_length_px, cam.camara.image_width,
-        cam.camara.image_height, cam.camara.principal_point)
+        cam.camera.focal_length_px, cam.camera.image_width,
+        cam.camera.image_height, cam.camera.principal_point)
     if dz >= -1e-6:  # ray does not descend: no ground intersection
         return None
     t = -oz / dz
     return (ox + t * dx, oy + t * dy)
 
 
-def fase(nombre, dur_s, rastreador, reid, fps_esperado, modelo):
-    print(f"\n===== FASE {nombre} | rastreador={rastreador} reid={reid is not None} "
+def fase(nombre, dur_s, tracker, reid, fps_esperado, modelo):
+    print(f"\n===== FASE {nombre} | tracker={tracker} reid={reid is not None} "
           f"| {dur_s}s =====", flush=True)
-    cam = CamaraArduCam(
-        modelo=modelo,
-        umbral=0.3,
-        rastreador=rastreador,
-        fps=fps_esperado if rastreador else None,
-        reid_modelo=reid,
+    cam = OnboardCamera(
+        model=modelo,
+        threshold=0.3,
+        tracker=tracker,
+        fps=fps_esperado if tracker else None,
+        reid_model=reid,
     )
-    identidad = None
-    if rastreador:
+    identity = None
+    if tracker:
         # Short maturation thresholds so one 60 s phase can produce a reported
         # candidate; the flight values live in the protocol, not here.
-        identidad = IdentidadIncremental(
-            radio_fusion_m=0.6, fps=fps_esperado,
-            dur_pista_s=4.0, dur_movil_s=15.0, dur_reporte_s=20.0)
+        identity = IncrementalIdentity(
+            fusion_radius_m=0.6, fps=fps_esperado,
+            track_dur_s=4.0, mobile_dur_s=15.0, report_dur_s=20.0)
 
     t_arranque = time.time()
-    cam.ver_alvo(POS, YAW)  # first call: camera start + model load
-    print(f"arranque (camara + modelos): {time.time() - t_arranque:.1f} s", flush=True)
+    cam.detect(POS, YAW)  # first call: camera start + model load
+    print(f"arranque (camera + modelos): {time.time() - t_arranque:.1f} s", flush=True)
 
     lat, n_det, con_tid, tids = [], 0, 0, set()
     temps = []
@@ -113,7 +113,7 @@ def fase(nombre, dur_s, rastreador, reid, fps_esperado, modelo):
     frame = 0
     while time.time() - t0 < dur_s:
         t1 = time.time()
-        dets = cam.ver_alvo(POS, YAW)
+        dets = cam.detect(POS, YAW)
         lat.append((time.time() - t1) * 1000.0)
         frame += 1
         n_det += len(dets)
@@ -122,10 +122,10 @@ def fase(nombre, dur_s, rastreador, reid, fps_esperado, modelo):
             if tid is not None:
                 con_tid += 1
                 tids.add(tid)
-                if identidad is not None:
+                if identity is not None:
                     imp = impacto_suelo(det, cam)
                     if imp is not None:
-                        identidad.observar(frame, tid, imp, det["conf"],
+                        identity.observe(frame, tid, imp, det["conf"],
                                            det.get("emb"))
         if frame % 25 == 0:
             temps.append(temperatura())
@@ -151,14 +151,14 @@ def fase(nombre, dur_s, rastreador, reid, fps_esperado, modelo):
     }
     print(json.dumps(resumen, indent=2), flush=True)
 
-    if identidad is not None:
-        cands = identidad.candidatos()
-        print(f"candidatos: {len(cands)}", flush=True)
+    if identity is not None:
+        cands = identity.candidates()
+        print(f"candidates: {len(cands)}", flush=True)
         for c in cands:
-            print(f"  movil={c['movil']} pos=({c['x']:.2f},{c['y']:.2f}) "
+            print(f"  mobile={c['mobile']} pos=({c['x']:.2f},{c['y']:.2f}) "
                   f"n_obs={c['n_obs']} conf={c['conf']:.2f}", flush=True)
 
-    cam.apagar()
+    cam.close()
     time.sleep(3)  # let the sensor pipeline release cleanly between phases
     return resumen
 

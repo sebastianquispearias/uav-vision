@@ -13,35 +13,35 @@ is the chain -- camera to identity to message to map, and both kinds of pin -- w
 desk can actually test. The VisDrone weights are validated at altitude by the flight-3 replay
 instead, which is the only place that question can honestly be asked.
 
-The one addition, not a substitution: reid_modelo. mision_barrido.py leaves it unset, so `emb`
+The one addition, not a substitution: reid_model. mision_barrido.py leaves it unset, so `emb`
 comes back None and the identity layer's appearance veto skips itself silently -- and that veto
 is what separates a person from the equipment box that captured RANSAC on flight 3. A rehearsal
 without it would exercise position matching alone and report a pass the flight config does not
 earn.
 """
 
-from uav_vision.camera import CamaraArduCam
-from uav_vision.identity import IdentidadIncremental
+from uav_vision.camera import OnboardCamera
+from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import VisionProtocol, UavApiYaw
 
 ProtocoloBancoBarrido = VisionProtocol.with_config(
-    camera=CamaraArduCam(
-        modelo="/home/pi/yolov8n_ncnn_model",
-        umbral=0.25,
-        rastreador=True,
-        reid_modelo="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
+    camera=OnboardCamera(
+        model="/home/pi/yolov8n_ncnn_model",
+        threshold=0.25,
+        tracker=True,
+        reid_model="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
         fps=4.0,
-        recortes=True,
+        crops=True,
     ),
     pitch_deg=-55.0,
     # Matches the fps declared above: the timer is what sets the rate, the fps is only the
     # duty-cycle floor now. COCO is cheap enough here that 4 Hz fits with room to spare.
     see_period_s=0.25,
     yaw_source=UavApiYaw("http://localhost:8000"),
-    identidad=IdentidadIncremental(
-        radio_fusion_m=3.5,
+    identity=IncrementalIdentity(
+        fusion_radius_m=3.5,
         fps=4.0,
-        dur_reporte_s=36.0,
+        report_dur_s=36.0,
     ),
-    reportar_preliminares=True,
+    report_preliminary=True,
 )

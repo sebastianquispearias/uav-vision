@@ -129,7 +129,7 @@ def registrar(mensaje, fuente):
     pois = []
     for p in mensaje.get('pois', []):
         lat, lng = a_latlng(p.get('x', 0.0), p.get('y', 0.0), ESTADO['origen'])
-        # A POI with no 'maduro' field predates the sweep work, or came from the RANSAC
+        # A POI with no 'mature' field predates the sweep work, or came from the RANSAC
         # fallback that fires before any candidate exists. Treat it as unconfirmed: assuming
         # the safer reading is what keeps a maybe from being shown as a find.
         pois.append({
@@ -137,9 +137,9 @@ def registrar(mensaje, fuente):
             'lat': lat, 'lng': lng,
             'n_obs': p.get('n_obs'),
             'conf': p.get('conf', p.get('conf_mean')),
-            'movil': p.get('movil'),
-            'maduro': bool(p.get('maduro', False)),
-            'recorte': p.get('recorte'),
+            'mobile': p.get('mobile'),
+            'mature': bool(p.get('mature', False)),
+            'crop': p.get('crop'),
             'dron': fuente,
             't': ahora,
         })
@@ -216,7 +216,7 @@ PAGINA = r"""<!doctype html>
 <title>Ground Station</title>
 <style>
   :root { --fondo:#12141a; --panel:#1b1f28; --linea:#2c3240; --texto:#e6e9ef;
-          --tenue:#8b93a5; --ok:#4ade80; --duda:#fbbf24; --movil:#60a5fa; }
+          --tenue:#8b93a5; --ok:#4ade80; --duda:#fbbf24; --mobile:#60a5fa; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--fondo); color:var(--texto);
          font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
@@ -241,12 +241,12 @@ PAGINA = r"""<!doctype html>
   .chip { font-size:11px; padding:1px 7px; border-radius:99px; font-weight:600; }
   .chip.ok { background:rgba(74,222,128,.15); color:var(--ok); }
   .chip.duda { background:rgba(251,191,36,.15); color:var(--duda); }
-  .chip.movil { background:rgba(96,165,250,.15); color:var(--movil); }
+  .chip.mobile { background:rgba(96,165,250,.15); color:var(--mobile); }
   .poi dl { margin:8px 0 0; display:grid; grid-template-columns:auto 1fr;
             gap:2px 10px; font-size:13px; }
   .poi dt { color:var(--tenue); }
   .poi dd { margin:0; font-variant-numeric:tabular-nums; }
-  .recorte { display:block; margin:10px 0 0; width:128px; max-width:100%;
+  .crop { display:block; margin:10px 0 0; width:128px; max-width:100%;
              border-radius:4px; border:1px solid var(--linea); background:#0b0d12; }
   .sinrecorte { margin:8px 0 0; font-size:12px; color:var(--tenue); font-style:italic; }
   .vacio { color:var(--tenue); font-style:italic; padding:20px 0; text-align:center; }
@@ -272,7 +272,7 @@ PAGINA = r"""<!doctype html>
     <h2>Detecciones</h2>
     <div id="lista"><div class="vacio">Nada todavia.</div></div>
     <div class="nota">
-      <b style="color:var(--ok)">CONFIRMADO</b>: la capa de identidad lo siguio lo
+      <b style="color:var(--ok)">CONFIRMADO</b>: la capa de identity lo siguio lo
       suficiente.<br>
       <b style="color:var(--duda)">POR VERIFICAR</b>: se formo una pista pero no alcanzo a
       madurar. Es lo que produce una pasada corta. No es un hallazgo: es un pedido de
@@ -332,7 +332,7 @@ function dibujarFondo() {
     const sy0 = fy(vista.n1)*fondo.height, sy1 = fy(vista.n0)*fondo.height;
     try {
       ctx.drawImage(fondo, sx0, sy0, sx1-sx0, sy1-sy0, 0, 0, r.width, r.height);
-    } catch (e) { /* recorte fuera de la imagen: queda el fondo liso */ }
+    } catch (e) { /* crop fuera de la imagen: queda el fondo liso */ }
   }
   // metric grid, every 5 m, drawn over the imagery too: scale is what makes a map readable
   ctx.strokeStyle = 'rgba(255,255,255,.07)'; ctx.lineWidth = 1;
@@ -359,7 +359,7 @@ function dibujar() {
   if (!estado) return;
   for (const p of estado.pois) {
     const [x, y] = aPantalla(p.x, p.y);
-    const col = p.maduro ? '#4ade80' : '#fbbf24';
+    const col = p.mature ? '#4ade80' : '#fbbf24';
     // A halo sized by nothing but legibility: this is not an uncertainty ellipse and must not
     // be read as one. The real uncertainty is a few metres and would swallow the pin.
     ctx.beginPath(); ctx.arc(x, y, 22, 0, 6.2832);
@@ -367,12 +367,12 @@ function dibujar() {
     ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.2832);
     ctx.fillStyle = col; ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = '#12141a'; ctx.stroke();
-    if (p.movil) {
+    if (p.mobile) {
       ctx.beginPath(); ctx.arc(x, y, 15, 0, 6.2832);
       ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 2; ctx.stroke();
     }
     ctx.fillStyle = '#e6e9ef'; ctx.font = '600 12px system-ui';
-    ctx.fillText(p.maduro ? 'CONFIRMADO' : 'POR VERIFICAR', x + 16, y - 12);
+    ctx.fillText(p.mature ? 'CONFIRMADO' : 'POR VERIFICAR', x + 16, y - 12);
   }
 }
 
@@ -380,10 +380,10 @@ function pintarLista(pois) {
   const cont = document.getElementById('lista');
   if (!pois.length) { cont.innerHTML = '<div class="vacio">Nada todavia.</div>'; return; }
   cont.innerHTML = pois.map((p, i) => `
-    <div class="poi ${p.maduro ? 'ok' : 'duda'}">
+    <div class="poi ${p.mature ? 'ok' : 'duda'}">
       <div class="tit">#${i+1}
-        <span class="chip ${p.maduro ? 'ok' : 'duda'}">${p.maduro ? 'CONFIRMADO' : 'POR VERIFICAR'}</span>
-        ${p.movil ? '<span class="chip movil">MOVIL</span>' : ''}
+        <span class="chip ${p.mature ? 'ok' : 'duda'}">${p.mature ? 'CONFIRMADO' : 'POR VERIFICAR'}</span>
+        ${p.mobile ? '<span class="chip mobile">MOVIL</span>' : ''}
       </div>
       <dl>
         <dt>local</dt><dd>${p.x} m E, ${p.y} m N</dd>
@@ -391,9 +391,9 @@ function pintarLista(pois) {
         <dt>evidencia</dt><dd>${p.n_obs} obs${p.conf != null ? ', conf ' + p.conf : ''}</dd>
         <dt>dron</dt><dd>${p.dron}</dd>
       </dl>
-      ${p.recorte
-        ? `<img class="recorte" src="data:image/jpeg;base64,${p.recorte}" alt="lo que vio el dron">`
-        : (p.maduro ? '' : '<div class="sinrecorte">sin recorte: no se puede verificar</div>')}
+      ${p.crop
+        ? `<img class="crop" src="data:image/jpeg;base64,${p.crop}" alt="lo que vio el dron">`
+        : (p.mature ? '' : '<div class="sinrecorte">sin crop: no se puede verificar</div>')}
     </div>`).join('');
 }
 
@@ -458,12 +458,12 @@ def demo():
         pois = [{'x': round(-1.3 + random.uniform(-0.3, 0.3), 2),
                  'y': round(8.8 + random.uniform(-0.3, 0.3), 2),
                  'n_obs': int(40 + t * 4), 'conf': 0.83,
-                 'movil': False, 'maduro': t > 20}]
+                 'mobile': False, 'mature': t > 20}]
         if t > 8:
             pois.append({'x': round(6.0 + 0.5 * t % 14 - 7, 2),
                          'y': round(2.0 + math.sin(t / 6) * 4, 2),
                          'n_obs': int(15 + t * 2), 'conf': 0.61,
-                         'movil': True, 'maduro': t > 40})
+                         'mobile': True, 'mature': t > 40})
         registrar({'type': 'vision_poi', 'pois': pois, 'frames_seen': frames}, 'demo')
 
 

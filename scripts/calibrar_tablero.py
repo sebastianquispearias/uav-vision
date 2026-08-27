@@ -13,14 +13,14 @@ move that number.
 
 Two modes, because they happen at different times:
 
-    capturar   grabs frames from the real camera, keeps only the ones where the board is fully
+    capture   grabs frames from the real camera, keeps only the ones where the board is fully
                visible, and reports how much of the frame the accepted views have covered so
                far. Corner coverage is what makes a calibration trustworthy: a pile of views
                all in the middle gives a confident and wrong distortion model.
     calibrar   runs the solve over the saved views and prints the CameraConfig values.
 
 Usage on the Raspberry:
-    python calibrar_tablero.py capturar --salida ~/calib --vistas 25
+    python calibrar_tablero.py capture --salida ~/calib --vistas 25
     python calibrar_tablero.py calibrar --salida ~/calib --casillas 9x6 --lado-mm 25
 """
 import argparse
@@ -37,11 +37,11 @@ def parse_casillas(s):
     return (int(a), int(b))
 
 
-def capturar(args):
+def capture(args):
     """Interactive capture: only board-visible frames are kept, with coverage feedback.
 
-    Picamera2 is driven directly rather than through CamaraArduCam: calibration has no use for
-    a detector, and CamaraArduCam loads YOLO on start. The capture configuration mirrors the
+    Picamera2 is driven directly rather than through OnboardCamera: calibration has no use for
+    a detector, and OnboardCamera loads YOLO on start. The capture configuration mirrors the
     one in camera.py so the calibration describes the frames the mission will actually see --
     same resolution, same ISP transform.
     """
@@ -137,7 +137,7 @@ def calibrar(args):
     print('%d vistas usables de %d' % (len(puntos_obj), len(archivos)))
     if len(puntos_obj) < 8:
         print('DEMASIADO POCAS. Con menos de ~8 vistas bien repartidas el resultado no es '
-              'confiable; volver a capturar.')
+              'confiable; volver a capture.')
         return
 
     rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(
@@ -188,7 +188,7 @@ def calibrar(args):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('modo', choices=['capturar', 'calibrar'])
+    ap.add_argument('modo', choices=['capture', 'calibrar'])
     ap.add_argument('--salida', default='calib')
     ap.add_argument('--casillas', default='9x6',
                     help='esquinas INTERNAS, no casillas: un tablero de 10x7 casillas es 9x6')
@@ -198,4 +198,4 @@ if __name__ == '__main__':
     ap.add_argument('--rot180', action='store_true',
                     help='montaje girado 180 grados, como en el vuelo 3')
     args = ap.parse_args()
-    (capturar if args.modo == 'capturar' else calibrar)(args)
+    (capture if args.modo == 'capture' else calibrar)(args)

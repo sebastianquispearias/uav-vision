@@ -8,7 +8,7 @@ The protocol is observe-only: it never sends mobility commands, so it can run al
 whatever mobility protocol the mission uses. Its cycle:
 
     timer "see" (default 4 Hz):
-        camera.ver_alvo(pos, yaw) -> detections -> pixel_to_ray -> ground impact -> store
+        camera.detect(pos, yaw) -> detections -> pixel_to_ray -> ground impact -> store
     timer "report" (default every 2 s):
         candidate list (identity layer) or single RANSAC consensus -> broadcast JSON
 
@@ -112,14 +112,14 @@ class VisionProtocol(IProtocol):
     the runner:
 
         Protocol = VisionProtocol.with_config(
-            camera=CamaraArduCam(...),
+            camera=OnboardCamera(...),
             pitch_deg=-55.0,
             yaw_source=UavApiYaw(),
         )
     """
 
     # -- configuration (class attributes, set by with_config) -------------
-    camera = None                                  # ver_alvo(pos, yaw) provider
+    camera = None                                  # detect(pos, yaw) provider
     pitch_deg: Optional[float] = None              # camera mount pitch; no default
     yaw_source: Optional[Callable[[], Optional[float]]] = None
     # 4 Hz: below the ~5 FPS voltage-collapse point measured with the 5 A UBEC,
@@ -128,17 +128,17 @@ class VisionProtocol(IProtocol):
     report_period_s: float = 2.0
     ground_z: float = 0.0
     rng_seed: int = 0
-    # Optional IdentidadIncremental. When present and detections carry a 'track_id', reports
+    # Optional IncrementalIdentity. When present and detections carry a 'track_id', reports
     # become multi-POI (statics and mobiles separated). Without it, all impacts go into one
     # RANSAC and the report is the single dominant POI.
-    identidad = None
-    # Report tracks that have formed but not yet matured, flagged maduro=False. Off by default
+    identity = None
+    # Report tracks that have formed but not yet matured, flagged mature=False. Off by default
     # because for a loitering drone it only adds noise -- it can afford to wait for certainty.
     # Turn it on for a SWEEP: measured on flight 3, a 30 s pass over a person never matures a
     # candidate, so a search that crosses each point once and moves on reports nothing at all.
     # The ground station must show these differently; they are requests for verification, not
     # finds.
-    reportar_preliminares: bool = False
+    report_preliminary: bool = False
 
     @classmethod
     def with_config(
@@ -150,8 +150,8 @@ class VisionProtocol(IProtocol):
         report_period_s: float = 2.0,
         ground_z: float = 0.0,
         rng_seed: int = 0,
-        identidad=None,
-        reportar_preliminares: bool = False,
+        identity=None,
+        report_preliminary: bool = False,
     ) -> Type["VisionProtocol"]:
         """
         Builds a configured protocol class ready for the runner. pitch_deg is explicit and has
@@ -168,8 +168,8 @@ class VisionProtocol(IProtocol):
                 "report_period_s": report_period_s,
                 "ground_z": ground_z,
                 "rng_seed": rng_seed,
-                "identidad": identidad,
-                "reportar_preliminares": reportar_preliminares,
+                "identity": identity,
+                "report_preliminary": report_preliminary,
             },
         )
 
@@ -207,16 +207,16 @@ class VisionProtocol(IProtocol):
     def handle_timer(self, timer: str) -> None:
         if timer == TIMER_SEE:
             self._see()
-            self._proximo_see = self._siguiente_ranura(
+            self._proximo_see = self._next_slot(
                 self._proximo_see, self.see_period_s, contar=True)
             self.provider.schedule_timer(TIMER_SEE, self._proximo_see)
         elif timer == TIMER_REPORT:
             self._report()
-            self._proximo_report = self._siguiente_ranura(
+            self._proximo_report = self._next_slot(
                 self._proximo_report, self.report_period_s)
             self.provider.schedule_timer(TIMER_REPORT, self._proximo_report)
 
-    def _siguiente_ranura(self, previsto: float, periodo: float,
+    def _next_slot(self, previsto: float, periodo: float,
                           contar: bool = False) -> float:
         """
         The next slot on a fixed cadence, skipping any the work ran past.
@@ -271,7 +271,7 @@ class VisionProtocol(IProtocol):
             "slots_perdidos_total": self._slots_perdidos,
         }
 
-    def _origen_gps(self):
+    def _gps_origin(self):
         """The mission's coordinate origin as [lat, lon, alt], or None outside the runner."""
         origen = getattr(self.provider, "origin_gps_coordinates", None)
         if origen is None:
@@ -295,8 +295,8 @@ class VisionProtocol(IProtocol):
             return  # pose source unavailable this frame
         self._frames_seen += 1
 
-        cam_cfg = self.camera.camara
-        for det in self.camera.ver_alvo(self._position, yaw):
+        cam_cfg = self.camera.camera
+        for det in self.camera.detect(self._position, yaw):
             origin, direction = pixel_to_ray(
                 self._position,
                 yaw,
@@ -313,14 +313,14 @@ class VisionProtocol(IProtocol):
             self._impacts.append(impact)
             self._confs.append(det["conf"])
             track_id = det.get("track_id")
-            if self.identidad is not None and track_id is not None:
-                self.identidad.observar(
+            if self.identity is not None and track_id is not None:
+                self.identity.observe(
                     frame=self._frames_seen,
                     track_id=int(track_id),
-                    impacto_xy=impact,
+                    ground_xy=impact,
                     conf=det["conf"],
                     emb=det.get("emb"),
-                    recorte=det.get("recorte"),
+                    crop=det.get("crop"),
                     # The clock, so maturity is measured rather than inferred from a frame
                     # count times a rate the caller merely promised.
                     t=self.provider.current_time(),
@@ -334,8 +334,8 @@ class VisionProtocol(IProtocol):
         """
         import base64
 
-        pois = (self.identidad.candidatos(preliminares=self.reportar_preliminares)
-                if self.identidad is not None else [])
+        pois = (self.identity.candidates(preliminary=self.report_preliminary)
+                if self.identity is not None else [])
         latido = False
 
         if not pois:
@@ -360,9 +360,9 @@ class VisionProtocol(IProtocol):
         # The identity layer hands over raw JPEG bytes; JSON needs text. Encoded here rather
         # than there so the identity layer stays free of transport concerns.
         for p in pois:
-            recorte = p.pop("recorte", None)
-            if recorte:
-                p["recorte"] = base64.b64encode(recorte).decode("ascii")
+            crop = p.pop("crop", None)
+            if crop:
+                p["crop"] = base64.b64encode(crop).decode("ascii")
 
         ritmo = self._ritmo()
         message = {
@@ -384,7 +384,7 @@ class VisionProtocol(IProtocol):
             # Read defensively: IProvider does not declare it -- the embedded runtime's
             # provider carries it, a test harness does not. None is a valid answer and means
             # "local metres only", which is what every desk run has ever produced.
-            "origen_gps": self._origen_gps(),
+            "origen_gps": self._gps_origin(),
             "pois": pois,
         }
         self.provider.send_communication_command(

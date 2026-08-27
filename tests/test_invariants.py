@@ -1,10 +1,10 @@
 """
-Gates for uav_vision/cordura.py.
+Gates for uav_vision/invariants.py.
 
 Each case is built from the data shape the guard exists to catch, rather than from a tidy
 synthetic: a guard that only passes on well-formed input has not been tested.
 
-Run with: python tests/test_cordura.py
+Run with: python tests/test_invariants.py
 """
 import os
 import sys
@@ -15,8 +15,8 @@ sys.path.insert(0, _HERE)
 
 import numpy as np
 
-from uav_vision.cordura import (CorduraError, cadencia_instantanea, cargar_cache,
-                                guardar_cache, verificar_tasa)
+from uav_vision.invariants import (InvariantError, instantaneous_rate, load_cache,
+                                save_cache, check_rate)
 
 FALLOS = []
 
@@ -42,7 +42,7 @@ for tramo in range(3):
     ahora += 190.0          # on the ground between passes
 t = np.asarray(t)
 
-cad = cadencia_instantanea(t)
+cad = instantaneous_rate(t)
 por_span = len(t) / (t[-1] - t[0])
 revisar(abs(cad - 9.35) < 0.1, "devuelve la cadencia real", "%.2f Hz" % cad)
 revisar(por_span < 6.0, "   (y el calculo por span habria dado otra cosa)",
@@ -50,19 +50,19 @@ revisar(por_span < 6.0, "   (y el calculo por span habria dado otra cosa)",
 
 # Without the gaps the two agree, which is why the wrong version survives so long.
 liso = np.arange(0, 100) * paso
-revisar(abs(cadencia_instantanea(liso, avisar=False) - len(liso) / (liso[-1] - liso[0])) < 0.2,
+revisar(abs(instantaneous_rate(liso, warn=False) - len(liso) / (liso[-1] - liso[0])) < 0.2,
         "sin huecos, ambos calculos coinciden: por eso el error sobrevive")
 
 try:
-    cadencia_instantanea([1.0])
+    instantaneous_rate([1.0])
     revisar(False, "un solo tiempo tiene que reventar")
-except CorduraError:
+except InvariantError:
     revisar(True, "un solo tiempo revienta en vez de inventar un numero")
 
 try:
-    cadencia_instantanea([5.0, 4.0, 3.0])
+    instantaneous_rate([5.0, 4.0, 3.0])
     revisar(False, "tiempos al reves tienen que reventar")
-except CorduraError:
+except InvariantError:
     revisar(True, "tiempos desordenados revientan")
 
 
@@ -72,22 +72,22 @@ print("2. La tasa declarada tiene que ser la entregada")
 print("=" * 70)
 
 try:
-    verificar_tasa(3.00, 2.31, que="la tasa del lazo")   # measured on the Pi, 2026-08-25
+    check_rate(3.00, 2.31, what="la tasa del lazo")   # measured on the Pi, 2026-08-25
     revisar(False, "2.31 contra 3.00 tiene que reventar")
-except CorduraError as exc:
+except InvariantError as exc:
     revisar("2.31" in str(exc) and "3.00" in str(exc),
             "el caso real de la Pi revienta y dice los dos numeros")
 
 try:
-    verificar_tasa(3.00, 2.55, que="el submuestreo")     # the subsampler bug, same night
+    check_rate(3.00, 2.55, what="el submuestreo")     # the subsampler bug, same night
     revisar(False, "2.55 contra 3.00 tiene que reventar")
-except CorduraError:
+except InvariantError:
     revisar(True, "el caso real del submuestreo revienta")
 
 try:
-    verificar_tasa(3.00, 2.98)
+    check_rate(3.00, 2.98)
     revisar(True, "2.98 contra 3.00 pasa: la tolerancia no es paranoia")
-except CorduraError:
+except InvariantError:
     revisar(False, "2.98 contra 3.00 no deberia reventar")
 
 
@@ -101,25 +101,25 @@ ruta = os.path.join(tmp, "obs.npz")
 P1 = {"tasa": 3.0, "modelo": "y960", "buffer_s": 8.0}
 P2 = {"tasa": 4.0, "modelo": "y960", "buffer_s": 8.0}
 
-guardar_cache(ruta, P1, obs=np.arange(10.0), cadencia=np.array(3.11))
-d = cargar_cache(ruta, P1)
+save_cache(ruta, P1, obs=np.arange(10.0), cadencia=np.array(3.11))
+d = load_cache(ruta, P1)
 revisar(d is not None and len(d["obs"]) == 10, "con los mismos parametros, se carga")
 revisar(d is not None and float(d["cadencia"]) == 3.11, "y trae todo lo guardado")
 
-revisar(cargar_cache(ruta, P2, callado=True) is None,
+revisar(load_cache(ruta, P2, quiet=True) is None,
         "con OTROS parametros, se ignora en vez de mentir")
 
 # The shape that matters: a stale file with no stamp at all, left by an earlier version.
 viejo = os.path.join(tmp, "viejo.npz")
 np.savez(viejo, obs=np.arange(3.0))          # written by the old code, no stamp at all
-revisar(cargar_cache(viejo, P1, callado=True) is None,
+revisar(load_cache(viejo, P1, quiet=True) is None,
         "una cache SIN firma tambien se ignora (la de la corrida zombi)")
 
-revisar(cargar_cache(os.path.join(tmp, "no_existe.npz"), P1) is None,
+revisar(load_cache(os.path.join(tmp, "no_existe.npz"), P1) is None,
         "y si no existe, devuelve None sin drama")
 
 # A float that arrives as int, or a key in another order, must not force a rebuild.
-revisar(cargar_cache(ruta, {"buffer_s": 8.0, "modelo": "y960", "tasa": 3.0}) is not None,
+revisar(load_cache(ruta, {"buffer_s": 8.0, "modelo": "y960", "tasa": 3.0}) is not None,
         "el orden de las claves no cuenta como cambio")
 
 print()
