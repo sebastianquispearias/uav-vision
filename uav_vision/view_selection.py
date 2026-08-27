@@ -24,7 +24,7 @@ import numpy as np
 # Type alias (same as fusion.py, kept independent to avoid coupling)
 Measurement = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
 
-# Defaults from CLAUDE.md experimental parameters
+# Defaults from the published experimental parameters; see NOTES.md for provenance.
 DEFAULT_K: int = 30
 DEFAULT_ALPHA: float = 0.2
 DEFAULT_MIN_ANGLE_DEG: float = 10.0

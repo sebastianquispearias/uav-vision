@@ -31,10 +31,17 @@ import urllib.request
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO = os.path.dirname(os.path.dirname(_HERE))
+sys.path.insert(0, _REPO)
 from uav_vision.identity import IdentidadIncremental
 
-ENTREN = r'C:\Users\User\Desktop\lac\drone-geolocation\entrenamiento'
+# The recording lives in the companion data repository, a sibling of this one. Overridable with
+# UAV_DATOS so the replay runs wherever the flight data was put.
+_DATOS = os.environ.get('UAV_DATOS',
+                        os.path.join(os.path.dirname(_REPO), 'drone-geolocation'))
+ENTREN = os.path.join(_DATOS, 'entrenamiento')
+VUELO3 = os.path.join(_DATOS, 'data', 'flight_02ago', '20260802_133309')
 
 
 def enviar(url, mensaje, dron):
@@ -73,8 +80,7 @@ if __name__ == '__main__':
     # includes 573 s of the drone on the ground, and dividing by it shrinks every maturity
     # threshold by almost 3x.
     import csv
-    FR = (r'C:\Users\User\Desktop\lac\drone-geolocation\data\flight_02ago'
-          r'\20260802_133309\frames.csv')
+    FR = os.path.join(VUELO3, 'frames.csv')
     t_air = np.array([float(r['t_mono']) for r in csv.DictReader(open(FR))
                       if float(r['alt_agl']) > 3.0])
     dt = np.diff(t_air)

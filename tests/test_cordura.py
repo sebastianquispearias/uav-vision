@@ -72,7 +72,7 @@ print("2. La tasa declarada tiene que ser la entregada")
 print("=" * 70)
 
 try:
-    verificar_tasa(3.00, 2.31, que="la tasa del lazo")   # measured on the Pi, 25ago
+    verificar_tasa(3.00, 2.31, que="la tasa del lazo")   # measured on the Pi, 2026-08-25
     revisar(False, "2.31 contra 3.00 tiene que reventar")
 except CorduraError as exc:
     revisar("2.31" in str(exc) and "3.00" in str(exc),

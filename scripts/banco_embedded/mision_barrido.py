@@ -14,7 +14,7 @@ as POR VERIFICAR rather than as finds.
 Where each number comes from:
 
     modelo 960       the sweet spot, decided with numbers from both ends. Measured on the Pi
-                     with the real camera (bench_modelos.py, 25ago, on the charger):
+                     with the real camera (bench_modelos.py, 2026-08-25, on the charger):
 
                          modelo  detector  + OSNet   FPS de mision  CPU
                          640     70.6 ms   ~111 ms      ~9.0        ~65%
@@ -45,7 +45,7 @@ Where each number comes from:
                      bench sat unpaid for it: this docstring budgeted OSNet's cost while the
                      config never passed the argument.
     fps 3.0          NOT 4.0, and the difference is the whole reason the line above is safe.
-                     Measured on the board (25ago, charger, throttled=0x0):
+                     Measured on the board (2026-08-25, charger, throttled=0x0):
 
                          960 detector alone, empty frame        196.1 ms   78% of a 250 ms window
                          OSNet, per loaded frame, one box       +33.9 ms
@@ -58,7 +58,7 @@ Where each number comes from:
                      here, so a loop delivering 3.8 Hz while claiming 4 makes "36 s" mean
                      something else. At 3 Hz the window is 333 ms and about four people fit.
 
-                     Wall-clock maturity is unchanged: since the 25ago fix the identity layer
+                     Wall-clock maturity is unchanged: since the 2026-08-25 fix the identity layer
                      measures a span of FRAMES, and fps is the rate the caller sets and
                      therefore knows exactly, so 36 s stays 36 s at either rate. What does
                      change is observations per pass -- roughly a quarter fewer. The
@@ -73,12 +73,12 @@ Where each number comes from:
                      `now + period` (real interval = work + period) and because see_period_s,
                      the parameter that actually drives the timer, was never set here at all.
                      Every maturity threshold was scaled by the declared rate, so "36 s" took
-                     about 47. Fixed 25ago in both places -- fixed-cadence scheduling, and
+                     about 47. Fixed 2026-08-25 in both places -- fixed-cadence scheduling, and
                      maturity measured off the clock -- and see_period_s is now set below, so
                      this value and the timer cannot drift apart. tests/test_tasa.py holds
                      both ends: at half the frame rate, "36 s" still lands within 2 s.
 
-                     It had gone wrong three ways before that (see C-5 in PROGRESO.md), which
+                     It had gone wrong three ways before that, which
                      is why the identity layer no longer depends on it for timing at all.
     radio_fusion 3.5 the scene's ground-projection noise at mission altitude. Roughly the GPS
                      bias plus slant range times yaw error; the measured spread on flight 3 was
@@ -105,7 +105,7 @@ ProtocoloBarridoLAC = VisionProtocol.with_config(
         reid_modelo="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
         fps=3.0,
         # pausa_arranque_s stays OFF, and the measurement is why. Splitting the start-up into
-        # three steps 4 s apart was tried on 25ago against the battery failure: it moved the
+        # three steps 4 s apart was tried on 2026-08-25 against the battery failure: it moved the
         # death from opening the camera (3 s) to loading the detector (9 s) and did not stop
         # it. Each step alone is enough. Buying 8 s of mission time for nothing would only
         # leave a knob that looks like a fix.

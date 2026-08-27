@@ -164,7 +164,7 @@ class CamaraArduCam:
         # rather than a stream.
         # Seconds to sit idle between the heavy start-up steps. Default 0: no change for
         # anything on mains. On battery it is the only lever software has against the failure
-        # measured on 25ago -- the board died 3 s into opening the camera and loading the two
+        # measured on 2026-08-25 -- the board died 3 s into opening the camera and loading the two
         # models, on a FULL pack, drawing 3.47 W. That is nowhere near saturating a 5 A UBEC,
         # so what kills it is the step itself, not the level. Opening the camera and loading
         # the models back to back stacks those steps; this pulls them apart.
@@ -219,7 +219,7 @@ class CamaraArduCam:
 
     # The sensor is detected over I2C and enumerated long before it will actually stream, and
     # sometimes it does not stream at all: libcamera reports "Camera frontend has timed out"
-    # and the capture call never returns. Observed on 25ago -- five failures in a row within a
+    # and the capture call never returns. Observed on 2026-08-25 -- five failures in a row within a
     # minute of boot and right after a process was killed mid-capture, then five successes out
     # of five once the board had been up a few minutes. Nothing in the configuration changed.
     #
@@ -315,7 +315,7 @@ class CamaraArduCam:
         # assumes it when the crop is written. Left alone, red and blue are swapped for all
         # three at once.
         #
-        # Measured on the real board (25ago): a person the detector found at 0.887 with the
+        # Measured on the real board (2026-08-25): a person the detector found at 0.887 with the
         # channels swapped scores 0.909 once corrected -- small, and not the reason the
         # VisDrone weights find nothing indoors, which is a domain gap. The reason to fix it
         # is the crop: it is the photograph an operator looks at to decide whether to send

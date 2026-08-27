@@ -72,7 +72,7 @@ def ficha(ahora, mensaje):
 
     fps_real and slots_perdidos are here because a drone that cannot keep up does not look
     any different from one that can: same pins, same cadence of reports, fewer looks taken.
-    Until 25ago that gap was only findable with a stopwatch.
+    Until 2026-08-25 that gap was only findable with a stopwatch.
     """
     return {
         't': ahora,

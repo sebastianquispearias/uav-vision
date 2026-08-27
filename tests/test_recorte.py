@@ -1,5 +1,5 @@
 """
-Gates for the two holes the first full rehearsal exposed (25ago).
+Gates for the two holes the first full rehearsal exposed (2026-08-25).
 
 Both were invisible to every existing test, because both only appear when the whole chain
 runs at once. The camera computed a crop for every detection and nothing downstream had a

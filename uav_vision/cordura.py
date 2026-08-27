@@ -6,10 +6,10 @@ always the same and it is worth naming: none of them raised anything. Each produ
 that was perfectly plausible, printed it, and carried on -- so the error surfaced minutes or
 weeks later as a conclusion that was quietly wrong in a consistent direction.
 
-The lesson that did NOT work was writing it down. ESTADO_SESION.md has said "the frame rate
-has been wrong three times" for a while; it was then got wrong a fourth time within the hour,
-by someone who had read that line. A warning in prose does not stop anything. A function that
-is the easy way to do it does, because nobody writes the hard version on purpose.
+The lesson that did NOT work was writing it down. A note recording that the frame rate had
+already been derived wrong three times was read, and the same derivation went wrong a fourth
+time within the hour. A warning in prose does not stop anything. A function that is the easy
+way to do it does, because nobody writes the hard version on purpose.
 """
 from __future__ import annotations
 

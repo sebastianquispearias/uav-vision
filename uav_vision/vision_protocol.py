@@ -221,7 +221,7 @@ class VisionProtocol(IProtocol):
         """
         The next slot on a fixed cadence, skipping any the work ran past.
 
-        Rescheduling as `now + period` -- which is what this did until 25ago -- makes the real
+        Rescheduling as `now + period` -- which is what this did until 2026-08-25 -- makes the real
         interval `work + period`, so the loop never runs at the rate it was asked for. Measured
         on the Pi: 2.31 frames per second against 3.00 configured, on an empty scene. That
         matters beyond throughput, because the identity layer scaled every maturity threshold

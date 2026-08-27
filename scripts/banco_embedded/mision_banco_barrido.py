@@ -2,7 +2,7 @@
 
 mision_barrido.py is what flies. This is that same configuration with one substitution, and it
 exists because of a measurement: on a frame of a person sitting three metres from the camera,
-both VisDrone models found nothing and COCO yolov8n found `person` at 0.887 (25ago, same frame,
+both VisDrone models found nothing and COCO yolov8n found `person` at 0.887 (2026-08-25, same frame,
 same 0.25 threshold, channel order tested both ways and worth 0.02). The VisDrone weights are
 not broken -- an indoor close-up is the far end of the domain gap already measured at altitude,
 where they lose 4.4x below ~20 m. They simply cannot be rehearsed on a desk.
@@ -17,7 +17,7 @@ The one addition, not a substitution: reid_modelo. mision_barrido.py leaves it u
 comes back None and the identity layer's appearance veto skips itself silently -- and that veto
 is what separates a person from the equipment box that captured RANSAC on flight 3. A rehearsal
 without it would exercise position matching alone and report a pass the flight config does not
-earn. See ESTADO_SESION.md.
+earn.
 """
 
 from uav_vision.camera import CamaraArduCam

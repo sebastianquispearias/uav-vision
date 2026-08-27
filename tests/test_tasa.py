@@ -1,7 +1,7 @@
 """
 Gates for the frame rate, after it turned out the configured one was never the real one.
 
-Measured on the Pi on 25ago: 2.31 frames per second against 3.00 configured, on an empty
+Measured on the Pi on 2026-08-25: 2.31 frames per second against 3.00 configured, on an empty
 scene. Two faults stacked. The loop rescheduled itself as `now + period`, so the real interval
 was `work + period` and the rate was always below the one asked for. And the identity layer
 scaled every maturity threshold by the DECLARED rate, so running slower than declared
@@ -176,7 +176,7 @@ print("=" * 68)
 print("4. El arranque no contamina la tasa que se reporta")
 print("=" * 68)
 
-# Measured on the Pi 25ago: a loop delivering 2.98 of a configured 3.00 reported itself as
+# Measured on the Pi 2026-08-25: a loop delivering 2.98 of a configured 3.00 reported itself as
 # 2.42 fps with 46 lost slots, because the 15 s camera warm-up was averaged in for the whole
 # mission. An operator would have read a saturated drone that was running perfectly.
 p, prov, msgs, _ = correr(0.05, 0.333, hasta_s=90.0, trabajo_inicial_s=15.0)

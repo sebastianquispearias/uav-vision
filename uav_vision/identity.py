@@ -81,7 +81,7 @@ class IdentidadIncremental:
 
             The history is worth keeping, because this parameter has now been wrong three
             ways. It first meant the detection rate, which nobody can know in advance since it
-            depends on how intermittent the scene is. On 25ago it was redefined as the FRAME
+            depends on how intermittent the scene is. On 2026-08-25 it was redefined as the FRAME
             rate, on the grounds that the caller sets the vision timer and therefore knows it
             exactly. Measured the same evening, that was false too: the loop rescheduled
             itself as `now + period`, delivering 2.31 frames per second against 3.00
