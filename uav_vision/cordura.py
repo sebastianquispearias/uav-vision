@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Invariants this project has already paid for, written as code instead of as warnings.
+"""Invariants for derived quantities, enforced in code rather than documented as warnings.
 
-Every function here exists because the same mistake was made more than once. The pattern was
-always the same and it is worth naming: none of them raised anything. Each produced a number
-that was perfectly plausible, printed it, and carried on -- so the error surfaced minutes or
-weeks later as a conclusion that was quietly wrong in a consistent direction.
+The failure mode these guard against is a specific one: a derived number that is wrong but
+plausible. Nothing raises, the value prints, and the error surfaces later as a conclusion that
+is quietly off in a consistent direction -- a rate, a maturity threshold, a cached column.
 
-The lesson that did NOT work was writing it down. A note recording that the frame rate had
-already been derived wrong three times was read, and the same derivation went wrong a fourth
-time within the hour. A warning in prose does not stop anything. A function that is the easy
-way to do it does, because nobody writes the hard version on purpose.
+Enforcing them as functions rather than as conventions is deliberate. A convention has to be
+remembered at the moment of writing; a function only has to be the easiest thing to call.
 """
 from __future__ import annotations
 
@@ -28,8 +25,8 @@ def cadencia_instantanea(tiempos: Sequence[float], avisar: bool = True) -> float
     """
     The rate a stream of timestamped samples actually arrives at, in Hz.
 
-    THE ONLY correct way to get a rate in this project. The wrong way -- count over wall-clock
-    span -- has been written at least four times, and it always understates:
+    The only correct way to derive a rate here. Counting samples over the wall-clock span
+    understates it whenever the recording has gaps:
 
         flight 3: 2983 frames over a 909 s span says 3.28 Hz.
         The same flight's median interval says 9.35 Hz.
@@ -72,9 +69,9 @@ def verificar_tasa(pedida: float, lograda: float, tolerancia: float = 0.10,
     """
     Raises unless the rate delivered is the rate asked for.
 
-    A configured rate is a claim about the world, and this project has twice shipped one that
-    was false: 3.00 declared against 2.31 delivered on the board, and 3.00 asked of a
-    subsampler that returned 2.55. Neither was visible in any output that anyone was reading.
+    A configured rate is a claim about the world, and worth checking against what arrives.
+    Measured cases: 3.00 declared against 2.31 delivered on the board, and 3.00 asked of a
+    subsampler that returned 2.55. Neither discrepancy showed in any output being read.
     """
     if pedida <= 0:
         raise CorduraError("%s pedida no puede ser %.3f" % (que, pedida))
@@ -101,10 +98,9 @@ def cargar_cache(ruta: str, params: Dict[str, Any],
     Returns the cached arrays, or None if this cache was not built from these parameters.
 
     A cache without a stamp is the most expensive kind of stale data, because nothing about it
-    looks wrong. One survived a deletion in this project -- the process still writing it was
-    assumed dead after a kill that had actually failed -- and silently contaminated the
-    reference column of a comparison for two runs. Refusing to load an unstamped or mismatched
-    cache costs one rebuild; trusting one costs the conclusion.
+    looks wrong: a file that outlives the parameters that built it will go on supplying the
+    reference column of a comparison. Refusing to load an unstamped or mismatched cache costs
+    one rebuild; trusting one costs the conclusion.
     """
     if not os.path.exists(ruta):
         return None

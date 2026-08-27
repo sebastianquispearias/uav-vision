@@ -78,8 +78,8 @@ Where each number comes from:
                      this value and the timer cannot drift apart. tests/test_tasa.py holds
                      both ends: at half the frame rate, "36 s" still lands within 2 s.
 
-                     It had gone wrong three ways before that, which
-                     is why the identity layer no longer depends on it for timing at all.
+                     Earlier formulations tied maturity to the declared rate, which is why
+                     the identity layer no longer depends on it for timing at all.
     radio_fusion 3.5 the scene's ground-projection noise at mission altitude. Roughly the GPS
                      bias plus slant range times yaw error; the measured spread on flight 3 was
                      1.6 m around a 2.3 m offset.

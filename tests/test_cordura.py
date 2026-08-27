@@ -1,8 +1,8 @@
 """
-Gates for uav_vision/cordura.py -- the invariants that were learned the expensive way.
+Gates for uav_vision/cordura.py.
 
-Each case here is a real mistake, reproduced with the data that produced it, so the guard is
-tested against the thing it exists to stop rather than against a tidy synthetic.
+Each case is built from the data shape the guard exists to catch, rather than from a tidy
+synthetic: a guard that only passes on well-formed input has not been tested.
 
 Run with: python tests/test_cordura.py
 """
@@ -109,7 +109,7 @@ revisar(d is not None and float(d["cadencia"]) == 3.11, "y trae todo lo guardado
 revisar(cargar_cache(ruta, P2, callado=True) is None,
         "con OTROS parametros, se ignora en vez de mentir")
 
-# The exact shape of the accident: a stale file left by a process that was assumed dead.
+# The shape that matters: a stale file with no stamp at all, left by an earlier version.
 viejo = os.path.join(tmp, "viejo.npz")
 np.savez(viejo, obs=np.arange(3.0))          # written by the old code, no stamp at all
 revisar(cargar_cache(viejo, P1, callado=True) is None,
