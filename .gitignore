@@ -3,3 +3,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# Session state for Claude Code: personal working notes, in Spanish, of no use to a reader of
+# this repo -- and this repo is the portfolio. Backed up to Drive instead of tracked here.
+ESTADO_SESION.md
