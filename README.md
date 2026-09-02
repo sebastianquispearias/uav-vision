@@ -1,5 +1,65 @@
 # uav-vision
 
+**Find people on the ground from a drone's camera and report where they are.
+One camera. No laser rangefinder, no stereo rig. 2.4 m median error, 3 FPS on a
+Raspberry Pi 5.**
+
+<!-- Upload demo.gif to a GitHub issue and paste the resulting URL here, so the
+     binary never enters the repository. -->
+![the detector and tracker running on a recorded flight](docs/demo.gif)
+
+A drone sees a person from several positions along its path. Each detection
+becomes a ray; the rays are intersected with the ground; the intersections are
+fused into one coordinate. That is the whole idea, and it needs neither a second
+camera nor a rangefinder.
+
+## Run it on a real flight, without a drone
+
+```bash
+git clone https://github.com/sebastianquispearias/uav-vision
+cd uav-vision && pip install -e .
+python demo/demo.py
+```
+
+It replays a recorded flight (2026-08-02) through the same protocol that runs on
+the aircraft — the poses are the ones the Pixhawk logged, the detections are the
+ones the detector produced in the air — opens the ground station in a browser,
+and fills the map as the reports arrive. Then it prints:
+
+```
+CHEQUEO DE RAYOS (268 muestras, 1 de cada 10 frames)
+  angulo protocolo vs vuelo real: mediana 0.000 deg, p90 0.000 deg
+  >> rayos del protocolo coinciden con los del vuelo real
+
+REPLAY CON IDENTIDAD (102 reportes)
+  #      tipo  n_obs  conf              pos  d_PIES
+  0  estatico    209  0.53 ( -0.16,  6.70)    2.39   <- OPERADOR
+
+  mejor POI respecto al operador: 2.39 m
+```
+
+2.39 m from a surveyed ground truth. `--sin-mapa` skips the browser.
+
+## What it costs on the aircraft
+
+Measured on a Raspberry Pi 5 with the real camera, detector plus OSNet
+re-identification:
+
+| input size | detector | + OSNet | FPS | CPU |
+|---|---|---|---|---|
+| 640  |  70.6 ms | 111 ms | 9.0 | 65 % |
+| 960  | 160.7 ms | 201 ms | 5.0 | 80 % |
+| 1280 | 311.7 ms | 352 ms | 2.8 | 90 % |
+
+Moving from torch to NCNN bought 3.3x (12.47 against 3.74 FPS). Peak draw of the
+whole board is 11.71 W.
+
+And an ablation worth reading before optimising the detector: on the same 2983
+frames, raising mAP50 from 0.305 to 0.464 moved the geolocation error from
+2.49 m to 2.45 m. The floor is GPS and yaw bias, not perception.
+
+---
+
 Detection and camera geometry for vision-based target geolocation from UAVs.
 
 The same interface runs in **simulation** (GrADyS-SIM) and on the **real drone**

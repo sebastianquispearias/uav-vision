@@ -35,10 +35,22 @@ from gradys_embedded.protocol.messages.telemetry import Telemetry
 from uav_vision.camera_config import ARDUCAM_MODULE_3
 from uav_vision.vision_protocol import VisionProtocol
 
-FLIGHT = os.path.join(_LAC, "drone-geolocation", "data", "flight_02ago",
-                      "20260802_133309")
-DETS_NPZ = os.path.join(_LAC, "drone-geolocation", "entrenamiento",
-                        "examen_v3_datos.npz")
+# The three inputs live in the flight archive by default. demo/demo.py points
+# UAV_VISION_DATOS at a self-contained copy so the replay runs from a clone,
+# with no archive and no drone.
+_DATOS = os.environ.get("UAV_VISION_DATOS")
+if _DATOS:
+    FRAMES_CSV = os.path.join(_DATOS, "frames.csv")
+    DETS_NPZ = os.path.join(_DATOS, "examen_v3_datos.npz")
+    EMBS_NPY = os.path.join(_DATOS, "embs_osnet.npy")
+else:
+    FLIGHT = os.path.join(_LAC, "drone-geolocation", "data", "flight_02ago",
+                          "20260802_133309")
+    FRAMES_CSV = os.path.join(FLIGHT, "frames.csv")
+    DETS_NPZ = os.path.join(_LAC, "drone-geolocation", "entrenamiento",
+                            "examen_v3_datos.npz")
+    EMBS_NPY = os.path.join(_LAC, "drone-geolocation", "entrenamiento",
+                            "embs_osnet.npy")
 
 # ENU origin: the GT post used by every flight-3 analysis.
 LAT0, LNG0 = -22.978029946, -43.23214256266666
@@ -126,7 +138,7 @@ class FakeProvider:
 
 # ---------------------------------------------------------------- data --
 poses = {}
-with open(os.path.join(FLIGHT, "frames.csv")) as f:
+with open(FRAMES_CSV) as f:
     for r in csv.DictReader(f):
         poses[int(r["frame"])] = r
 
@@ -135,8 +147,6 @@ dets_all = D["dets"]
 sel = dets_all[:, 1] >= CONF_MIN
 dets = dets_all[sel]
 # embs_osnet.npy rows correspond, in order, to dets[conf >= 0.25]
-EMBS_NPY = os.path.join(_LAC, "drone-geolocation", "entrenamiento",
-                        "embs_osnet.npy")
 embs = np.load(EMBS_NPY).astype(np.float32)
 embs /= (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9)
 assert len(embs) == len(dets), "embs no alineadas con las detecciones"
@@ -275,3 +285,30 @@ print(f"\n  mejor POI respecto al operador: {mejor_pies:.2f} m "
       f"(offline BoT-SORT dio 2.49 m)")
 print("  El operador y la caja salen como POIs SEPARADOS: el fallo del")
 print("  vuelo 3 (un solo consenso mezclado) queda resuelto en linea.")
+
+
+# ------------------------------------------------------- ground station --
+# Off unless asked for. With UAV_VISION_GS set, the reports the protocol
+# produced are pushed to a running gs_mapa, paced so the map fills the way it
+# would during the flight instead of appearing all at once.
+_GS = os.environ.get("UAV_VISION_GS")
+if _GS:
+    import time
+    import urllib.request
+
+    enviados = 0
+    for r in reportes:
+        # The ground station speaks the transport's envelope, not the raw
+        # report: {"message": <json string>, "source": <node id>}.
+        cuerpo = json.dumps({"message": json.dumps(r), "source": 1}).encode("utf-8")
+        pedido = urllib.request.Request(
+            _GS, data=cuerpo, headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(pedido, timeout=2).read()
+            enviados += 1
+        except Exception as e:
+            print(f"  no se pudo enviar a la estacion de tierra: {e}")
+            break
+        time.sleep(0.05)
+    print()
+    print(f"  {enviados}/{len(reportes)} reportes enviados a {_GS}")
