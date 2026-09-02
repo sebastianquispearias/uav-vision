@@ -15,6 +15,9 @@ Two kinds of pin, and the difference is the point:
                  a candidate. Showing these as finds would be lying to the operator; hiding
                  them would be worse, because in a sweep they are all there is.
 
+Each pin also carries the class the detector gave it, and the panel can hide classes: a sweep
+over a car park reports dozens of cars, and one person among them is the thing worth seeing.
+
 Everything is served by one process with no external dependencies: no CDN, no npm, nothing
 that needs a network in the field. The page polls a JSON endpoint and draws.
 
@@ -136,6 +139,9 @@ def registrar(mensaje, fuente):
             'x': p.get('x'), 'y': p.get('y'),
             'lat': lat, 'lng': lng,
             'n_obs': p.get('n_obs'),
+            # None when the drone never named it: older firmware, or a camera with no
+            # class. Shown as 'sin clase' rather than guessed at.
+            'cls': p.get('cls'),
             'conf': p.get('conf', p.get('conf_mean')),
             'mobile': p.get('mobile'),
             'mature': bool(p.get('mature', False)),
@@ -242,6 +248,12 @@ PAGINA = r"""<!doctype html>
   .chip.ok { background:rgba(74,222,128,.15); color:var(--ok); }
   .chip.duda { background:rgba(251,191,36,.15); color:var(--duda); }
   .chip.mobile { background:rgba(96,165,250,.15); color:var(--mobile); }
+  .chip.clase { background:rgba(230,233,239,.10); color:var(--texto); }
+  #filtro { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+  #filtro button { font:600 11px system-ui; padding:3px 9px; border-radius:99px;
+                   cursor:pointer; border:1px solid var(--linea); background:#171b23;
+                   color:var(--texto); }
+  #filtro button.off { color:var(--tenue); text-decoration:line-through; opacity:.55; }
   .poi dl { margin:8px 0 0; display:grid; grid-template-columns:auto 1fr;
             gap:2px 10px; font-size:13px; }
   .poi dt { color:var(--tenue); }
@@ -270,13 +282,16 @@ PAGINA = r"""<!doctype html>
   <canvas id="lienzo"></canvas>
   <aside>
     <h2>Detecciones</h2>
+    <div id="filtro"></div>
     <div id="lista"><div class="vacio">Nada todavia.</div></div>
     <div class="nota">
       <b style="color:var(--ok)">CONFIRMADO</b>: la capa de identity lo siguio lo
       suficiente.<br>
       <b style="color:var(--duda)">POR VERIFICAR</b>: se formo una pista pero no alcanzo a
       madurar. Es lo que produce una pasada corta. No es un hallazgo: es un pedido de
-      verificacion.
+      verificacion.<br>
+      Los botones de arriba ocultan clases. Ocultar no borra: el POI sigue llegando y vuelve
+      con un clic.
     </div>
   </aside>
 </main>
@@ -284,6 +299,15 @@ PAGINA = r"""<!doctype html>
 const lienzo = document.getElementById('lienzo');
 const ctx = lienzo.getContext('2d');
 let fondo = null, estado = null;
+// Classes hidden by the operator, and every class seen since the page opened. The second is
+// kept so a button does not vanish the moment its last POI leaves the frame -- it would take
+// the operator's filter with it, silently.
+let ocultas = new Set(), clasesVistas = [];
+// What is actually drawn: the POIs surviving the filter. Kept apart from estado.pois so
+// dibujar(), which also runs on resize and when the imagery loads, never has to re-filter.
+let visibles = [];
+
+function claseDe(p) { return p.cls || 'sin clase'; }
 
 // The area drawn, in metres around the mission origin. Redrawn to fit whatever arrives, so a
 // POI never lands outside the view.
@@ -357,7 +381,7 @@ function dibujarFondo() {
 function dibujar() {
   dibujarFondo();
   if (!estado) return;
-  for (const p of estado.pois) {
+  for (const p of visibles) {
     const [x, y] = aPantalla(p.x, p.y);
     const col = p.mature ? '#4ade80' : '#fbbf24';
     // A halo sized by nothing but legibility: this is not an uncertainty ellipse and must not
@@ -373,6 +397,12 @@ function dibujar() {
     }
     ctx.fillStyle = '#e6e9ef'; ctx.font = '600 12px system-ui';
     ctx.fillText(p.mature ? 'CONFIRMADO' : 'POR VERIFICAR', x + 16, y - 12);
+    if (p.cls) {
+      // The class under the verdict, dimmer: the verdict decides whether to look, the class
+      // decides whether it is what you are looking for.
+      ctx.fillStyle = 'rgba(230,233,239,.65)'; ctx.font = '12px system-ui';
+      ctx.fillText(p.cls, x + 16, y + 3);
+    }
   }
 }
 
@@ -384,6 +414,7 @@ function pintarLista(pois) {
       <div class="tit">#${i+1}
         <span class="chip ${p.mature ? 'ok' : 'duda'}">${p.mature ? 'CONFIRMADO' : 'POR VERIFICAR'}</span>
         ${p.mobile ? '<span class="chip mobile">MOVIL</span>' : ''}
+        ${p.cls ? `<span class="chip clase">${p.cls}</span>` : ''}
       </div>
       <dl>
         <dt>local</dt><dd>${p.x} m E, ${p.y} m N</dd>
@@ -395,6 +426,36 @@ function pintarLista(pois) {
         ? `<img class="crop" src="data:image/jpeg;base64,${p.crop}" alt="lo que vio el dron">`
         : (p.mature ? '' : '<div class="sinrecorte">sin crop: no se puede verificar</div>')}
     </div>`).join('');
+}
+
+function pintarFiltro(pois) {
+  for (const p of pois) {
+    const c = claseDe(p);
+    if (!clasesVistas.includes(c)) clasesVistas.push(c);
+  }
+  clasesVistas.sort();
+  const cont = document.getElementById('filtro');
+  // Nothing to choose between while only one class has ever arrived.
+  if (clasesVistas.length < 2) { cont.innerHTML = ''; return; }
+  cont.innerHTML = clasesVistas.map(c =>
+    `<button data-c="${c}" class="${ocultas.has(c) ? 'off' : ''}">${c}</button>`).join('');
+  for (const b of cont.querySelectorAll('button')) {
+    b.onclick = () => {
+      const c = b.dataset.c;
+      if (ocultas.has(c)) ocultas.delete(c); else ocultas.add(c);
+      pintar();
+    };
+  }
+}
+
+function pintar() {
+  visibles = estado.pois.filter(p => !ocultas.has(claseDe(p)));
+  pintarFiltro(estado.pois);
+  document.getElementById('cuenta').textContent = visibles.length + ' POI'
+    + (visibles.length === estado.pois.length ? '' : ` de ${estado.pois.length}`);
+  ajustarVista(visibles);
+  pintarLista(visibles);
+  dibujar();
 }
 
 async function refrescar() {
@@ -432,11 +493,8 @@ async function refrescar() {
       rit.textContent = `${d0.fps_real} FPS` + (perdidas ? ` · ${perdidas} perdidas` : '');
       rit.style.color = perdidas ? 'var(--duda)' : '';
     } else { rit.textContent = ''; }
-    document.getElementById('cuenta').textContent = estado.pois.length + ' POI';
     document.getElementById('reportes').textContent = estado.reportes + ' reportes';
-    ajustarVista(estado.pois);
-    pintarLista(estado.pois);
-    dibujar();
+    pintar();
   } catch (e) { /* la GS se cayo: la pagina se queda con lo ultimo que vio */ }
 }
 redimensionar();
@@ -457,12 +515,12 @@ def demo():
         t = time.time() - t0
         pois = [{'x': round(-1.3 + random.uniform(-0.3, 0.3), 2),
                  'y': round(8.8 + random.uniform(-0.3, 0.3), 2),
-                 'n_obs': int(40 + t * 4), 'conf': 0.83,
+                 'n_obs': int(40 + t * 4), 'conf': 0.83, 'cls': 'car',
                  'mobile': False, 'mature': t > 20}]
         if t > 8:
             pois.append({'x': round(6.0 + 0.5 * t % 14 - 7, 2),
                          'y': round(2.0 + math.sin(t / 6) * 4, 2),
-                         'n_obs': int(15 + t * 2), 'conf': 0.61,
+                         'n_obs': int(15 + t * 2), 'conf': 0.61, 'cls': 'pedestrian',
                          'mobile': True, 'mature': t > 40})
         registrar({'type': 'vision_poi', 'pois': pois, 'frames_seen': frames}, 'demo')
 

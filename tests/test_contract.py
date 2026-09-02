@@ -56,7 +56,7 @@ for etiqueta, pos in casos:
     for det in salida:
         faltan = {"px", "py", "conf"} - set(det)
         assert not faltan, f"{etiqueta}: faltan campos {faltan}"
-        sobran = set(det) - {"px", "py", "conf", "emb"}
+        sobran = set(det) - {"px", "py", "conf", "emb", "cls"}
         assert not sobran, f"{etiqueta}: campos desconocidos {sobran}"
     print(f"  {etiqueta} OK")
 

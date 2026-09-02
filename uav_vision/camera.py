@@ -17,6 +17,10 @@ Contract of detect(pos, yaw):
         - 'conf' is the detector confidence in (0, 1]. It feeds the view selector, which weights
           it heavily; it is not informational.
     Optional fields:
+        - 'cls': the name the detector gave the class, as the model spells it ('person',
+          'pedestrian', 'car'). Present whenever the camera knows one. It travels through the
+          identity layer to the report: with more than one class enabled, a coordinate with no
+          name is not actionable, and two names must never be merged into one candidate.
         - 'emb': appearance embedding, 512 normalized float32 (OSNet). Present only when the
           camera can compute it. Read it with det.get('emb'), never det['emb'].
         - 'track_id': stable integer identity assigned by the tracker. Present only when the
@@ -56,6 +60,7 @@ class SimulatedCamera:
         rng: Optional[np.random.Generator] = None,
         pixel_noise: bool = True,
         noise_model: str = "heuristic",
+        cls: str = "person",
     ) -> None:
         self.target = tuple(target)
         self.pitch_deg = pitch_deg
@@ -68,6 +73,10 @@ class SimulatedCamera:
         self.pixel_noise = pixel_noise
         # Noise model name, resolved by confidence.confidence_to_pixel_sigma_model.
         self.noise_model = noise_model
+        # What the simulated target is. The real camera always names its detections, so a
+        # simulated one that stayed silent would let class-dependent code pass in simulation
+        # and fail in the air -- which is the one thing this pair of classes exists to prevent.
+        self.cls = cls
 
     def detect(self, pos: Sequence[float], yaw: float) -> List[Detection]:
         pixel = project_to_pixel(
@@ -96,7 +105,7 @@ class SimulatedCamera:
                                0, self.camera.image_width - 1))
             py = float(np.clip(py + self.rng.normal(0, sigma),
                                0, self.camera.image_height - 1))
-        return [{"px": px, "py": py, "conf": conf}]
+        return [{"px": px, "py": py, "conf": conf, "cls": self.cls}]
 
 
 class OnboardCamera:
@@ -179,6 +188,39 @@ class OnboardCamera:
         self._yolo: Any = None
         self._reid: Any = None
         self._tracker: Any = None
+
+    # -- what counts as a target ------------------------------------------
+
+    def set_classes(self, classes: Optional[Sequence[str]] = None) -> None:
+        """Changes what counts as a target, mid-flight.
+
+        Costs nothing. The detector is called without a class filter and already
+        scores every class it knows on every frame; self.classes only decides which
+        of those survive the loop in detect(). Switching from people to vehicles
+        reloads no model and adds no inference time.
+
+        Pass None to go back to people. Names must be names the model emits --
+        see known_classes -- because a typo would silently report nothing.
+        """
+        if classes is None:
+            self.classes = self.CLASES_PERSONA
+            return
+        pedidas = frozenset(classes)
+        conocidas = self.known_classes
+        if conocidas:
+            desconocidas = pedidas - set(conocidas)
+            if desconocidas:
+                raise ValueError(
+                    "the detector does not emit %s; it knows %s"
+                    % (sorted(desconocidas), conocidas))
+        self.classes = pedidas
+
+    @property
+    def known_classes(self) -> List[str]:
+        """Class names this detector can emit, or [] before the model is loaded."""
+        if self._yolo is None:
+            return []
+        return sorted(self._yolo.names.values())
 
     # -- hardware ---------------------------------------------------------
 
@@ -337,6 +379,10 @@ class OnboardCamera:
                 "px": float((x1 + x2) / 2),
                 "py": float(y2),  # bottom edge: the point touching the ground
                 "conf": round(float(caja.conf[0]), 3),
+                # Carried from here so a report can say WHAT it found, not just where.
+                # With more than one class enabled, a coordinate without a class name is
+                # not actionable: the ground station cannot tell a person from a car.
+                "cls": self._yolo.names[int(caja.cls[0])],
             })
             cajas.append(xyxy)
 

@@ -24,7 +24,8 @@ Pose sources:
 from __future__ import annotations
 
 import json
-from typing import Callable, List, Optional, Sequence, Tuple, Type
+import math
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Type
 
 import numpy as np
 
@@ -32,10 +33,38 @@ from gradys_embedded.protocol.interface import IProtocol
 from gradys_embedded.protocol.messages.communication import BroadcastMessageCommand
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
+from uav_vision.identity import dominant_class
 from uav_vision.pinhole_local import pixel_to_ray
 
 TIMER_SEE = "uav_vision:see"
 TIMER_REPORT = "uav_vision:report"
+
+# Ground extent of each class, in metres: how much of the ground the object covers along the
+# direction it is being looked at. Used to move the impact from the near edge of the object to
+# the middle of its footprint -- see _footprint_center.
+#
+# These are nominal dimensions of the thing, not tuned corrections. The extent along the line
+# of sight lies somewhere between the object's width and its length depending on how it happens
+# to be parked, so each value is the midpoint of that pair and the residual is bounded by half
+# their difference: +-1.3 m for a car, +-4.7 m for a bus. That is an approximation, and a
+# stated one; the alternative is a bias of the full half-length, always towards the drone.
+#
+# Names are VisDrone's, which is what the deployed detector emits.
+#
+# PEOPLE ARE DELIBERATELY ABSENT. A standing person covers about 0.4 m of ground, so the
+# correction would be 0.2 m against a system error of 2.4 m -- a twentieth of the noise, and
+# every flight result to date was measured with the bottom edge. A class not listed here is
+# left exactly where the ray hits, which is the behaviour of every version before this one.
+GROUND_EXTENT_M: Dict[str, float] = {
+    "bicycle": 1.2,
+    "motor": 1.4,
+    "tricycle": 1.8,
+    "awning-tricycle": 1.8,
+    "car": 3.1,
+    "van": 3.8,
+    "truck": 5.3,
+    "bus": 7.3,
+}
 
 RANSAC_ITERATIONS = 100
 RANSAC_THRESHOLD_M = 5.0
@@ -55,17 +84,48 @@ def _ground_impact(
     return (origin[0] + t * direction[0], origin[1] + t * direction[1])
 
 
+def _footprint_center(
+    origin: Sequence[float],
+    impact: Tuple[float, float],
+    extent_m: float,
+) -> Tuple[float, float]:
+    """
+    Moves a ground impact from the near edge of the object to the middle of its footprint.
+
+    'py' is the bottom edge of the detection box: the lowest pixel the object occupies, which
+    on the ground is its point CLOSEST to the camera, not the centre of what it stands on. For
+    a person the two are 0.2 m apart and nobody would notice. For a car they are metres apart,
+    and -- this is what makes it worth correcting -- always in the same direction, towards the
+    drone. A bias does not average out: fusing a hundred views of the same car from the same
+    pass gives a hundred times the same wrong answer, and the report looks all the more
+    confident for it.
+
+    The correction is half the object's ground extent, along the horizontal bearing from the
+    drone. Directly under the camera the bearing is undefined and there is nothing to correct
+    anyway, so the impact is returned untouched.
+    """
+    dx = impact[0] - origin[0]
+    dy = impact[1] - origin[1]
+    d = math.hypot(dx, dy)
+    if d < 1e-6:
+        return impact
+    k = 0.5 * extent_m / d
+    return (impact[0] + k * dx, impact[1] + k * dy)
+
+
 def _ransac_consensus(
     impacts: np.ndarray,
     rng: np.random.Generator,
     threshold_m: float = RANSAC_THRESHOLD_M,
     iterations: int = RANSAC_ITERATIONS,
-) -> Tuple[np.ndarray, int]:
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Finds the largest cluster of ground impacts and refits it as the inlier mean. Same consensus
     idea as fusion.ransac_fusion, expressed over impact points instead of rays.
 
-    Returns (estimate_xy, n_inliers).
+    Returns (estimate_xy, inlier_mask). The mask and not just its count, because whatever else
+    is asked of this consensus -- which class it is, which frames it came from -- has to be
+    asked of the impacts that formed it, not of the ones it rejected.
     """
     best_inliers = None
     for _ in range(iterations):
@@ -75,7 +135,7 @@ def _ransac_consensus(
         if best_inliers is None or inliers.sum() > best_inliers.sum():
             best_inliers = inliers
     estimate = impacts[best_inliers].mean(axis=0)
-    return estimate, int(best_inliers.sum())
+    return estimate, best_inliers
 
 
 class UavApiYaw:
@@ -139,6 +199,10 @@ class VisionProtocol(IProtocol):
     # The ground station must show these differently; they are requests for verification, not
     # finds.
     report_preliminary: bool = False
+    # Class -> ground extent in metres, used to correct the near-edge bias of 'py'. Defaults to
+    # the vehicle table; people are not in it on purpose (see GROUND_EXTENT_M). Pass {} to
+    # switch the correction off entirely.
+    ground_extent_m: Mapping[str, float] = GROUND_EXTENT_M
 
     @classmethod
     def with_config(
@@ -152,6 +216,7 @@ class VisionProtocol(IProtocol):
         rng_seed: int = 0,
         identity=None,
         report_preliminary: bool = False,
+        ground_extent_m: Optional[Mapping[str, float]] = None,
     ) -> Type["VisionProtocol"]:
         """
         Builds a configured protocol class ready for the runner. pitch_deg is explicit and has
@@ -170,6 +235,8 @@ class VisionProtocol(IProtocol):
                 "rng_seed": rng_seed,
                 "identity": identity,
                 "report_preliminary": report_preliminary,
+                "ground_extent_m": (GROUND_EXTENT_M if ground_extent_m is None
+                                    else dict(ground_extent_m)),
             },
         )
 
@@ -184,6 +251,9 @@ class VisionProtocol(IProtocol):
         self._position: Optional[Tuple[float, float, float]] = None
         self._impacts: List[Tuple[float, float]] = []
         self._confs: List[float] = []
+        # Parallel to _impacts: what the detector called each one, or None. Kept so the
+        # RANSAC fallback can name its POI from the impacts that actually formed it.
+        self._clases: List[Optional[str]] = []
         self._frames_seen = 0
         self._rng = np.random.default_rng(self.rng_seed)
 
@@ -310,8 +380,13 @@ class VisionProtocol(IProtocol):
             impact = _ground_impact(origin, direction, self.ground_z)
             if impact is None:
                 continue
+            cls = det.get("cls")
+            extent = self.ground_extent_m.get(cls) if cls else None
+            if extent:
+                impact = _footprint_center(self._position, impact, extent)
             self._impacts.append(impact)
             self._confs.append(det["conf"])
+            self._clases.append(cls)
             track_id = det.get("track_id")
             if self.identity is not None and track_id is not None:
                 self.identity.observe(
@@ -324,6 +399,9 @@ class VisionProtocol(IProtocol):
                     # The clock, so maturity is measured rather than inferred from a frame
                     # count times a rate the caller merely promised.
                     t=self.provider.current_time(),
+                    # What it is. The identity layer votes on it across the track and refuses
+                    # to merge two names into one candidate.
+                    cls=cls,
                 )
 
     def _report(self) -> None:
@@ -348,12 +426,20 @@ class VisionProtocol(IProtocol):
                 latido = True
             else:
                 impacts = np.asarray(self._impacts)
-                estimate, n_inliers = _ransac_consensus(impacts, self._rng)
+                estimate, inliers = _ransac_consensus(impacts, self._rng)
+                # Named from the inliers only. The rejected impacts are the ones the
+                # consensus decided were not this object, so letting them vote on what this
+                # object is would be answering with the noise.
+                votos: Dict[str, int] = {}
+                for cls, es_inlier in zip(self._clases, inliers):
+                    if cls and es_inlier:
+                        votos[cls] = votos.get(cls, 0) + 1
                 pois = [{
                     "x": round(float(estimate[0]), 2),
                     "y": round(float(estimate[1]), 2),
+                    "cls": dominant_class(votos),
                     "n_obs": int(len(impacts)),
-                    "n_inliers": n_inliers,
+                    "n_inliers": int(inliers.sum()),
                     "conf_mean": round(float(np.mean(self._confs)), 3),
                 }]
 
