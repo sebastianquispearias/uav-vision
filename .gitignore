@@ -7,3 +7,7 @@ dist/
 # Session state for Claude Code: personal working notes, in Spanish, of no use to a reader of
 # this repo -- and this repo is the portfolio. Backed up to Drive instead of tracked here.
 ESTADO_SESION.md
+
+# Interview prep, in Spanish, for the author only. Same reasoning as above: this repo is the
+# portfolio, and a reader of it has no use for these.
+HISTORIAS_ENTREVISTA.md
