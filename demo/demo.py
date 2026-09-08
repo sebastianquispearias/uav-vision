@@ -13,6 +13,9 @@ protocol reports, then prints how far the best one landed from a surveyed
 ground truth.
 
     --sin-mapa    skip the ground station, print the numbers only
+    --vehiculos   also replay the cached vehicle detections, so the map carries
+                  two classes. The people-only run is the equivalence gate of
+                  this repo and must keep printing 2.39 m, so it is opt-in.
 """
 
 import os
@@ -49,6 +52,8 @@ def esperar(url, intentos=25):
 
 def main():
     con_mapa = "--sin-mapa" not in sys.argv
+    # Flags the replay understands are forwarded rather than reimplemented here.
+    extra = [a for a in sys.argv[1:] if a in ("--vehiculos", "--preliminares")]
     entorno = dict(os.environ, UAV_VISION_DATOS=DATOS)
     estacion = None
 
@@ -65,7 +70,7 @@ def main():
 
     print("reproduciendo el vuelo del 2026-08-02...\n")
     try:
-        subprocess.run([sys.executable, REPLAY], env=entorno, check=True)
+        subprocess.run([sys.executable, REPLAY] + extra, env=entorno, check=True)
     finally:
         if con_mapa and estacion is not None:
             print("\nel mapa sigue en http://%s:%d/  (Ctrl+C para cerrar)"
