@@ -40,6 +40,35 @@ REPLAY CON IDENTIDAD (102 reportes)
 
 2.39 m from a surveyed ground truth. `--sin-mapa` skips the browser.
 
+## Not only people
+
+The same chain geolocates vehicles. No retraining, no second model: the detector
+already scores every class it knows on every frame, and `set_classes` only decides
+which of them survive.
+
+```bash
+python demo/demo.py --vehiculos
+```
+
+The 1365 cached vehicle detections ship with the repo (`demo/data/vehiculos.npz`,
+1.8 MB), so that command runs from a clone. `scripts/generar_vehiculos.py` is how
+they were produced, and it needs the raw flight frames (1.2 GB) and the detector
+weights, neither of which does.
+
+```
+  #      clase      tipo  n_obs  conf              pos  d_PIES
+  0 pedestrian  estatico    203  0.53 ( -0.19,  6.69)    2.38
+  1        car  estatico    133  0.63 (-12.24, 13.06)   11.74
+```
+
+![two classes on the ground station map](docs/mapa_dos_clases.jpg)
+
+A class is not a label on a pin: it is a veto. Two tracks at the same spot, with
+the same appearance, are one candidate if they agree on what they are and two if
+they do not. Hiding a class hides its pins without dropping its reports.
+
+![hiding a class](docs/mapa_filtro_clase.jpg)
+
 ## What it costs on the aircraft
 
 Measured on a Raspberry Pi 5 with the real camera, detector plus OSNet
