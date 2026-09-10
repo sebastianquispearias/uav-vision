@@ -449,6 +449,13 @@ class VisionProtocol(IProtocol):
             crop = p.pop("crop", None)
             if crop:
                 p["crop"] = base64.b64encode(crop).decode("ascii")
+            # Half precision on purpose. The vector is only ever compared by cosine, and at
+            # float16 that comparison is unchanged to six decimals, while the field costs
+            # 1.4 kB instead of 2.7 -- and this link is a 4G dongle, not a lab cable.
+            emb = p.pop("emb", None)
+            if emb is not None:
+                p["emb"] = base64.b64encode(
+                    np.asarray(emb, dtype=np.float16).tobytes()).decode("ascii")
 
         ritmo = self._ritmo()
         message = {

@@ -435,4 +435,9 @@ class IncrementalIdentity:
             # Raw JPEG bytes, or None. Serialising it is the transport's problem, not this
             # layer's; the protocol base64-encodes it on the way out.
             "crop": c.get("crop"),
+            # The appearance vector, same convention as the crop: raw here, encoded by the
+            # transport. It leaves the drone because deciding that two drones are looking at
+            # one target is a comparison neither of them can make alone, and position is not
+            # enough: two people three metres apart are two people.
+            "emb": c.get("emb"),
         } for c in out]
