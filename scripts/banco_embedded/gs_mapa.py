@@ -63,6 +63,11 @@ ESTADO = {
     # with". The counter lets the drone notice a change without diffing lists.
     'buscar': None,
     'buscar_v': 0,
+
+    # One list per drone. A single shared list was replaced on every report, so a second
+    # drone erased the first one's targets and the map flickered between the two views.
+    # What the operator sees is the concatenation, kept in 'pois'.
+    'pois_por_dron': {},
 }
 CANDADO = threading.Lock()
 
@@ -157,7 +162,11 @@ def registrar(mensaje, fuente):
             't': ahora,
         })
     with CANDADO:
-        ESTADO['pois'] = pois
+        ESTADO['pois_por_dron'][str(fuente)] = pois
+        # Concatenated, not merged: two drones seeing the same person still produce two pins
+        # until something decides they are the same target. Showing both is the honest state
+        # of affairs; hiding one would be a claim nobody has made yet.
+        ESTADO['pois'] = [q for lista in ESTADO['pois_por_dron'].values() for q in lista]
         ESTADO['historia'].append({'t': ahora, 'n': len(pois),
                                    'frames': mensaje.get('frames_seen')})
         ESTADO['historia'][:] = ESTADO['historia'][-500:]
