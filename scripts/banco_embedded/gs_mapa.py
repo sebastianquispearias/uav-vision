@@ -224,6 +224,46 @@ def fundir(por_dron):
     return salida
 
 
+def pedidos_de_verificacion(pois, drones, ahora, vivo_s=10.0):
+    """
+    Which targets are worth a second look, and by whom.
+
+    The station proposes; it does not command. A drone that flies because another one sent it
+    a JSON is not something you can put in the air here: the 4G link carries data and the
+    stick stays with the pilot (DECEA). So this returns a list an operator reads, with the
+    point to fly to already computed.
+
+    A target earns a request when it is unconfirmed, when only one drone has seen it, and when
+    some other drone is alive to go. Unconfirmed and seen by two is not a request: the second
+    look already happened and the answer was still 'not sure', which is a different problem.
+    """
+    vivos = [d for d, f in drones.items() if ahora - f.get('t', 0) < vivo_s]
+    if len(vivos) < 2:
+        return []
+    salida = []
+    for p in pois:
+        if p.get('mature'):
+            continue
+        vistos = p.get('drones') or [str(p.get('dron'))]
+        if len(vistos) > 1:
+            continue
+        libres = [d for d in vivos if d not in vistos]
+        if not libres:
+            continue
+        salida.append({
+            'cls': p.get('cls'),
+            'x': p.get('x'), 'y': p.get('y'),
+            'lat': p.get('lat'), 'lng': p.get('lng'),
+            'n_obs': p.get('n_obs'),
+            'visto_por': vistos[0],
+            # The nearest idle drone would be better, but the station does not know where the
+            # others are: a report carries the target's position, not the drone's. Naming them
+            # all and letting the operator choose is honest; guessing would not be.
+            'puede_ir': sorted(libres),
+        })
+    return salida
+
+
 def registrar(mensaje, fuente):
     ahora = time.time()
     with CANDADO:
@@ -332,11 +372,18 @@ class Handler(server.BaseHTTPRequestHandler):
                     'origen_cli': ESTADO['origen_cli'],
                     'desacuerdo': ESTADO['desacuerdo'],
                     'georef': ESTADO['georef'],
+                    'pedidos': pedidos_de_verificacion(
+                        ESTADO['pois'], ESTADO['drones'], time.time()),
                     'tiene_fondo': ESTADO['fondo'] is not None,
                     'ahora': time.time(),
                     'reportes': len(ESTADO['historia']),
                 }
             self._responder(json.dumps(d).encode('utf-8'))
+        elif ruta == '/pedidos':
+            with CANDADO:
+                d = pedidos_de_verificacion(
+                    ESTADO['pois'], ESTADO['drones'], time.time())
+            self._responder(json.dumps({'pedidos': d}).encode('utf-8'))
         elif ruta == '/buscar':
             with CANDADO:
                 d = {'clases': ESTADO['buscar'], 'v': ESTADO['buscar_v']}
@@ -399,6 +446,13 @@ PAGINA = r"""<!doctype html>
   #buscar button.on { background:var(--ok); border-color:var(--ok); color:#0b0e14; }
   #buscar .etq { font:600 10px system-ui; letter-spacing:.08em; text-transform:uppercase;
                  color:var(--tenue); margin-right:2px; }
+  #pedidos { margin-bottom:12px; }
+  #pedidos .cab { font:600 10px system-ui; letter-spacing:.08em; text-transform:uppercase;
+                  color:var(--duda); margin-bottom:6px; }
+  #pedidos .item { border-left:3px solid var(--duda); background:rgba(251,191,36,.07);
+                   padding:7px 10px; border-radius:0 6px 6px 0; margin-bottom:6px;
+                   font-size:12px; line-height:1.5; }
+  #pedidos .coord { color:var(--tenue); font-size:11px; }
   .poi dl { margin:8px 0 0; display:grid; grid-template-columns:auto 1fr;
             gap:2px 10px; font-size:13px; }
   .poi dt { color:var(--tenue); }
@@ -428,6 +482,7 @@ PAGINA = r"""<!doctype html>
   <canvas id="lienzo"></canvas>
   <aside>
     <h2>Detecciones</h2>
+    <div id="pedidos"></div>
     <div id="buscar"></div>
     <div id="filtro"></div>
     <div id="lista"><div class="vacio">Nada todavia.</div></div>
@@ -630,6 +685,7 @@ async function refrescar() {
     const vivo = drones.length && edad < 10;
     document.getElementById('luz').className = 'punto' + (vivo ? ' vivo' : '');
     pintarBotonFondo();
+    pintarPedidos(estado.pedidos || []);
     document.getElementById('enlace').textContent = !drones.length
       ? 'esperando al dron'
       : (vivo ? `dron activo (hace ${edad.toFixed(0)} s)`
@@ -657,6 +713,22 @@ async function refrescar() {
 }
 redimensionar();
 refrescar();
+// -- what the station proposes ----------------------------------------------
+// A suggestion with the point already computed, never an order. The link carries data; the
+// stick stays with the pilot. Writing it as a command here would be writing a behaviour that
+// cannot legally fly.
+function pintarPedidos(pedidos) {
+  const c = document.getElementById('pedidos');
+  if (!pedidos.length) { c.innerHTML = ''; return; }
+  c.innerHTML = '<div class="cab">verificacion sugerida</div>' + pedidos.map(p => `
+    <div class="item">
+      <b>${p.cls || 'sin clase'}</b> sin confirmar, visto solo por el dron ${p.visto_por}.
+      Podria ir: ${p.puede_ir.join(', ')}.
+      <div class="coord">${p.x} m E, ${p.y} m N${
+        p.lat != null ? ` &middot; ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}` : ''}</div>
+    </div>`).join('');
+}
+
 // -- the imagery ------------------------------------------------------------
 // Off by default. The metric grid is the honest view: it shows where the pins
 // are with respect to each other and to the origin, and it is right anywhere.
