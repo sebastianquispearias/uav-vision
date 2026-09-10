@@ -42,6 +42,20 @@ from uav_vision.pinhole_local import project_to_pixel
 Detection = Dict[str, float]
 
 
+def solo_confirmadas(detections, threshold):
+    """
+    Drops the weak boxes the tracker did not claim.
+
+    With the BYTE band open the detector returns boxes below the reporting threshold. Those
+    are worth having only as evidence that something already being followed is still there:
+    a box the tracker attached to an existing track. One that arrives unattached is a guess,
+    and it must not reach the fusion, which unlike the identity layer does not check
+    'track_id' before using a detection.
+    """
+    return [d for d in detections
+            if d["conf"] >= threshold or "track_id" in d]
+
+
 class SimulatedCamera:
     """
     Simulation camera: there is no image, the pixel is computed geometrically by projecting a
@@ -133,6 +147,11 @@ class OnboardCamera:
         self,
         model: str,
         threshold: float = 0.3,
+        # The BYTE band. With a tracker running, the detector is asked for boxes down to this
+        # score, but only those the tracker attached to an existing track are reported. A person
+        # the detector merely doubted keeps her track alive; a box out of nowhere does not become
+        # a target, because new_track_thresh still guards that. None disables the band.
+        low_band: Optional[float] = 0.2,
         classes: Optional[Sequence[str]] = None,
         camera: CameraConfig = ARDUCAM_MODULE_3,
         rot180: bool = True,
@@ -149,6 +168,7 @@ class OnboardCamera:
     ) -> None:
         self.model = model
         self.threshold = threshold
+        self.low_band = low_band
         self.classes = frozenset(classes) if classes is not None else self.CLASES_PERSONA
         # When the camera is mounted upside-down the ISP un-flips the image at capture time
         # (hflip+vflip). That remapping moves the calibrated principal point, so the effective
@@ -366,7 +386,14 @@ class OnboardCamera:
         # Converting the whole frame once, here, is what keeps the three consumers agreeing.
         # It costs 1.70 ms against 184 ms of inference on the Pi 5 -- 0.9% of the frame.
         frame = cv2.cvtColor(self._picam.capture_array(), cv2.COLOR_RGB2BGR)
-        resultados = self._yolo(frame, verbose=False, conf=self.threshold)
+        # Asking below the reporting threshold costs no extra inference: the detector already
+        # scored these boxes and was discarding them. Measured on the 02ago flight, the 0.2-0.3
+        # band closes 77 of the 226 gaps where a person is present in a frame and absent from
+        # the next one. The band is filtered back out below unless the tracker claimed it.
+        piso = self.threshold
+        if self._tracker is not None and self.low_band is not None:
+            piso = min(self.threshold, self.low_band)
+        resultados = self._yolo(frame, verbose=False, conf=piso)
 
         detections: List[Detection] = []
         cajas: List[np.ndarray] = []
@@ -398,6 +425,9 @@ class OnboardCamera:
         if self.crops and detections:
             for det, caja in zip(detections, cajas):
                 det["crop"] = self._crop(frame, caja)
+
+        if piso < self.threshold:
+            detections = solo_confirmadas(detections, self.threshold)
 
         return detections
 
