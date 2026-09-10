@@ -19,6 +19,7 @@ ground truth.
 """
 
 import os
+import json
 import subprocess
 import sys
 import time
@@ -30,6 +31,13 @@ RAIZ = os.path.dirname(AQUI)
 DATOS = os.path.join(AQUI, "data")
 REPLAY = os.path.join(RAIZ, "scripts", "replay_vuelo3.py")
 GS = os.path.join(RAIZ, "scripts", "banco_embedded", "gs_mapa.py")
+# Satellite imagery for the map background. It lives in the sibling repo that
+# holds the flight data, so a clone of this one alone simply gets the metric
+# grid: the pins are in the right place either way, and the station hides the
+# switch when there is nothing to switch to.
+_SAT = os.path.join(RAIZ, "..", "drone-geolocation", "entrenamiento")
+FONDO = os.path.join(_SAT, "satelite_zona.png")
+GEOREF = os.path.join(_SAT, "satelite_georef.txt")
 
 PUERTO = 8300
 # The surveyed reference post of that flight. The map is drawn around it.
@@ -53,21 +61,52 @@ def esperar(url, intentos=25):
 def main():
     con_mapa = "--sin-mapa" not in sys.argv
     # Flags the replay understands are forwarded rather than reimplemented here.
-    extra = [a for a in sys.argv[1:] if a in ("--vehiculos", "--preliminares")]
+    extra = [a for a in sys.argv[1:]
+             if a in ("--vehiculos", "--preliminares", "--vivo")
+             or a.startswith("--velocidad=")]
+    # --vivo is the operator's demo: the flight plays against the wall clock
+    # and the drone asks the map what to look for. It starts on vehicles and
+    # reports unconfirmed candidates, because a class asked for mid-flight
+    # arrives with half a pass behind it -- which the map shows as POR
+    # VERIFICAR rather than hiding. Asking early is what earns a CONFIRMADO.
+    vivo = "--vivo" in extra
+    if vivo and "--preliminares" not in extra:
+        extra.append("--preliminares")
     entorno = dict(os.environ, UAV_VISION_DATOS=DATOS)
     estacion = None
 
     if con_mapa:
         print("levantando la estacion de tierra en el puerto %d..." % PUERTO)
+        orden_gs = [sys.executable, GS, "--puerto", str(PUERTO), "--origen=" + ORIGEN]
+        if os.path.exists(FONDO) and os.path.exists(GEOREF):
+            orden_gs += ["--fondo", FONDO, "--georef", GEOREF]
+        else:
+            print("  sin imagen de satelite: el mapa usa la cuadricula metrica")
         estacion = subprocess.Popen(
-            [sys.executable, GS, "--puerto", str(PUERTO), "--origen=" + ORIGEN],
+            orden_gs,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if esperar("http://%s:%d/estado" % (HOST, PUERTO)):
             entorno["UAV_VISION_GS"] = "http://%s:%d/" % (HOST, PUERTO)
+            if vivo:
+                # Seed the order so the flight starts on vehicles: the operator's
+                # click has to add something, not merely confirm what was already
+                # being reported.
+                try:
+                    urllib.request.urlopen(urllib.request.Request(
+                        "http://%s:%d/buscar" % (HOST, PUERTO),
+                        data=json.dumps({"clases": ["car"]}).encode(),
+                        headers={"Content-Type": "application/json"}), timeout=2).read()
+                except Exception as e:
+                    print("  no se pudo fijar la clase inicial: %s" % e)
             webbrowser.open("http://%s:%d/" % (HOST, PUERTO))
         else:
             print("  no arranco; sigo sin mapa")
 
+    if vivo:
+        print("")
+        print("  EN VIVO. El dron arranca buscando VEHICULOS.")
+        print("  Pulsa 'person' en la fila BUSCANDO del mapa, en el primer")
+        print("  tercio del vuelo, y mira aparecer al operador.")
     print("reproduciendo el vuelo del 2026-08-02...\n")
     try:
         subprocess.run([sys.executable, REPLAY] + extra, env=entorno, check=True)

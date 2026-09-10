@@ -56,6 +56,13 @@ ESTADO = {
     'georef': None,
     'fondo': None,
     'arranque': time.time(),
+
+    # What the operator asks the drone to look for. This is NOT the display
+    # filter below it: hiding a class only stops drawing it, while this changes
+    # what the detector reports at all. None means "whatever the drone booted
+    # with". The counter lets the drone notice a change without diffing lists.
+    'buscar': None,
+    'buscar_v': 0,
 }
 CANDADO = threading.Lock()
 
@@ -175,6 +182,24 @@ class Handler(server.BaseHTTPRequestHandler):
     def do_POST(self):
         largo = int(self.headers.get('Content-Length', 0))
         crudo = self.rfile.read(largo)
+        if self.path.split('?')[0] == '/buscar':
+            # The operator's side of the control plane. Answering before the
+            # drone has polled is deliberate: the order is stored, not routed,
+            # so the station never blocks on a link it does not control.
+            try:
+                clases = json.loads(crudo).get('clases')
+            except Exception:
+                self._responder(b'{"error": "json"}', codigo=400)
+                return
+            with CANDADO:
+                ESTADO['buscar'] = list(clases) if clases else None
+                ESTADO['buscar_v'] += 1
+                v = ESTADO['buscar_v']
+            print('[%s] el operador pide buscar: %s' %
+                  (datetime.now().strftime('%H:%M:%S'), clases or '(lo de siempre)'),
+                  flush=True)
+            self._responder(json.dumps({'clases': clases, 'v': v}).encode('utf-8'))
+            return
         self._responder(b'{"status": "ok"}')
         try:
             payload = json.loads(crudo)
@@ -206,6 +231,10 @@ class Handler(server.BaseHTTPRequestHandler):
                     'ahora': time.time(),
                     'reportes': len(ESTADO['historia']),
                 }
+            self._responder(json.dumps(d).encode('utf-8'))
+        elif ruta == '/buscar':
+            with CANDADO:
+                d = {'clases': ESTADO['buscar'], 'v': ESTADO['buscar_v']}
             self._responder(json.dumps(d).encode('utf-8'))
         elif ruta == '/fondo':
             if not ESTADO['fondo']:
@@ -249,11 +278,22 @@ PAGINA = r"""<!doctype html>
   .chip.duda { background:rgba(251,191,36,.15); color:var(--duda); }
   .chip.mobile { background:rgba(96,165,250,.15); color:var(--mobile); }
   .chip.clase { background:rgba(230,233,239,.10); color:var(--texto); }
+  #btn-fondo { font:600 11px system-ui; padding:3px 10px; border-radius:99px;
+               cursor:pointer; border:1px solid var(--linea); background:#171b23;
+               color:var(--tenue); }
+  #btn-fondo.on { background:var(--texto); border-color:var(--texto); color:#0b0e14; }
   #filtro { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
   #filtro button { font:600 11px system-ui; padding:3px 9px; border-radius:99px;
                    cursor:pointer; border:1px solid var(--linea); background:#171b23;
                    color:var(--texto); }
   #filtro button.off { color:var(--tenue); text-decoration:line-through; opacity:.55; }
+  #buscar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:10px; }
+  #buscar button { font:600 11px system-ui; padding:3px 9px; border-radius:99px;
+                   cursor:pointer; border:1px solid var(--linea); background:#171b23;
+                   color:var(--tenue); }
+  #buscar button.on { background:var(--ok); border-color:var(--ok); color:#0b0e14; }
+  #buscar .etq { font:600 10px system-ui; letter-spacing:.08em; text-transform:uppercase;
+                 color:var(--tenue); margin-right:2px; }
   .poi dl { margin:8px 0 0; display:grid; grid-template-columns:auto 1fr;
             gap:2px 10px; font-size:13px; }
   .poi dt { color:var(--tenue); }
@@ -276,12 +316,14 @@ PAGINA = r"""<!doctype html>
     <span id="cuenta">0 POI</span>
     <span id="ritmo"></span>
     <span id="reportes">0 reportes</span>
+    <button id="btn-fondo" hidden>satelite</button>
   </div>
 </header>
 <main>
   <canvas id="lienzo"></canvas>
   <aside>
     <h2>Detecciones</h2>
+    <div id="buscar"></div>
     <div id="filtro"></div>
     <div id="lista"><div class="vacio">Nada todavia.</div></div>
     <div class="nota">
@@ -290,8 +332,10 @@ PAGINA = r"""<!doctype html>
       <b style="color:var(--duda)">POR VERIFICAR</b>: se formo una pista pero no alcanzo a
       madurar. Es lo que produce una pasada corta. No es un hallazgo: es un pedido de
       verificacion.<br>
-      Los botones de arriba ocultan clases. Ocultar no borra: el POI sigue llegando y vuelve
-      con un clic.
+      La rueda del raton aleja y acerca el mapa.<br>
+      <b>BUSCANDO</b> cambia lo que el dron detecta, en caliente y sin recargar el modelo.
+      Los botones de debajo solo <b>ocultan</b>: el POI sigue llegando y vuelve con un clic.
+      Uno manda sobre el sensor; el otro, sobre el dibujo.
     </div>
   </aside>
 </main>
@@ -303,6 +347,14 @@ let fondo = null, estado = null;
 // kept so a button does not vanish the moment its last POI leaves the frame -- it would take
 // the operator's filter with it, silently.
 let ocultas = new Set(), clasesVistas = [];
+// Declared here, not next to its button: redimensionar() draws on load, before
+// the button block runs, and a `let` read from the temporal dead zone throws and
+// takes the whole script with it -- empty counters, no controls, black canvas.
+let verFondo = false;
+// The frame is fitted to the POIs, which with a single pin is 33 m across: tight
+// enough to place it against the grid, too tight for the imagery to say where on
+// earth this is. The wheel widens it without moving the fit.
+let zoom = 1;
 // What is actually drawn: the POIs surviving the filter. Kept apart from estado.pois so
 // dibujar(), which also runs on resize and when the imagery loads, never has to re-filter.
 let visibles = [];
@@ -333,7 +385,7 @@ function ajustarVista(pois) {
   let e0=1e9,e1=-1e9,n0=1e9,n1=-1e9;
   for (const p of pois) { e0=Math.min(e0,p.x); e1=Math.max(e1,p.x);
                           n0=Math.min(n0,p.y); n1=Math.max(n1,p.y); }
-  const m = Math.max(12, (e1-e0), (n1-n0)) * 0.7 + 8;
+  const m = (Math.max(12, (e1-e0), (n1-n0)) * 0.7 + 8) * zoom;
   const ce=(e0+e1)/2, cn=(n0+n1)/2;
   vista = {e0:ce-m, e1:ce+m, n0:cn-m, n1:cn+m};
 }
@@ -344,7 +396,7 @@ function ajustarVista(pois) {
 function dibujarFondo() {
   const r = lienzo.getBoundingClientRect();
   ctx.fillStyle = '#0b0d12'; ctx.fillRect(0, 0, r.width, r.height);
-  if (fondo && estado && estado.georef && estado.origen) {
+  if (verFondo && fondo && estado && estado.georef && estado.origen) {
     const [lat0, lon0, lat1, lon1] = estado.georef;
     const [olat, olon] = estado.origen;
     const R = 6378137.0, gr = Math.PI/180;
@@ -472,6 +524,7 @@ async function refrescar() {
     const edad = estado.ahora - ultimo;
     const vivo = drones.length && edad < 10;
     document.getElementById('luz').className = 'punto' + (vivo ? ' vivo' : '');
+    pintarBotonFondo();
     document.getElementById('enlace').textContent = !drones.length
       ? 'esperando al dron'
       : (vivo ? `dron activo (hace ${edad.toFixed(0)} s)`
@@ -499,6 +552,68 @@ async function refrescar() {
 }
 redimensionar();
 refrescar();
+// -- the imagery ------------------------------------------------------------
+// Off by default. The metric grid is the honest view: it shows where the pins
+// are with respect to each other and to the origin, and it is right anywhere.
+// The imagery answers a different question -- where on earth this is -- and it
+// is only as good as its georeference, so it goes behind a switch the operator
+// can turn off when comparing positions.
+function pintarBotonFondo() {
+  const b = document.getElementById('btn-fondo');
+  const hay = !!(estado && estado.tiene_fondo && estado.georef && estado.origen);
+  b.hidden = !hay;
+  b.className = verFondo ? 'on' : '';
+  b.textContent = verFondo ? 'satelite' : 'cuadricula';
+  b.title = verFondo ? 'quitar la imagen y volver a la cuadricula metrica'
+                     : 'poner la imagen de satelite de fondo';
+}
+
+lienzo.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  zoom = Math.min(40, Math.max(0.6, zoom * (ev.deltaY > 0 ? 1.25 : 0.8)));
+  // pintar() is the one that reframes; dibujar() would redraw the old window.
+  if (estado) pintar(); else dibujar();
+}, {passive: false});
+
+document.getElementById('btn-fondo').onclick = () => {
+  verFondo = !verFondo;
+  pintarBotonFondo();
+  dibujar();
+};
+
+// -- the control plane -------------------------------------------------------
+// Kept apart from the display filter on purpose: these buttons travel to the
+// drone. The list is what the detector emits, not what has been seen so far --
+// a class you have never received is exactly the one you may want to ask for.
+const BUSCABLES = ['person', 'car', 'truck', 'bus', 'boat'];
+let buscando = null;
+
+function pintarBuscar() {
+  const sel = new Set(buscando || []);
+  const cont = document.getElementById('buscar');
+  cont.innerHTML = '<span class="etq">buscando</span>' + BUSCABLES.map(c =>
+    `<button data-b="${c}" class="${sel.has(c) ? 'on' : ''}">${c}</button>`).join('');
+  for (const b of cont.querySelectorAll('button')) {
+    b.onclick = async () => {
+      const c = b.dataset.b;
+      if (sel.has(c)) sel.delete(c); else sel.add(c);
+      const clases = [...sel];
+      try {
+        await fetch('/buscar', {method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({clases})});
+        buscando = clases;
+      } catch (e) { /* the station is the one that just answered us; ignore */ }
+      pintarBuscar();
+    };
+  }
+}
+
+fetch('/buscar').then(r => r.json()).then(d => {
+  buscando = d.clases || [];
+  pintarBuscar();
+}).catch(() => pintarBuscar());
+
 setInterval(refrescar, 1000);
 </script>
 </body></html>"""
@@ -564,4 +679,22 @@ if __name__ == '__main__':
 
     print('Ground Station en http://localhost:%d  (POST del enjambre en el mismo puerto)'
           % args.puerto)
+    # Windows lets a second station bind a port that already has one, and then
+    # the reports go to whichever socket accepts first. The symptom is a map that
+    # stays empty while the flight clearly runs, and it has cost two sessions.
+    # Refuse instead of guessing.
+    try:
+        import urllib.request
+        urllib.request.urlopen('http://127.0.0.1:%d/estado' % args.puerto,
+                               timeout=1).read()
+    except Exception:
+        pass
+    else:
+        print('YA HAY UNA ESTACION EN EL PUERTO %d.' % args.puerto)
+        print('Arrancar otra encima parte los reportes entre las dos y el mapa')
+        print('se queda vacio sin decir por que. Cerra la anterior:')
+        print('  netstat -ano | findstr LISTENING | findstr :%d' % args.puerto)
+        print('  taskkill /PID <numero> /F')
+        raise SystemExit(1)
+
     server.ThreadingHTTPServer(('0.0.0.0', args.puerto), Handler).serve_forever()

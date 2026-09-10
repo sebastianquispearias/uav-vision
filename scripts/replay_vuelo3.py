@@ -54,7 +54,20 @@ else:
 
 # Vehicles are opt-in. The people-only run is the equivalence gate of this repo
 # -- it must keep printing 2.39 m -- so nothing about it changes unless asked.
-CON_VEHICULOS = "--vehiculos" in sys.argv
+# ------------------------------------------------------- ground station --
+# Off unless asked for. With UAV_VISION_GS set, the reports the protocol
+# produced are pushed to a running gs_mapa, paced so the map fills the way it
+# would during the flight instead of appearing all at once. Declared up here
+# because --vivo needs it inside the flight loop, not after it.
+_GS = os.environ.get("UAV_VISION_GS")
+
+VIVO = "--vivo" in sys.argv
+# --vivo only makes sense with something to switch to, so it implies --vehiculos.
+CON_VEHICULOS = "--vehiculos" in sys.argv or VIVO
+# How much faster than the wall clock the flight is replayed. The flight lasted
+# about 11 min; 20x puts it under 35 s, long enough to click during it.
+VELOCIDAD = next((float(a.split("=")[1]) for a in sys.argv
+                  if a.startswith("--velocidad=")), 20.0)
 VEHICULOS_NPZ = os.path.join(_DATOS or os.path.join(_HERE, "demo", "data"),
                              "vehiculos.npz")
 
@@ -93,10 +106,33 @@ class CamaraReplay:
         self.camera = camera
         self.frame = None
         self._servido = True
+        self.clases = None
+        self.servidas = {}      # what actually reached the protocol, by class
 
     def set_frame(self, frame):
         self.frame = frame
         self._servido = False
+
+    # The real camera receives every class the detector knows and drops the ones
+    # nobody asked for. This stand-in serves cached detections, so it has to do
+    # the same or the switch would be a lie: the operator would see the drawing
+    # change while the sensor kept reporting everything.
+    #
+    # The alias exists because this replay labels people "pedestrian" to keep
+    # them apart from the vehicle path, while the operator's console speaks the
+    # names the detector emits.
+    _ALIAS = {"person": "pedestrian"}
+
+    def set_classes(self, classes=None):
+        if not classes:
+            self.clases = None
+            return
+        self.clases = {self._ALIAS.get(c, c) for c in classes}
+
+    def _pasa(self, cls):
+        # None means "this source has no opinion on class": it is served
+        # whatever is asked, exactly as the protocol treats a missing cls.
+        return self.clases is None or cls is None or cls in self.clases
 
     def detect(self, pos, yaw):
         del pos, yaw
@@ -105,6 +141,9 @@ class CamaraReplay:
         self._servido = True
         salida = []
         for d, tid, emb, cls in self.dets_por_frame.get(self.frame, []):
+            if not self._pasa(cls):
+                continue
+            self.servidas[cls] = self.servidas.get(cls, 0) + 1
             x1, y1, x2, y2 = d[2:6]
             det = {
                 "px": float((x1 + x2) / 2),
@@ -317,15 +356,91 @@ protocol.initialize()
 camera = protocol.camera
 
 t0 = float(poses[frames_aire[0]]["t_mono"])
-for f in frames_aire:
-    p = poses[f]
-    provider.time = float(p["t_mono"]) - t0
-    x, y = enu(float(p["lat"]), float(p["lng"]))
-    state["yaw"] = float(p["yaw"])
-    protocol.handle_telemetry(Telemetry(current_position=(x, y, float(p["alt_agl"]))))
-    camera.set_frame(f)
-    provider.fire_due(protocol)
-protocol.finish()
+
+# --------------------------------------------------------- the live mode ---
+# Without --vivo nothing below changes: the loop runs as fast as it can and the
+# reports are posted at the end, which is what the equivalence gate measures.
+#
+# With --vivo the flight is paced against the wall clock, the drone asks the
+# station what it should be looking for, and each report leaves as it is
+# produced. That last part is what makes the switch visible: a batch sent at the
+# end would show the final answer and hide the moment it changed.
+_ORDEN = {"v": -1}
+
+
+def _consultar_orden():
+    """Ask the station what to look for. A dead link leaves things as they are."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(_GS.rstrip("/") + "/buscar", timeout=0.4) as r:
+            d = json.loads(r.read())
+    except Exception:
+        return
+    if d.get("v") == _ORDEN["v"]:
+        return
+    _ORDEN["v"] = d.get("v")
+    camera.set_classes(d.get("clases"))
+    # The flight second matters more than the wall clock: whether an order
+    # arrived in time is a question about the flight, not about the operator.
+    print("  [operador] segundo %.0f del vuelo: ahora se busca %s"
+          % (provider.time, d.get("clases") or "(todo)"), flush=True)
+
+
+def _mandar_nuevos(desde):
+    """Post the reports produced since `desde`; returns how many are out."""
+    import urllib.request
+    for c in provider.sent[desde:]:
+        cuerpo = json.dumps({"message": c.message, "source": 1}).encode("utf-8")
+        pedido = urllib.request.Request(
+            _GS, data=cuerpo, headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(pedido, timeout=2).read()
+        except Exception as e:
+            print("  no se pudo enviar: %s" % e, flush=True)
+            break
+    return len(provider.sent)
+
+
+if VIVO:
+    import time as _t
+    if not _GS:
+        sys.exit("--vivo necesita la estacion de tierra: exporta GS_URL o usa demo.py")
+    print("")
+    print("EN VIVO a %gx. Abri %s y pulsa los botones de BUSCANDO."
+          % (VELOCIDAD, _GS))
+    _consultar_orden()
+    _reloj = _t.time()
+    _fuera = 0
+    for i, f in enumerate(frames_aire):
+        p = poses[f]
+        provider.time = float(p["t_mono"]) - t0
+        # Pace against the wall clock so there is time to click mid-flight.
+        _retraso = provider.time / VELOCIDAD - (_t.time() - _reloj)
+        if _retraso > 0:
+            _t.sleep(min(_retraso, 0.25))
+        if i % 10 == 0:
+            _consultar_orden()
+        x, y = enu(float(p["lat"]), float(p["lng"]))
+        state["yaw"] = float(p["yaw"])
+        protocol.handle_telemetry(
+            Telemetry(current_position=(x, y, float(p["alt_agl"]))))
+        camera.set_frame(f)
+        provider.fire_due(protocol)
+        if len(provider.sent) > _fuera:
+            _fuera = _mandar_nuevos(_fuera)
+    protocol.finish()
+    _mandar_nuevos(_fuera)
+else:
+    for f in frames_aire:
+        p = poses[f]
+        provider.time = float(p["t_mono"]) - t0
+        x, y = enu(float(p["lat"]), float(p["lng"]))
+        state["yaw"] = float(p["yaw"])
+        protocol.handle_telemetry(
+            Telemetry(current_position=(x, y, float(p["alt_agl"]))))
+        camera.set_frame(f)
+        provider.fire_due(protocol)
+    protocol.finish()
 
 reportes = [json.loads(c.message) for c in provider.sent]
 assert reportes, "el protocolo no reporto nada"
@@ -337,6 +452,9 @@ pois = reportes[-1]["pois"]
 todos = protocol.identity.candidates(preliminary=True)
 maduros = sum(1 for c in todos if c.get("mature"))
 print("")
+if VIVO:
+    print("  la camara sirvio: %s"
+          % dict(sorted(camera.servidas.items(), key=lambda kv: str(kv[0]))))
 print(f"candidatos formados: {len(todos)} ({maduros} maduros)")
 for c in todos:
     print(f"  {str(c.get('cls')):>10} n_obs {c['n_obs']:>4} "
@@ -367,11 +485,7 @@ print("  vuelo 3 (un solo consenso mezclado) queda resuelto en linea.")
 
 
 # ------------------------------------------------------- ground station --
-# Off unless asked for. With UAV_VISION_GS set, the reports the protocol
-# produced are pushed to a running gs_mapa, paced so the map fills the way it
-# would during the flight instead of appearing all at once.
-_GS = os.environ.get("UAV_VISION_GS")
-if _GS:
+if _GS and not VIVO:
     import time
     import urllib.request
 
