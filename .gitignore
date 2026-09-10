@@ -11,3 +11,10 @@ ESTADO_SESION.md
 # Interview prep, in Spanish, for the author only. Same reasoning as above: this repo is the
 # portfolio, and a reader of it has no use for these.
 HISTORIAS_ENTREVISTA.md
+
+# Frames del vuelo real y capturas que muestran el sitio. Se regeneran con
+# scripts/ver_coche.py y scripts/dos_clases_real.py cuando hacen falta; el
+# repositorio es el portafolio y no publica material del vuelo.
+docs/coche_verificado.png
+docs/dos_clases_real.png
+docs/mapa_satelite_vivo.jpg
