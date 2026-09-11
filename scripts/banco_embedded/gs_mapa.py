@@ -87,6 +87,12 @@ ESTADO = {
     # drone erased the first one's targets and the map flickered between the two views.
     # What the operator sees is the concatenation, kept in 'pois'.
     'pois_por_dron': {},
+
+    # Which frame the bench replay is on, and where the frames live. Only the bench sends
+    # this: a real drone ships coordinates, not pictures, and the link could not carry them.
+    # It exists so a demo can put what the camera saw next to what the map made of it.
+    'frame_actual': None,
+    'frames_dir': None,
 }
 CANDADO = threading.Lock()
 
@@ -218,6 +224,16 @@ class Handler(server.BaseHTTPRequestHandler):
     def do_POST(self):
         largo = int(self.headers.get('Content-Length', 0))
         crudo = self.rfile.read(largo)
+        if self.path.split('?')[0] == '/frame_actual':
+            try:
+                n = int(json.loads(crudo).get('n'))
+            except Exception:
+                self._responder(b'{"error": "n"}', codigo=400)
+                return
+            with CANDADO:
+                ESTADO['frame_actual'] = n
+            self._responder(b'{"status": "ok"}')
+            return
         if self.path.split('?')[0] == '/buscar':
             # The operator's side of the control plane. Answering before the
             # drone has polled is deliberate: the order is stored, not routed,
@@ -266,10 +282,23 @@ class Handler(server.BaseHTTPRequestHandler):
                     'pedidos': pedidos_de_verificacion(
                         ESTADO['pois'], ESTADO['drones'], time.time()),
                     'tiene_fondo': ESTADO['fondo'] is not None,
+                    'frame_actual': ESTADO['frame_actual'],
                     'ahora': time.time(),
                     'reportes': len(ESTADO['historia']),
                 }
             self._responder(json.dumps(d).encode('utf-8'))
+        elif ruta == '/frame':
+            with CANDADO:
+                n, base = ESTADO['frame_actual'], ESTADO['frames_dir']
+            if n is None or not base:
+                self._responder(b'sin frame', 'text/plain', 404)
+                return
+            ruta_img = os.path.join(base, 'frame_%04d.jpg' % n)
+            if not os.path.exists(ruta_img):
+                self._responder(b'no existe', 'text/plain', 404)
+                return
+            with open(ruta_img, 'rb') as fh:
+                self._responder(fh.read(), 'image/jpeg')
         elif ruta == '/pedidos':
             with CANDADO:
                 d = pedidos_de_verificacion(
@@ -337,6 +366,10 @@ PAGINA = r"""<!doctype html>
   #buscar button.on { background:var(--ok); border-color:var(--ok); color:#0b0e14; }
   #buscar .etq { font:600 10px system-ui; letter-spacing:.08em; text-transform:uppercase;
                  color:var(--tenue); margin-right:2px; }
+  #camara { margin-bottom:12px; display:none; }
+  #camara img { width:100%; border-radius:6px; display:block; border:1px solid var(--linea); }
+  #camara .cab { font:600 10px system-ui; letter-spacing:.08em; text-transform:uppercase;
+                 color:var(--tenue); margin-bottom:6px; }
   #pedidos { margin-bottom:12px; }
   #pedidos .cab { font:600 10px system-ui; letter-spacing:.08em; text-transform:uppercase;
                   color:var(--duda); margin-bottom:6px; }
@@ -373,6 +406,7 @@ PAGINA = r"""<!doctype html>
   <canvas id="lienzo"></canvas>
   <aside>
     <h2>Detecciones</h2>
+    <div id="camara"><div class="cab">lo que ve la camara</div><img alt=""></div>
     <div id="pedidos"></div>
     <div id="buscar"></div>
     <div id="filtro"></div>
@@ -577,6 +611,7 @@ async function refrescar() {
     document.getElementById('luz').className = 'punto' + (vivo ? ' vivo' : '');
     pintarBotonFondo();
     pintarPedidos(estado.pedidos || []);
+    pintarCamara(estado.frame_actual);
     document.getElementById('enlace').textContent = !drones.length
       ? 'esperando al dron'
       : (vivo ? `dron activo (hace ${edad.toFixed(0)} s)`
@@ -604,6 +639,25 @@ async function refrescar() {
 }
 redimensionar();
 refrescar();
+// -- what the camera saw ----------------------------------------------------
+// Next to the map, not instead of it. A pin on a grid is an assertion; the frame behind it is
+// what the assertion was made from, and putting the two side by side is the difference between
+// being told the system works and watching it work.
+//
+// The frame number is in the query string so the browser fetches a new image when it changes
+// and reuses the cached one when it does not.
+let frameVisto = null;
+
+function pintarCamara(n) {
+  const c = document.getElementById('camara');
+  if (n == null) { c.style.display = 'none'; return; }
+  c.style.display = 'block';
+  if (n !== frameVisto) {
+    frameVisto = n;
+    c.querySelector('img').src = '/frame?n=' + n;
+  }
+}
+
 // -- what the station proposes ----------------------------------------------
 // A suggestion with the point already computed, never an order. The link carries data; the
 // stick stays with the pilot. Writing it as a command here would be writing a behaviour that
@@ -711,6 +765,8 @@ def demo():
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--puerto', type=int, default=8300)
+    ap.add_argument('--frames', default=None,
+                    help='carpeta con frame_NNNN.jpg, para ver lo que vio la camara')
     ap.add_argument('--fondo', default=None, help='PNG georeferenciado (opcional)')
     ap.add_argument('--georef', default=None,
                     help='archivo con lat0,lon0,lat1,lon1[,zoom] de las esquinas del PNG')
@@ -719,6 +775,10 @@ if __name__ == '__main__':
     ap.add_argument('--demo', action='store_true')
     args = ap.parse_args()
 
+    if args.frames and os.path.isdir(args.frames):
+        ESTADO['frames_dir'] = args.frames
+    elif args.frames:
+        print('AVISO: no existe la carpeta %s; sin vista de camara.' % args.frames)
     if args.fondo and os.path.exists(args.fondo):
         ESTADO['fondo'] = args.fondo
         if args.georef and os.path.exists(args.georef):

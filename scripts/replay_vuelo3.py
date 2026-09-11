@@ -403,6 +403,22 @@ def _consultar_orden():
           % (provider.time, d.get("clases") or "(todo)"), flush=True)
 
 
+def _decir_frame(f):
+    """Tell the bench station which frame this is, so it can show it.
+
+    Bench only. A drone in the air sends coordinates, and the link could not carry pictures
+    anyway; this exists so a demo can put the camera's view beside the map's reading of it.
+    """
+    import urllib.request
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            _GS.rstrip("/") + "/frame_actual",
+            data=json.dumps({"n": int(f)}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}), timeout=0.4).read()
+    except Exception:
+        pass
+
+
 def _mandar_nuevos(desde):
     """Post the reports produced since `desde`; returns how many are out."""
     import urllib.request
@@ -437,6 +453,7 @@ if VIVO:
             _t.sleep(min(_retraso, 0.25))
         if i % 10 == 0:
             _consultar_orden()
+            _decir_frame(f)
         x, y = enu(float(p["lat"]), float(p["lng"]))
         state["yaw"] = float(p["yaw"])
         protocol.handle_telemetry(

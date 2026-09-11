@@ -80,6 +80,11 @@ def main():
         orden_gs = [sys.executable, GS, "--puerto", str(PUERTO), "--origen=" + ORIGEN]
         if os.path.exists(FONDO) and os.path.exists(GEOREF):
             orden_gs += ["--fondo", FONDO, "--georef", GEOREF]
+        # The flight frames, when the sibling repo with the recording is there. Bench only:
+        # what the camera saw, shown beside what the map made of it.
+        cuadros = os.path.join(_SAT, "..", "data", "flight_02ago", "20260802_133309", "frames")
+        if vivo and os.path.isdir(cuadros):
+            orden_gs += ["--frames", cuadros]
         else:
             print("  sin imagen de satelite: el mapa usa la cuadricula metrica")
         estacion = subprocess.Popen(
