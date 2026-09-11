@@ -61,6 +61,13 @@ else:
 # because --vivo needs it inside the flight loop, not after it.
 _GS = os.environ.get("UAV_VISION_GS")
 
+# Which drone this replay claims to be, and which half of the flight it flies. The flight
+# made two passes over the same ground several minutes apart, and the paper measures that the
+# GPS bias between them is independent -- so pass 1 and pass 2 stand in for two aircraft. It is
+# the pseudo-swarm protocol, used here to exercise two drones with one camera.
+DRON = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--dron=")), 1)
+PASADA = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--pasada=")), 0)
+
 VIVO = "--vivo" in sys.argv
 # --vivo only makes sense with something to switch to, so it implies --vehiculos.
 CON_VEHICULOS = "--vehiculos" in sys.argv or VIVO
@@ -357,6 +364,16 @@ camera = protocol.camera
 
 t0 = float(poses[frames_aire[0]]["t_mono"])
 
+if PASADA:
+    # Split at the midpoint of the flight time. Not at a frame count: the cadence varies, and
+    # half the frames is not half the flight.
+    ts = [float(poses[f]["t_mono"]) - t0 for f in frames_aire]
+    corte = (ts[0] + ts[-1]) / 2.0
+    frames_aire = [f for f, t in zip(frames_aire, ts)
+                   if (t < corte) == (PASADA == 1)]
+    print(f"pasada {PASADA}: {len(frames_aire)} frames "
+          f"({'antes' if PASADA == 1 else 'despues'} del segundo {corte:.0f})")
+
 # --------------------------------------------------------- the live mode ---
 # Without --vivo nothing below changes: the loop runs as fast as it can and the
 # reports are posted at the end, which is what the equivalence gate measures.
@@ -390,7 +407,7 @@ def _mandar_nuevos(desde):
     """Post the reports produced since `desde`; returns how many are out."""
     import urllib.request
     for c in provider.sent[desde:]:
-        cuerpo = json.dumps({"message": c.message, "source": 1}).encode("utf-8")
+        cuerpo = json.dumps({"message": c.message, "source": DRON}).encode("utf-8")
         pedido = urllib.request.Request(
             _GS, data=cuerpo, headers={"Content-Type": "application/json"})
         try:
@@ -493,7 +510,7 @@ if _GS and not VIVO:
     for r in reportes:
         # The ground station speaks the transport's envelope, not the raw
         # report: {"message": <json string>, "source": <node id>}.
-        cuerpo = json.dumps({"message": json.dumps(r), "source": 1}).encode("utf-8")
+        cuerpo = json.dumps({"message": json.dumps(r), "source": DRON}).encode("utf-8")
         pedido = urllib.request.Request(
             _GS, data=cuerpo, headers={"Content-Type": "application/json"})
         try:
