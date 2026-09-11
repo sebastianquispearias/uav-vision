@@ -403,13 +403,26 @@ def _consultar_orden():
           % (provider.time, d.get("clases") or "(todo)"), flush=True)
 
 
+_ULTIMO_AVISO = {"t": 0.0}
+
+
 def _decir_frame(f):
     """Tell the bench station which frame this is, so it can show it.
+
+    Rate limited against the wall clock, not the frame count. One POST per frame slowed the
+    replay by a factor of three -- and it was wasted anyway: the panel polls four times a
+    second, so telling it thirty times buys nothing. Tying it to the clock keeps the panel as
+    smooth as it can be and leaves the flight running at the speed it claims.
 
     Bench only. A drone in the air sends coordinates, and the link could not carry pictures
     anyway; this exists so a demo can put the camera's view beside the map's reading of it.
     """
+    import time as _tt
     import urllib.request
+    ahora = _tt.time()
+    if ahora - _ULTIMO_AVISO["t"] < 0.15:
+        return
+    _ULTIMO_AVISO["t"] = ahora
     try:
         urllib.request.urlopen(urllib.request.Request(
             _GS.rstrip("/") + "/frame_actual",
@@ -453,7 +466,7 @@ if VIVO:
             _t.sleep(min(_retraso, 0.25))
         if i % 10 == 0:
             _consultar_orden()
-            _decir_frame(f)
+        _decir_frame(f)
         x, y = enu(float(p["lat"]), float(p["lng"]))
         state["yaw"] = float(p["yaw"])
         protocol.handle_telemetry(

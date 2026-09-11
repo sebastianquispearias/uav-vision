@@ -307,6 +307,10 @@ class Handler(server.BaseHTTPRequestHandler):
                     'reportes': len(ESTADO['historia']),
                 }
             self._responder(json.dumps(d).encode('utf-8'))
+        elif ruta == '/frame_actual_n':
+            with CANDADO:
+                n = ESTADO['frame_actual']
+            self._responder(json.dumps({'n': n}).encode('utf-8'))
         elif ruta == '/frame':
             with CANDADO:
                 n, base = ESTADO['frame_actual'], ESTADO['frames_dir']
@@ -669,7 +673,7 @@ async function refrescar() {
     document.getElementById('luz').className = 'punto' + (vivo ? ' vivo' : '');
     pintarBotonFondo();
     pintarPedidos(estado.pedidos || []);
-    pintarCamara(estado.frame_actual);
+
     document.getElementById('enlace').textContent = !drones.length
       ? 'esperando al dron'
       : (vivo ? `dron activo (hace ${edad.toFixed(0)} s)`
@@ -704,7 +708,21 @@ refrescar();
 //
 // The frame number is in the query string so the browser fetches a new image when it changes
 // and reuses the cached one when it does not.
+// Polled on its own clock, faster than the rest. The map redraws once a second because a POI
+// does not move faster than that; the frame under it changes several times in that same
+// second, and hanging it off the slow poll turned a sampled view into a slideshow.
+//
+// It stays a sampled view either way: the camera records about 8.7 frames a second and the
+// chain processes under 2 of them. What this shows is the frame the chain is working on, not
+// the recording -- for the recording there is scripts/render_clip.py.
 let frameVisto = null;
+
+setInterval(async () => {
+  try {
+    const r = await fetch('/frame_actual_n');
+    pintarCamara((await r.json()).n);
+  } catch (e) { /* la estacion se fue; el mapa ya lo dice */ }
+}, 250);
 
 function pintarCamara(n) {
   const c = document.getElementById('camara');
