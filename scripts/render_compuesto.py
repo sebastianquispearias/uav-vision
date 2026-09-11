@@ -33,7 +33,7 @@ COLOR = {"person": (201, 95, 128), "car": (62, 155, 190), "van": (62, 155, 190),
          "truck": (62, 155, 190), "bus": (62, 155, 190)}
 # Map window in metres, chosen to hold both targets and the flight path with room to spare.
 E0, E1, N0, N1 = -22.0, 18.0, -14.0, 26.0
-LADO = 620
+LADO = 800
 
 
 def enu(la, ln):
@@ -65,6 +65,41 @@ def a_pix(e, n):
     return (int((e - E0) / (E1 - E0) * LADO), int((1 - (n - N0) / (N1 - N0)) * LADO))
 
 
+def numerar(cajas, umbral=110.0):
+    """
+    Gives each object a number that stays with it across frames.
+
+    Nearest-centre continuity, the same idea the replay uses to stand in for BoT-SORT: a box
+    close to where one was last frame is the same thing, and a box that is not near anything
+    starts a new number. It is not the tracker that flies -- that one has appearance and a
+    Kalman filter -- but it produces the same thing the audience needs to see, which is that
+    the system holds an identity instead of redetecting a stranger every frame.
+    """
+    vivos, siguiente, salida = [], 0, {}
+    for n in sorted(cajas):
+        actuales = []
+        for (b, conf, cls) in cajas[n]:
+            cx, cy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
+            mejor, dmin = None, umbral
+            for k, (vx, vy, vcls, vid, vn) in enumerate(vivos):
+                if vcls != cls or n - vn > 12:
+                    continue
+                d = math.hypot(cx - vx, cy - vy)
+                if d < dmin:
+                    mejor, dmin = k, d
+            if mejor is None:
+                ident = siguiente
+                siguiente += 1
+                vivos.append([cx, cy, cls, ident, n])
+            else:
+                vivos[mejor][0], vivos[mejor][1], vivos[mejor][4] = cx, cy, n
+                ident = vivos[mejor][3]
+            actuales.append((b, conf, cls, ident))
+        salida[n] = actuales
+        vivos = [v for v in vivos if n - v[4] <= 12]
+    return salida
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--desde", type=int, default=3000)
@@ -89,11 +124,16 @@ def main():
         if f[1] >= args.conf:
             cajas.setdefault(int(f[0]), []).append((f[2:6], float(f[1]), str(c)))
 
+    # Numbered over the rendered stretch only. Counting from the take-off would open the clip
+    # at #219, which reads as a serial number instead of what it is: this object, followed.
+    cajas = numerar({k: v for k, v in cajas.items() if args.desde <= k <= args.hasta})
     fondo = recorte_satelite()
     if fondo is None:
         fondo = np.full((LADO, LADO, 3), 22, np.uint8)
 
-    ANCHO_CAM, ALTO_CAM = 1100, LADO
+    # The camera earns the space: it is what the audience reads. The map is a
+    # reference beside it, not an equal half.
+    ANCHO_CAM, ALTO_CAM = 1420, 800
     W, H = ANCHO_CAM + LADO, ALTO_CAM + 120
     vw = cv2.VideoWriter(args.salida, cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (W, H))
     rastro, vistos = [], 0
@@ -111,14 +151,14 @@ def main():
             cam, 0, ALTO_CAM - cam.shape[0], 0, 0, cv2.BORDER_CONSTANT, value=(18, 18, 22))
 
         n_cajas = 0
-        for (x1, y1, x2, y2), conf, cls in cajas.get(n, []):
+        for (x1, y1, x2, y2), conf, cls, ident in cajas.get(n, []):
             c = COLOR.get(cls, (200, 200, 200))
             a = (int(x1 * esc), int(y1 * esc))
             b = (int(x2 * esc), int(y2 * esc))
             if a[1] < ALTO_CAM:
                 cv2.rectangle(cam, a, b, c, 2)
-                cv2.putText(cam, "%s %.2f" % (cls, conf), (a[0], max(14, a[1] - 6)),
-                            F, 0.5, c, 1, cv2.LINE_AA)
+                cv2.putText(cam, "#%d %s %.2f" % (ident, cls, conf),
+                            (a[0], max(16, a[1] - 8)), F, 0.62, c, 2, cv2.LINE_AA)
                 n_cajas += 1
         vistos += n_cajas
 
@@ -133,7 +173,8 @@ def main():
             q = a_pix(ex, ny)
             cv2.circle(mapa, q, 11, c, 2, cv2.LINE_AA)
             cv2.circle(mapa, q, 3, c, -1, cv2.LINE_AA)
-            cv2.putText(mapa, cls, (q[0] + 15, q[1] + 4), F, 0.5, c, 1, cv2.LINE_AA)
+            cv2.putText(mapa, cls + "  CONFIRMADO", (q[0] + 15, q[1] + 4), F, 0.45, c, 1,
+                        cv2.LINE_AA)
         dq = a_pix(x, y)
         cv2.circle(mapa, dq, 7, (255, 190, 120), -1, cv2.LINE_AA)
         cv2.putText(mapa, "dron", (dq[0] + 11, dq[1] - 8), F, 0.5, (255, 190, 120), 1,
@@ -144,8 +185,9 @@ def main():
         lienzo = np.full((H, W, 3), 16, np.uint8)
         lienzo[:ALTO_CAM, :ANCHO_CAM] = cam
         lienzo[:LADO, ANCHO_CAM:] = mapa
-        cv2.putText(lienzo, "CAMARA  frame %d   altura %.1f m   %d detecciones en este frame"
-                    % (n, float(p["alt_agl"]), n_cajas), (12, 24), F, 0.55,
+        cv2.putText(lienzo, "CAMARA  frame %d   altura %.1f m   %d detecciones   "
+                    "#numero = el mismo objeto, frame tras frame"
+                    % (n, float(p["alt_agl"]), n_cajas), (12, 26), F, 0.62,
                     (235, 235, 235), 1, cv2.LINE_AA)
         y0 = ALTO_CAM + 30
         cv2.putText(lienzo, "LA MISMA CADENA, DOS CLASES  -  sin reentrenar y sin un segundo modelo",
