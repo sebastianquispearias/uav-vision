@@ -33,6 +33,8 @@ from gradys_embedded.protocol.interface import IProtocol
 from gradys_embedded.protocol.messages.communication import BroadcastMessageCommand
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
+from uav_vision.flota import mismo_objetivo
+
 from uav_vision.identity import dominant_class
 from uav_vision.pinhole_local import pixel_to_ray
 
@@ -255,6 +257,12 @@ class VisionProtocol(IProtocol):
         # RANSAC fallback can name its POI from the impacts that actually formed it.
         self._clases: List[Optional[str]] = []
         self._frames_seen = 0
+        # What the neighbours are reporting, by sender. Emptied here rather than at class
+        # level so a relaunched protocol does not start out corroborating a previous flight.
+        self._ajenos: Dict = {}
+        # How long a neighbour's report stands as current. Loose enough to cover a missed
+        # report period, tight enough that it is still a claim about now.
+        self.ventana_ajenos_s = 15.0
         self._rng = np.random.default_rng(self.rng_seed)
 
         now = self.provider.current_time()
@@ -313,7 +321,47 @@ class VisionProtocol(IProtocol):
         return proximo + perdidos * periodo
 
     def handle_packet(self, message: str) -> None:
-        pass  # observe-only: no incoming commands in this version
+        """
+        Listens to what the other drones found.
+
+        The report goes out as a broadcast, so a neighbour's findings were already arriving
+        here and being dropped. Keeping them is what lets this drone know, without a ground
+        station in the middle, that a target it is unsure about has been seen by someone else.
+
+        Nothing is acted upon. The link carries data and the stick stays with the pilot, so a
+        drone that moved because a packet told it to would be a behaviour that cannot fly. It
+        listens, it corroborates, and it says so in its own report.
+        """
+        try:
+            m = json.loads(message)
+        except Exception:
+            return
+        if m.get("type") != "vision_poi":
+            return
+        quien = m.get("sender")
+        if quien is None or quien == self.provider.get_id():
+            return
+        self._ajenos[quien] = {
+            "t": self.provider.current_time(),
+            "pois": m.get("pois") or [],
+        }
+
+    def _corroboracion(self, poi) -> List:
+        """
+        Which other drones are reporting this same target, right now.
+
+        Only recent neighbours count. A sighting from five minutes ago says where something
+        was, not that it is still there, and treating the two as one claim is how a stale
+        report gets promoted into a confirmation.
+        """
+        ahora = self.provider.current_time()
+        fuera = []
+        for quien, visto in self._ajenos.items():
+            if ahora - visto["t"] > self.ventana_ajenos_s:
+                continue
+            if any(mismo_objetivo(poi, otro) for otro in visto["pois"]):
+                fuera.append(quien)
+        return sorted(fuera)
 
     def _ritmo(self):
         """
@@ -456,6 +504,11 @@ class VisionProtocol(IProtocol):
             if emb is not None:
                 p["emb"] = base64.b64encode(
                     np.asarray(emb, dtype=np.float16).tobytes()).decode("ascii")
+            # Who else is seeing this, heard straight off the air. A ground station that only
+            # reaches one of the drones still learns that two of them agree.
+            otros = self._corroboracion(p)
+            if otros:
+                p["corroborado_por"] = otros
 
         ritmo = self._ritmo()
         message = {
