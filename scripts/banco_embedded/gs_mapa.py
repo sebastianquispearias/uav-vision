@@ -91,6 +91,7 @@ ESTADO = {
     # Which frame the bench replay is on, and where the frames live. Only the bench sends
     # this: a real drone ships coordinates, not pictures, and the link could not carry them.
     # It exists so a demo can put what the camera saw next to what the map made of it.
+    'rastros': {},
     'frame_actual': None,
     'frames_dir': None,
 }
@@ -116,6 +117,10 @@ def ficha(ahora, mensaje):
     """
     return {
         't': ahora,
+        # Where it is, and where it has been. The trail is what shows an operator whether the
+        # drone is working the area or hovering, which is the difference between rays that
+        # cross and rays that do not.
+        'pos': mensaje.get('pos'),
         'frames_seen': mensaje.get('frames_seen'),
         'fps_real': mensaje.get('fps_real'),
         'slots_perdidos': mensaje.get('slots_perdidos'),
@@ -156,6 +161,18 @@ def adoptar_origen(mensaje):
             else '  <-- NO COINCIDE con --origen, %s m' % ESTADO['desacuerdo']), flush=True)
 
 
+def _rastro(fuente, pos):
+    """Keeps the last stretch of a drone's path. Called with the lock already held."""
+    if not pos:
+        return
+    r = ESTADO['rastros'].setdefault(str(fuente), [])
+    if not r or (abs(r[-1][0] - pos[0]) + abs(r[-1][1] - pos[1])) > 0.5:
+        r.append([pos[0], pos[1]])
+        # Bounded on purpose: a whole flight drawn at once is a scribble, and the question an
+        # operator has is where it went lately, not where it took off.
+        del r[:-200]
+
+
 def registrar(mensaje, fuente):
     ahora = time.time()
     with CANDADO:
@@ -165,6 +182,7 @@ def registrar(mensaje, fuente):
         # one would wipe the map every time a target left the frame for a second.
         with CANDADO:
             ESTADO['drones'][str(fuente)] = ficha(ahora, mensaje)
+        _rastro(fuente, mensaje.get('pos'))
         return
     pois = []
     for p in mensaje.get('pois', []):
@@ -204,6 +222,7 @@ def registrar(mensaje, fuente):
                                    'frames': mensaje.get('frames_seen')})
         ESTADO['historia'][:] = ESTADO['historia'][-500:]
         ESTADO['drones'][str(fuente)] = ficha(ahora, mensaje)
+        _rastro(fuente, mensaje.get('pos'))
     hora = datetime.now().strftime('%H:%M:%S')
     print('[%s] dron %s | %d POI(s) | frames %s' %
           (hora, fuente, len(pois), mensaje.get('frames_seen')), flush=True)
@@ -275,6 +294,7 @@ class Handler(server.BaseHTTPRequestHandler):
                 d = {
                     'pois': ESTADO['pois'],
                     'drones': ESTADO['drones'],
+                    'rastros': ESTADO['rastros'],
                     'origen': ESTADO['origen'],
                     'origen_cli': ESTADO['origen_cli'],
                     'desacuerdo': ESTADO['desacuerdo'],
@@ -466,13 +486,50 @@ function aPantalla(e, n) {
 }
 
 function ajustarVista(pois) {
-  if (!pois.length) return;
+  // The drones count towards the frame as much as the targets do. Fitting to the targets
+  // alone sends the aircraft off the edge, which is when an operator most wants to see it.
+  const puntos = pois.slice();
+  if (estado) for (const d of Object.values(estado.drones || {}))
+    if (d.pos) puntos.push({x: d.pos[0], y: d.pos[1]});
+  if (!puntos.length) return;
   let e0=1e9,e1=-1e9,n0=1e9,n1=-1e9;
-  for (const p of pois) { e0=Math.min(e0,p.x); e1=Math.max(e1,p.x);
-                          n0=Math.min(n0,p.y); n1=Math.max(n1,p.y); }
+  for (const p of puntos) { e0=Math.min(e0,p.x); e1=Math.max(e1,p.x);
+                            n0=Math.min(n0,p.y); n1=Math.max(n1,p.y); }
   const m = (Math.max(12, (e1-e0), (n1-n0)) * 0.7 + 8) * zoom;
   const ce=(e0+e1)/2, cn=(n0+n1)/2;
   vista = {e0:ce-m, e1:ce+m, n0:cn-m, n1:cn+m};
+}
+
+// The aircraft, and where it has been. Drawn under the targets on purpose: the drone is
+// context for the find, not the find. The trail is what tells an operator whether the drone
+// is working the area or hovering over it -- and a drone that hovers gives rays that barely
+// cross, which is the commonest cause of a bad fix and is invisible from the pins alone.
+const COLOR_DRON = ['#60a5fa', '#f472b6', '#a3e635', '#fbbf24'];
+
+function dibujarDrones() {
+  const ids = Object.keys(estado.drones || {}).sort();
+  ids.forEach((id, i) => {
+    const col = COLOR_DRON[i % COLOR_DRON.length];
+    const rastro = (estado.rastros || {})[id] || [];
+    if (rastro.length > 1) {
+      ctx.strokeStyle = col; ctx.globalAlpha = 0.35; ctx.lineWidth = 2;
+      ctx.beginPath();
+      rastro.forEach((q, k) => {
+        const [x, y] = aPantalla(q[0], q[1]);
+        k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      });
+      ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    const d = estado.drones[id];
+    if (!d.pos) return;
+    const [x, y] = aPantalla(d.pos[0], d.pos[1]);
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.2832); ctx.fill();
+    ctx.strokeStyle = '#0b0d12'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = col; ctx.font = '600 11px system-ui';
+    ctx.fillText('dron ' + id + (d.pos[2] != null ? '  ' + d.pos[2].toFixed(0) + ' m' : ''),
+                 x + 10, y - 8);
+  });
 }
 
 // The satellite image is georeferenced by its corners, so a POI in metres becomes a fraction
@@ -518,6 +575,7 @@ function dibujarFondo() {
 function dibujar() {
   dibujarFondo();
   if (!estado) return;
+  dibujarDrones();
   for (const p of visibles) {
     const [x, y] = aPantalla(p.x, p.y);
     const col = p.mature ? '#4ade80' : '#fbbf24';

@@ -531,6 +531,13 @@ class VisionProtocol(IProtocol):
             # provider carries it, a test harness does not. None is a valid answer and means
             # "local metres only", which is what every desk run has ever produced.
             "origen_gps": self._gps_origin(),
+            # Where the drone itself is. A station that plots targets but not the aircraft
+            # asks the operator to hold the most basic fact in his head, and it hides the one
+            # thing that explains a bad fix: a drone that barely moved gives rays that barely
+            # cross. Metres in the same frame as the POIs, so nothing needs converting.
+            "pos": [round(float(self._position[0]), 2),
+                    round(float(self._position[1]), 2),
+                    round(float(self._position[2]), 2)] if self._position is not None else None,
             "pois": pois,
         }
         self.provider.send_communication_command(
