@@ -26,9 +26,11 @@ FRAMES = os.path.join(VUELO, "frames")
 SAT = os.path.join(HNO, "entrenamiento")
 
 LAT0, LNG0, R = -22.978029946, -43.23214256266666, 6378137.0
-# What the chain reported for this flight, in metres. These are its output, not ground truth.
-POIS = [("person", -0.19, 6.69, (201, 95, 128)),
-        ("car", -12.24, 13.06, (62, 155, 190))]
+# The reports the chain actually emitted, with the flight second of each. Captured by running
+# the replay against a recorder; docs/reportes_vuelo.json. Drawing the final answer from the
+# first frame was a lie of omission: the system does not know it yet, and what makes it worth
+# watching is that a target appears unsure and settles.
+REPORTES = os.path.join(RAIZ, "docs", "reportes_vuelo.json")
 COLOR = {"person": (201, 95, 128), "car": (62, 155, 190), "van": (62, 155, 190),
          "truck": (62, 155, 190), "bus": (62, 155, 190)}
 # Map window in metres, chosen to hold both targets and the flight path with room to spare.
@@ -59,6 +61,14 @@ def recorte_satelite():
     x0, x1 = int(min(xa, xb)), int(max(xa, xb))
     y0, y1 = int(min(ya, yb)), int(max(ya, yb))
     return cv2.resize(img[y0:y1, x0:x1], (LADO, LADO), interpolation=cv2.INTER_CUBIC)
+
+
+def reportes_por_tiempo():
+    import json
+    if not os.path.exists(REPORTES):
+        return []
+    r = json.load(open(REPORTES))
+    return sorted([x for x in r if x.get("t") is not None], key=lambda x: x["t"])
 
 
 def a_pix(e, n):
@@ -127,6 +137,14 @@ def main():
     # Numbered over the rendered stretch only. Counting from the take-off would open the clip
     # at #219, which reads as a serial number instead of what it is: this object, followed.
     cajas = numerar({k: v for k, v in cajas.items() if args.desde <= k <= args.hasta})
+    # The replay's clock starts at the first airborne frame that carries a detection, not at
+    # the first recorded frame. Getting this wrong slides every report by four minutes.
+    con_persona = {int(f[0]) for f in d if f[1] >= args.conf}
+    aire = sorted(f for f, q in poses.items()
+                  if float(q["alt_agl"]) > 3.0 and f in con_persona)
+    t0 = float(poses[aire[0]]["t_mono"])
+    reportes = reportes_por_tiempo()
+
     fondo = recorte_satelite()
     if fondo is None:
         fondo = np.full((LADO, LADO, 3), 22, np.uint8)
@@ -169,12 +187,24 @@ def main():
         if len(rastro) > 1:
             cv2.polylines(mapa, [np.array([a_pix(*q) for q in rastro], np.int32)],
                           False, (255, 190, 120), 2, cv2.LINE_AA)
-        for cls, ex, ny, c in POIS:
-            q = a_pix(ex, ny)
-            cv2.circle(mapa, q, 11, c, 2, cv2.LINE_AA)
+        t_ahora = float(p["t_mono"]) - t0
+        vigentes = []
+        for r in reportes:
+            if r["t"] <= t_ahora:
+                vigentes = r["pois"]
+            else:
+                break
+        for poi in vigentes:
+            cls = poi.get("cls") or "?"
+            maduro = bool(poi.get("mature"))
+            c = (120, 240, 120) if maduro else (60, 190, 250)
+            q = a_pix(poi["x"], poi["y"])
+            cv2.circle(mapa, q, 13, c, 2, cv2.LINE_AA)
             cv2.circle(mapa, q, 3, c, -1, cv2.LINE_AA)
-            cv2.putText(mapa, cls + "  CONFIRMADO", (q[0] + 15, q[1] + 4), F, 0.45, c, 1,
-                        cv2.LINE_AA)
+            cv2.putText(mapa, "%s  %s" % (cls, "CONFIRMADO" if maduro else "POR VERIFICAR"),
+                        (q[0] + 17, q[1] - 2), F, 0.45, c, 1, cv2.LINE_AA)
+            cv2.putText(mapa, "%s obs" % poi.get("n_obs"), (q[0] + 17, q[1] + 16),
+                        F, 0.4, c, 1, cv2.LINE_AA)
         dq = a_pix(x, y)
         cv2.circle(mapa, dq, 7, (255, 190, 120), -1, cv2.LINE_AA)
         cv2.putText(mapa, "dron", (dq[0] + 11, dq[1] - 8), F, 0.5, (255, 190, 120), 1,
@@ -192,9 +222,17 @@ def main():
         y0 = ALTO_CAM + 30
         cv2.putText(lienzo, "LA MISMA CADENA, DOS CLASES  -  sin reentrenar y sin un segundo modelo",
                     (14, y0), F, 0.62, (235, 235, 235), 1, cv2.LINE_AA)
-        for i, (cls, ex, ny, c) in enumerate(POIS):
-            cv2.putText(lienzo, "%-8s reportado en  %7.2f m E, %7.2f m N" % (cls, ex, ny),
-                        (14, y0 + 32 + i * 26), F, 0.55, c, 1, cv2.LINE_AA)
+        if not vigentes:
+            cv2.putText(lienzo, "todavia sin objetivos: el sistema no afirma nada hasta "
+                        "tener evidencia", (14, y0 + 34), F, 0.55, (150, 150, 150), 1,
+                        cv2.LINE_AA)
+        for i, poi in enumerate(vigentes[:3]):
+            maduro = bool(poi.get("mature"))
+            c = (120, 240, 120) if maduro else (60, 190, 250)
+            cv2.putText(lienzo, "%-11s %-14s %7.2f m E, %7.2f m N   %s obs"
+                        % (poi.get("cls"), "CONFIRMADO" if maduro else "POR VERIFICAR",
+                           poi["x"], poi["y"], poi.get("n_obs")),
+                        (14, y0 + 34 + i * 26), F, 0.55, c, 1, cv2.LINE_AA)
         vw.write(lienzo)
 
     vw.release()
