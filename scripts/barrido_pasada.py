@@ -56,6 +56,7 @@ RADIO = 3.5
 CUAL = next((a for a in sys.argv[1:] if not a.startswith('--')), '1280')
 # --miradas: maturity by independent looks instead of first-to-last span (see IncrementalIdentity).
 MADUREZ = 'looks' if '--miradas' in sys.argv else 'span'
+MIRADAS_MIN = next((int(a.split('=', 1)[1]) for a in sys.argv if a.startswith('--miradas-min=')), 5)
 OBS_NPZ = os.path.join(AQUI, 'obs_stream_%s.npz' % CUAL)
 
 DURACIONES = [10, 15, 20, 30, 45, 60, 90, 120]     # seconds per simulated pass
@@ -140,7 +141,8 @@ def evaluar(obs, embs, fps, dur_reporte_s):
     to infer what could be measured.
     """
     ident = IncrementalIdentity(fusion_radius_m=RADIO, fps=fps,
-                                report_dur_s=dur_reporte_s, maturity=MADUREZ)
+                                report_dur_s=dur_reporte_s, maturity=MADUREZ,
+                                report_min_looks=MIRADAS_MIN)
     for t, k, tid, x, y, cf, i in obs:
         ident.observe(frame=int(k), track_id=int(tid), ground_xy=(x, y),
                       conf=cf, emb=embs[int(i)], t=float(t))
