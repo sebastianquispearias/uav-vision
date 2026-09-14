@@ -519,6 +519,11 @@ class VisionProtocol(IProtocol):
             extent = self.ground_extent_m.get(cls) if cls else None
             if extent:
                 impact = _footprint_center(self._position, impact, extent)
+            # Camera to the point on the ground. A heading error moves the impact by this distance
+            # times the angle, so the same target is less well placed from farther away.
+            rango = math.sqrt((impact[0] - self._position[0]) ** 2
+                              + (impact[1] - self._position[1]) ** 2
+                              + (self._position[2] - self.ground_z) ** 2)
             self._impacts.append(impact)
             self._confs.append(det["conf"])
             self._clases.append(cls)
@@ -537,6 +542,7 @@ class VisionProtocol(IProtocol):
                     # What it is. The identity layer votes on it across the track and refuses
                     # to merge two names into one candidate.
                     cls=cls,
+                    range_m=rango,
                 )
 
     def _report(self) -> None:

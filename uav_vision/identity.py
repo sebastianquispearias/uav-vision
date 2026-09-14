@@ -51,6 +51,17 @@ POS_FRAC_GEMELO = 0.4
 # draw on a map and walk to.
 RADIO_95_2D = 2.4477
 
+# The slant range, in metres, at which the chain's 2.4 m median error was measured: the median
+# camera-to-target distance of the operator's observations on flight 3 (p10 10.1 m, p90 53.0 m, at a
+# median height of 17.1 m). A position margin quoted without the range it holds at is incomplete:
+# a heading error moves the impact by range times angle.
+RANGO_REFERENCIA_M = 20.3
+
+# Horizontal GPS standard deviation assumed for a consumer receiver, per axis. Not measured here:
+# with one calibration point and two error sources, one of them has to be assumed, and this is the
+# better known of the two. The heading error then follows from the measured floor.
+GPS_SIGMA_M = 1.5
+
 
 # Smallest centre-to-centre distance at which two members of a class are still two things,
 # in metres. This is parking geometry, not noise: a standard bay is 2.4-2.6 m wide, so two cars
@@ -216,7 +227,12 @@ class IncrementalIdentity:
         bias_sigma_m: per-axis standard deviation of the error that more looks cannot average
             away -- GPS and heading bias, shared by every sighting of a flight. The default
             comes from the chain's measured median error on real flights, 2.4 m: for a
-            two-dimensional Gaussian the median radial error is 1.1774 sigma.
+            two-dimensional Gaussian the median radial error is 1.1774 sigma. It holds at the range
+            it was measured at, RANGO_REFERENCIA_M; when observations carry range_m the shared error
+            is modelled as sqrt(gps_sigma_m^2 + (range * yaw_sigma)^2), with the heading error solved
+            so the model gives bias_sigma_m back at that range. From 12 m the 95 % radius is about
+            4.2 m, from 20 m 5.0 m, from 90 m about 15 m.
+        gps_sigma_m: the GPS part of that error, per axis. Assumed, see GPS_SIGMA_M.
     """
 
     def __init__(
@@ -235,6 +251,7 @@ class IncrementalIdentity:
         report_min_looks: int = 20,
         look_s: float = 1.0,
         bias_sigma_m: float = 2.4 / 1.1774,
+        gps_sigma_m: float = GPS_SIGMA_M,
     ) -> None:
         if maturity not in ("span", "looks"):
             raise ValueError("maturity must be 'span' or 'looks', got %r" % (maturity,))
@@ -245,6 +262,9 @@ class IncrementalIdentity:
         self.report_min_looks = report_min_looks
         self.look_s = look_s
         self.bias_sigma_m = bias_sigma_m
+        self.gps_sigma_m = gps_sigma_m
+        # The heading error that, with gps_sigma_m, reproduces bias_sigma_m at the reference range.
+        self.yaw_sigma_rad = math.sqrt(max(0.0, bias_sigma_m ** 2 - gps_sigma_m ** 2)) / RANGO_REFERENCIA_M
         self._fps = fps
         self.fusion_radius_by_class = dict(fusion_radius_by_class or {})
         self.emb_dist_max = emb_dist_max
@@ -314,6 +334,7 @@ class IncrementalIdentity:
         crop: Optional[bytes] = None,
         t: Optional[float] = None,
         cls: Optional[str] = None,
+        range_m: Optional[float] = None,
     ) -> None:
         """
         Records one tracked detection, already projected to the ground.
@@ -335,10 +356,12 @@ class IncrementalIdentity:
                  "emb_sum": None, "n_emb": 0, "frames": set(),
                  "crop": None, "recorte_conf": -1.0,
                  "t0": None, "t1": None, "cls_votos": {},
-                 "bins": set(), "imp_bins": [], "ts": []}
+                 "bins": set(), "imp_bins": [], "ts": [], "rangos": []}
             self._tracks[track_id] = t
         t["imps"].append((float(ground_xy[0]), float(ground_xy[1])))
         t["ts"].append(float(sello) if sello is not None else None)
+        if range_m is not None:
+            t["rangos"].append(float(range_m))
         t["conf_sum"] += float(conf)
         t["frames"].add(int(frame))
         # The look this sighting belongs to: off the clock when there is one, else off the frame
@@ -432,7 +455,15 @@ class IncrementalIdentity:
         medias = np.array([np.mean(v, axis=0) for v in por_mirada.values()])
         n = len(medias)
         var = float(medias.var(axis=0, ddof=1).mean()) if n >= 2 else 0.0
-        return RADIO_95_2D * math.sqrt(self.bias_sigma_m ** 2 + var / max(1, n))
+        rangos = [r for tid in c["tids"] for r in self._tracks[tid]["rangos"]]
+        if rangos:
+            # The bias is shared by every sighting, so it is not averaged: it is taken at the typical
+            # distance the candidate was seen from.
+            r = float(np.median(rangos))
+            sesgo2 = self.gps_sigma_m ** 2 + (r * self.yaw_sigma_rad) ** 2
+        else:
+            sesgo2 = self.bias_sigma_m ** 2
+        return RADIO_95_2D * math.sqrt(sesgo2 + var / max(1, n))
 
     def _match(self, tk: dict, cands: List[dict]) -> Optional[int]:
         """

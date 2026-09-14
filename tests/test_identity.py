@@ -270,4 +270,30 @@ print(f"  por la capa de identidad con t: MOVIL, a {d:.2f} m de donde esta")
 assert d < 2.0
 
 print()
+print("=" * 64)
+print("9. RADIO Y DISTANCIA: el margen crece con lo lejos que se mira")
+print("=" * 64)
+# A heading error moves the impact by range times angle. The same target, seen for the same time,
+# must carry a wider margin from 90 m than from 12 m; at the range the 2.4 m floor was measured at,
+# the model must give back the radius every earlier report carried.
+from uav_vision.identity import RANGO_REFERENCIA_M
+
+
+def radio_a(rango):
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
+    e = emb_de(41)
+    for k in range(int(30 * FPS)):
+        ident.observe(k, 97, np.array([2.0, 2.0]) + ruido(), 0.7, e + 0.03 * RNG.normal(size=512),
+                      t=k / FPS, range_m=rango)
+    return ident.candidates(preliminary=True)[0]["radius_m"]
+
+
+r_cerca, r_ref, r_lejos, r_sin = radio_a(12.0), radio_a(RANGO_REFERENCIA_M), radio_a(90.0), radio_a(None)
+print(f"  radio 95%: a 12 m {r_cerca} | a {RANGO_REFERENCIA_M:.0f} m (referencia) {r_ref} | a 90 m {r_lejos} "
+      f"| sin distancia {r_sin}")
+assert r_lejos > r_ref + 1.0, "desde 90 m el margen tiene que ser claramente mayor"
+assert r_cerca < r_ref, "desde cerca el margen tiene que ser menor"
+assert abs(r_ref - r_sin) < 0.3, "en la distancia de referencia el modelo tiene que devolver el radio medido"
+
+print()
 print("TODO OK")
