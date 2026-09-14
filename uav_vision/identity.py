@@ -464,7 +464,10 @@ class IncrementalIdentity:
         se = s_r / math.sqrt(max(1e-9, float(((x - x.mean()) ** 2).sum())))
         rapidez = float(np.linalg.norm(vel))
         return {"pos_reciente": pos, "rapidez": rapidez, "rapidez_se": se,
-                "vel": vel, "t_ultimo": float(tt[-1])}
+                "vel": vel, "t_ultimo": float(tt[-1]),
+                # Variance of the fitted position at the last sighting, per axis. A line's value at the
+                # end of its window is about four times as uncertain as its mean.
+                "var_pos": 4.0 * s_r ** 2 / len(x)}
 
     def _track_summaries(self) -> List[dict]:
         """Tracks that earned a place in association: enough detections over enough time."""
@@ -507,6 +510,11 @@ class IncrementalIdentity:
         medias = np.array([np.mean(v, axis=0) for v in por_mirada.values()])
         n = len(medias)
         var = float(medias.var(axis=0, ddof=1).mean()) if n >= 2 else 0.0
+        if c.get("mobile") and c.get("var_pos") is not None:
+            # For a moving target the spread between looks is the length of its path, not how
+            # uncertain its position is: on a straight run at 6 m/s it made the base radius 19.8 m.
+            # What is uncertain is where it is along its motion, which the fit residuals measure.
+            var, n = float(c["var_pos"]), 1
         rangos = [r for tid in c["tids"] for r in self._tracks[tid]["rangos"]]
         if rangos:
             # The bias is shared by every sighting, so it is not averaged: it is taken at the typical
@@ -617,7 +625,11 @@ class IncrementalIdentity:
         if now is None or not c.get("mobile") or c.get("vel") is None or c.get("t_ultimo") is None:
             return base
         edad = max(0.0, float(now) - c["t_ultimo"])
-        return base + float(np.linalg.norm(c["vel"])) * edad
+        # The reported point has itself been carried forward by up to extrapolation_max_s, so a target
+        # that turned round at its last sighting can be that far behind the point plus as far again
+        # as it went since: both distances go into the margin.
+        adelantado = min(edad, self.extrapolation_max_s)
+        return base + float(np.linalg.norm(c["vel"])) * (edad + adelantado)
 
     def candidates(self, preliminary: bool = False, with_tracks: bool = False,
                    now: Optional[float] = None) -> List[dict]:
@@ -658,6 +670,7 @@ class IncrementalIdentity:
                 ahora = tk["pos_reciente"] if "pos_reciente" in tk else tk["pos_actual"]
                 cands.append({"mobile": True, "pos": np.asarray(ahora).copy(),
                               "vel": tk.get("vel"), "t_ultimo": tk.get("t_ultimo"),
+                              "var_pos": tk.get("var_pos"),
                               "emb": tk["emb"], "conf": tk["conf"],
                               "n": tk["n"], "frames": set(tk["frames"]),
                               "crop": tk["crop"],

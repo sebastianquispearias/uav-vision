@@ -386,6 +386,7 @@ vivo = ident.candidates(preliminary=True, now=ahora)[0]
 d_vivo = float(np.hypot(vivo["x"] - real[0], vivo["y"] - real[1]))
 print(f"  4 s despues de dar la vuelta: radio sin 'now' {fijo['radius_m']} m | con 'now' {vivo['radius_m']} m "
       f"| el blanco a {d_vivo:.1f} m del punto reportado")
+assert fijo["radius_m"] < 8.0, "el radio base de un movil es su incertidumbre, no la longitud de su recorrido"
 assert vivo["radius_m"] >= fijo["radius_m"] + 6.0 * 4.0 - 0.5, "el margen tiene que crecer con rapidez x tiempo"
 assert d_vivo <= vivo["radius_m"], "con el margen que crece, la verdad tiene que caer dentro"
 assert d_vivo > fijo["radius_m"], "el contraste: el margen congelado no la contenia"
