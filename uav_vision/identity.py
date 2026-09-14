@@ -317,7 +317,7 @@ class IncrementalIdentity:
             })
         return tracks
 
-    def candidates(self, preliminary: bool = False) -> List[dict]:
+    def candidates(self, preliminary: bool = False, with_tracks: bool = False) -> List[dict]:
         """
         Returns the current candidate list, mobiles first, then by descending evidence.
 
@@ -326,6 +326,10 @@ class IncrementalIdentity:
         Static candidates report the lifetime median, which is the point of accumulating views.
 
         Args:
+            with_tracks: also return, under "tracks", the ids of the tracks merged into each
+                candidate. Off by default because the candidates are what the drone reports
+                over the radio, and the list is only needed to score identity against ground
+                truth, on the ground.
             preliminary: also return candidates that have formed a track but not yet earned
                 a report, marked mature=False. They exist for the sweep case. Measured on
                 flight 3, a pass of 30 s over a person NEVER produces a mature candidate and
@@ -348,7 +352,7 @@ class IncrementalIdentity:
                               "crop": tk["crop"],
                               "recorte_conf": tk["recorte_conf"],
                               "t0": tk["t0"], "t1": tk["t1"],
-                              "cls_votos": dict(tk["cls_votos"])})
+                              "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]]})
                 continue
             mejor, smin = None, math.inf
             for k, c in enumerate(cands):
@@ -393,7 +397,7 @@ class IncrementalIdentity:
                               "crop": tk["crop"],
                               "recorte_conf": tk["recorte_conf"],
                               "t0": tk["t0"], "t1": tk["t1"],
-                              "cls_votos": dict(tk["cls_votos"])})
+                              "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]]})
             else:
                 c = cands[mejor]
                 w = c["n"] / (c["n"] + tk["n"])
@@ -404,6 +408,7 @@ class IncrementalIdentity:
                 c["conf"] = w * c["conf"] + (1 - w) * tk["conf"]
                 c["n"] += tk["n"]
                 c["frames"] |= tk["frames"]
+                c["tids"].append(tk["tid"])
                 for nombre, v in tk["cls_votos"].items():
                     c["cls_votos"][nombre] = c["cls_votos"].get(nombre, 0) + v
                 # Positions and appearances average; a photograph cannot. Keep the clearest
@@ -440,4 +445,5 @@ class IncrementalIdentity:
             # one target is a comparison neither of them can make alone, and position is not
             # enough: two people three metres apart are two people.
             "emb": c.get("emb"),
+            **({"tracks": sorted(c["tids"])} if with_tracks else {}),
         } for c in out]
