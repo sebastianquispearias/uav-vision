@@ -329,6 +329,53 @@ if CON_VEHICULOS:
         f for f, p in poses.items()
         if float(p["alt_agl"]) > 3.0 and f in por_frame)
 
+# --sintetico=V adds a target with known ground truth that patrols east-west at V m/s across the
+# scene, for the whole flight. It is projected into every airborne frame with the flight's own
+# poses, and a frame that has it in view detects it with the probability measured for a real
+# target in view on this flight (28 %), with 2 px of noise, under one track id -- the stand-in for
+# a tracker that holds it, named 'boat' so its reports can be told from the flight's own. Nothing downstream knows it is synthetic, so what comes out is what the
+# chain does with a moving target: whether it reports it, when, where, and in how many pieces.
+SINTETICO_V = next((float(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--sintetico=")), None)
+SINTETICO_ID = 900000
+SINTETICO_X0, SINTETICO_X1, SINTETICO_Y = -25.0, 25.0, 25.0
+posicion_sintetica = None
+if SINTETICO_V is not None:
+    from uav_vision.pinhole_local import project_to_pixel
+    _cfg = ARDUCAM_MODULE_3.rotated_180()
+    _rng = np.random.default_rng(11)
+    _emb = _rng.normal(size=512).astype(np.float32)
+    _emb /= np.linalg.norm(_emb)
+    _aire = sorted(f for f, q in poses.items() if float(q["alt_agl"]) > 3.0)
+    _t_origen = float(poses[_aire[0]]["t_mono"])
+
+    def posicion_sintetica(t_mono):
+        """Ground truth: a triangle wave between X0 and X1 along y = Y, at SINTETICO_V m/s."""
+        largo = SINTETICO_X1 - SINTETICO_X0
+        recorrido = (SINTETICO_V * (t_mono - _t_origen)) % (2 * largo)
+        x = SINTETICO_X0 + (recorrido if recorrido <= largo else 2 * largo - recorrido)
+        return x, SINTETICO_Y
+
+    _n_vista = _n_det = 0
+    for f in _aire:
+        q = poses[f]
+        x, y = posicion_sintetica(float(q["t_mono"]))
+        dx, dy = enu(float(q["lat"]), float(q["lng"]))
+        px = project_to_pixel((dx, dy, float(q["alt_agl"])), (x, y, 0.0), float(q["yaw"]), PITCH,
+                              _cfg.focal_length_px, _cfg.image_width, _cfg.image_height,
+                              _cfg.principal_point)
+        if px is None:
+            continue
+        _n_vista += 1
+        if _rng.random() > 0.28:
+            continue
+        u, v = px[0] + _rng.normal(0, 2.0), px[1] + _rng.normal(0, 2.0)
+        e = _emb + 0.03 * _rng.normal(size=512).astype(np.float32)
+        por_frame.setdefault(f, []).append(
+            (np.array([f, 0.6, u - 10.0, v - 40.0, u + 10.0, v]), SINTETICO_ID, e / np.linalg.norm(e), "boat"))
+        _n_det += 1
+    frames_aire = sorted(f for f, q in poses.items() if float(q["alt_agl"]) > 3.0 and f in por_frame)
+    print(f"blanco sintetico a {SINTETICO_V} m/s: en cuadro en {_n_vista} frames, detectado en {_n_det}")
+
 # --------------------------------------------- stage 1: the ray check --
 camara_cfg = ARDUCAM_MODULE_3.rotated_180()
 
