@@ -566,7 +566,8 @@ class VisionProtocol(IProtocol):
         """
         import base64
 
-        pois = (self.identity.candidates(preliminary=self.report_preliminary)
+        pois = (self.identity.candidates(preliminary=self.report_preliminary,
+                                         now=self.provider.current_time())
                 if self.identity is not None else [])
         latido = False
 

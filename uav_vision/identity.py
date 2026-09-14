@@ -453,7 +453,8 @@ class IncrementalIdentity:
         s_r = math.sqrt(float((resid ** 2).sum()) / (2 * dof))
         se = s_r / math.sqrt(max(1e-9, float(((x - x.mean()) ** 2).sum())))
         rapidez = float(np.linalg.norm(vel))
-        return {"pos_reciente": pos, "rapidez": rapidez, "rapidez_se": se}
+        return {"pos_reciente": pos, "rapidez": rapidez, "rapidez_se": se,
+                "vel": vel, "t_ultimo": float(tt[-1])}
 
     def _track_summaries(self) -> List[dict]:
         """Tracks that earned a place in association: enough detections over enough time."""
@@ -576,7 +577,23 @@ class IncrementalIdentity:
             c["t0"] = tk["t0"] if c["t0"] is None else min(c["t0"], tk["t0"])
             c["t1"] = tk["t1"] if c["t1"] is None else max(c["t1"], tk["t1"])
 
-    def candidates(self, preliminary: bool = False, with_tracks: bool = False) -> List[dict]:
+    def _en(self, c: dict, now: Optional[float]) -> np.ndarray:
+        """
+        Where a candidate is at `now`: a moving one carried forward along its recent velocity.
+
+        A report goes out on its own clock, and the last sighting of a moving target is already some
+        time old when it does: a boat at 8 m/s seen one second ago is 8 m away from its last sighting.
+        The extrapolation stops at motion_window_s -- past the window its velocity was estimated
+        over, following the line is guessing. Static candidates, and any call without `now`, are
+        returned where they were estimated.
+        """
+        if now is None or not c.get("mobile") or c.get("vel") is None or c.get("t_ultimo") is None:
+            return c["pos"]
+        dt = min(max(0.0, float(now) - c["t_ultimo"]), self.motion_window_s)
+        return np.asarray(c["pos"]) + np.asarray(c["vel"]) * dt
+
+    def candidates(self, preliminary: bool = False, with_tracks: bool = False,
+                   now: Optional[float] = None) -> List[dict]:
         """
         Returns the current candidate list, mobiles first, then by descending evidence.
 
@@ -585,6 +602,8 @@ class IncrementalIdentity:
         Static candidates report the lifetime median, which is the point of accumulating views.
 
         Args:
+            now: the time the report is for, on the observation clock. A moving candidate is
+                given where it is then, not where it was last seen; see _en.
             with_tracks: also return, under "tracks", the ids of the tracks merged into each
                 candidate. Off by default because the candidates are what the drone reports
                 over the radio, and the list is only needed to score identity against ground
@@ -611,6 +630,7 @@ class IncrementalIdentity:
             if rapido or regla_vieja:
                 ahora = tk["pos_reciente"] if "pos_reciente" in tk else tk["pos_actual"]
                 cands.append({"mobile": True, "pos": np.asarray(ahora).copy(),
+                              "vel": tk.get("vel"), "t_ultimo": tk.get("t_ultimo"),
                               "emb": tk["emb"], "conf": tk["conf"],
                               "n": tk["n"], "frames": set(tk["frames"]),
                               "crop": tk["crop"],
@@ -651,8 +671,8 @@ class IncrementalIdentity:
         # truncates the least certain rows.
         out.sort(key=lambda c: (not mature(c), not c["mobile"], -c["n"]))
         return [{
-            "x": round(float(c["pos"][0]), 2),
-            "y": round(float(c["pos"][1]), 2),
+            "x": round(float(self._en(c, now)[0]), 2),
+            "y": round(float(self._en(c, now)[1]), 2),
             # What it is, next to where it is. None when no camera ever said.
             "cls": dominant_class(c["cls_votos"]),
             "n_obs": int(c["n"]),

@@ -333,4 +333,38 @@ assert e_span > 3 * e_look, "el contraste con la regla vieja tiene que verse"
 assert not c_quieto["mobile"], "el ruido de un blanco quieto no puede leerse como movimiento"
 
 print()
+print("=" * 64)
+print("11. ENTRE AVISTAMIENTOS: un movil se reporta donde esta al reportar")
+print("=" * 64)
+# The report goes out on its own clock; the last sighting of a moving target is already old. A
+# target at 6 m/s last seen 1.5 s before the report is 9 m past that sighting.
+ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
+e = emb_de(61)
+vel = np.array([6.0, 0.0])
+for k in range(200):                                     # 40 s at 5 Hz, straight line
+    ident.observe(k, 101, vel * (0.2 * k) + RNG.normal(0, 1.0, size=2), 0.7,
+                  e + 0.03 * RNG.normal(size=512), t=0.2 * k)
+t_ultimo = 0.2 * 199
+ahora = t_ultimo + 1.5
+real = vel * ahora
+sin = ident.candidates(preliminary=True)[0]
+con = ident.candidates(preliminary=True, now=ahora)[0]
+lejos = ident.candidates(preliminary=True, now=t_ultimo + 60.0)[0]
+e_sin = float(np.hypot(sin["x"] - real[0], sin["y"] - real[1]))
+e_con = float(np.hypot(con["x"] - real[0], con["y"] - real[1]))
+avance_lejos = float(np.hypot(lejos["x"] - sin["x"], lejos["y"] - sin["y"]))
+print(f"  reporte 1.5 s despues del ultimo avistamiento: sin 'now' a {e_sin:.1f} m | con 'now' a {e_con:.1f} m")
+print(f"  reporte 60 s despues: se lleva {avance_lejos:.1f} m, no {6.0 * 60:.0f} (tope de la ventana)")
+assert con["mobile"] and e_con < 2.0, "con el instante del reporte tiene que quedar cerca"
+assert e_sin > 7.0, "el contraste sin extrapolar tiene que verse"
+assert avance_lejos <= 6.0 * ident.motion_window_s + 2.0, "la extrapolacion no puede pasar la ventana"
+
+quieto = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
+for k in range(200):
+    quieto.observe(k, 102, np.array([3.0, 3.0]) + RNG.normal(0, 1.0, size=2), 0.7,
+                   e + 0.03 * RNG.normal(size=512), t=0.2 * k)
+a, b = quieto.candidates(preliminary=True)[0], quieto.candidates(preliminary=True, now=500.0)[0]
+assert (a["x"], a["y"]) == (b["x"], b["y"]), "un blanco quieto no se mueve por pasar el tiempo"
+
+print()
 print("TODO OK")
