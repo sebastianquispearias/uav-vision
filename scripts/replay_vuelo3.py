@@ -288,10 +288,22 @@ if PISTAS:
 # tell them apart from the vehicles once both are on the same map.
 _CLASE_PERSONA = "pedestrian" if CON_VEHICULOS else None
 
+# --evidencia-min=X separates ASSOCIATING from EVIDENCE. The tracker has already seen every box and
+# given ids with all of them; a box below X keeps the id it helped build but never reaches the
+# protocol, so it adds neither an observation to the identity layer nor an impact to the
+# geolocation. The flown frames and the cadence are left as they are, so the evidence floor is
+# the only thing that changes. Off by default: the people-only run is the equivalence gate.
+EVIDENCIA_MIN = next((float(a.split("=", 1)[1]) for a in sys.argv
+                      if a.startswith("--evidencia-min=")), None)
+
 por_frame = {}
 for f, ix in idx_por_frame.items():
     por_frame[f] = [(dets[i], int(track_de[i]) if track_de[i] >= 0 else None, embs[i],
-                     _CLASE_PERSONA) for i in ix]
+                     _CLASE_PERSONA) for i in ix
+                    if EVIDENCIA_MIN is None or dets[i, 1] >= EVIDENCIA_MIN]
+if EVIDENCIA_MIN is not None:
+    n_ev = sum(len(v) for v in por_frame.values())
+    print(f"evidencia >= {EVIDENCIA_MIN}: {n_ev}/{len(dets)} detecciones llegan al protocolo")
 
 if CON_VEHICULOS:
     V = np.load(VEHICULOS_NPZ)

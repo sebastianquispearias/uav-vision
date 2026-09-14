@@ -17,6 +17,11 @@ uav_vision/identity_metrics.py) and say so in their output.
     python scripts/etiquetar_identidad.py     # first: the labels
     python scripts/medir_identidad.py
     python scripts/medir_identidad.py --desde 3000 --hasta 3700   # only boxes in a reviewed frame window
+
+The last two levels can be pointed at another tracker output and another evidence floor, so a
+variant of the chain is scored exactly like the one that flies:
+
+    python scripts/medir_identidad.py --desde 3000 --hasta 3700         --pistas ../drone-geolocation/entrenamiento/botsort_pistas_02ago_calibrado.npz         --evidencia-min 0.40 --salida metricas_a1.json
 """
 import argparse
 import contextlib
@@ -64,13 +69,21 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--desde", type=int, default=0)
     ap.add_argument("--hasta", type=int, default=10 ** 9)
+    ap.add_argument("--pistas", default=BOTSORT,
+                    help="tracker output for the BoT-SORT levels (default: the flight's)")
+    ap.add_argument("--evidencia-min", type=float, default=None,
+                    help="only boxes at or above this confidence reach the identity layer")
+    ap.add_argument("--salida", default=SALIDA)
     args = ap.parse_args()
     if not os.path.exists(ETIQUETAS):
         sys.exit("faltan las etiquetas: corre antes scripts/etiquetar_identidad.py")
     etiquetas = json.load(open(ETIQUETAS, encoding="utf-8"))["etiquetas"]
 
     g_sus, _ = correr_replay()
-    g_bot, texto_bot = correr_replay("--pistas=" + BOTSORT)
+    flags_bot = ["--pistas=" + args.pistas]
+    if args.evidencia_min is not None:
+        flags_bot.append("--evidencia-min=%g" % args.evidencia_min)
+    g_bot, texto_bot = correr_replay(*flags_bot)
     dets = g_sus["dets"]
     verdad = [etiquetas.get(str(i)) for i in range(len(dets))]
     orden = [float(d[0]) for d in dets]
@@ -79,7 +92,7 @@ def main():
     verdad = [v if args.desde <= dets[i][0] <= args.hasta else None for i, v in enumerate(verdad)]
 
     pistas_sus = g_sus["track_de"]
-    pistas_bot = np.load(BOTSORT)["track"]
+    pistas_bot = np.load(args.pistas)["track"]
     cand_sus, n_sus = por_candidato(g_sus, pistas_sus)
     cand_bot, n_bot = por_candidato(g_bot, pistas_bot)
     niveles = {
@@ -102,12 +115,14 @@ def main():
             nombre, r["idf1"], r["idp"], r["idr"], r["id_switches"], r["boxes_with_id"],
             r["predicted_ids"], r["identities"]))
     geo = re.search(r"mejor POI respecto al operador: ([0-9.]+) m", texto_bot)
+    print("pistas: %s | evidencia-min: %s" % (os.path.basename(args.pistas), args.evidencia_min))
     print("candidatos: %d sobre sustituto, %d sobre BoT-SORT | geolocalizacion con BoT-SORT: %s m"
           % (n_sus, n_bot, geo.group(1) if geo else "sin POI"))
     json.dump({"condicionado_a_detecciones": True, "cajas": len(dets), "etiquetadas": etiquetadas,
+               "pistas": os.path.basename(args.pistas), "evidencia_min": args.evidencia_min,
                "niveles": resultado, "geolocalizacion_botsort_m": float(geo.group(1)) if geo else None},
-              open(SALIDA, "w", encoding="utf-8"), indent=1)
-    print("guardado", SALIDA)
+              open(args.salida, "w", encoding="utf-8"), indent=1)
+    print("guardado", args.salida)
 
 
 if __name__ == "__main__":
