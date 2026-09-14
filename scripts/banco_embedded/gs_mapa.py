@@ -216,6 +216,30 @@ def _rastro(fuente, pos):
         del r[:-200]
 
 
+# A drone that has not reported for this long is not seeing anything now. Its targets stop counting
+# towards the map: a pin labelled "seen by 1+2" must not outlive one of the two going silent. It is
+# the same window the drones apply to what they hear from each other. --callado-s changes it.
+DRON_CALLADO_S = 15.0
+
+
+def pois_vigentes(ahora):
+    """
+    The fused targets of the drones that are still talking, with their coordinates.
+
+    A silent drone's targets are kept, not deleted, so they return the moment it reports again.
+    They are only left out while it is silent, so a live drone's find is shown as its own instead
+    of as corroborated by a drone that may have fallen out of the sky. Measured on the
+    two-Raspberry bench before this existed: fifteen seconds after one runner was killed, the
+    station still showed the target as seen by 1+2.
+    """
+    vivos = {k: v for k, v in ESTADO['pois_por_dron'].items()
+             if ahora - ESTADO['drones'].get(k, {}).get('t', float('-inf')) <= DRON_CALLADO_S}
+    pois = fundir(vivos)
+    for q in pois:
+        q['lat'], q['lng'] = a_latlng(q['x'], q['y'], ESTADO['origen'])
+    return pois
+
+
 def registrar(mensaje, fuente):
     ahora = time.time()
     with CANDADO:
@@ -255,16 +279,14 @@ def registrar(mensaje, fuente):
         # Concatenated, not merged: two drones seeing the same person still produce two pins
         # until something decides they are the same target. Showing both is the honest state
         # of affairs; hiding one would be a claim nobody has made yet.
-        ESTADO['pois'] = fundir(ESTADO['pois_por_dron'])
-        # The fusion works in metres and knows nothing about the globe. Whoever holds the
-        # origin puts the coordinates back on the merged position, or the pin and its GPS
-        # reading end up in two different places.
-        for q in ESTADO['pois']:
-            q['lat'], q['lng'] = a_latlng(q['x'], q['y'], ESTADO['origen'])
         ESTADO['historia'].append({'t': ahora, 'n': len(pois),
                                    'frames': mensaje.get('frames_seen')})
         ESTADO['historia'][:] = ESTADO['historia'][-500:]
+        # Heard before fusing, or the drone's own report would find it silent.
         ESTADO['drones'][str(fuente)] = ficha(ahora, mensaje)
+        # The fusion works in metres and knows nothing about the globe; pois_vigentes puts the
+        # coordinates back on each merged position, or the pin and its GPS reading would part.
+        ESTADO['pois'] = pois_vigentes(ahora)
         _rastro(fuente, mensaje.get('pos'))
     hora = datetime.now().strftime('%H:%M:%S')
     print('[%s] dron %s | %d POI(s) | frames %s' %
@@ -338,6 +360,9 @@ class Handler(server.BaseHTTPRequestHandler):
             self._responder(PAGINA.encode('utf-8'), 'text/html; charset=utf-8')
         elif ruta == '/estado':
             with CANDADO:
+                # Recomputed on every read too: when every drone goes silent no report arrives
+                # to refresh the map, and a silent map must not keep claiming corroboration.
+                ESTADO['pois'] = pois_vigentes(time.time())
                 d = {
                     'pois': ESTADO['pois'],
                     'drones': ESTADO['drones'],
@@ -933,10 +958,13 @@ if __name__ == '__main__':
     ap.add_argument('--origen', default=None,
                     help='lat,lon del origen de la mision: convierte los metros a coordenadas')
     ap.add_argument('--demo', action='store_true')
+    ap.add_argument('--callado-s', type=float, default=DRON_CALLADO_S,
+                    help='segundos sin reportar tras los que un dron deja de contar en el mapa')
     ap.add_argument('--nodos', default=None,
                     help='drones a los que empujar la orden de busqueda, como en node_ip_dict: '
                          '1=192.168.1.120:8200,3=192.168.1.123:8200')
     args = ap.parse_args()
+    DRON_CALLADO_S = args.callado_s
     if args.nodos:
         ESTADO['nodos'] = dict(par.split('=', 1) for par in args.nodos.split(','))
 
