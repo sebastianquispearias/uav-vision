@@ -46,6 +46,11 @@ DUTY_MIN = 0.10
 EMB_DIST_GEMELO = 0.70
 POS_FRAC_GEMELO = 0.4
 
+# Radius of the circle holding 95 % of a two-dimensional isotropic Gaussian, in sigmas:
+# sqrt(-2 ln 0.05). Used to turn a per-axis position uncertainty into something an operator can
+# draw on a map and walk to.
+RADIO_95_2D = 2.4477
+
 
 # Smallest centre-to-centre distance at which two members of a class are still two things,
 # in metres. This is parking geometry, not noise: a standard bay is 2.4-2.6 m wide, so two cars
@@ -172,6 +177,29 @@ class IncrementalIdentity:
             gate -- a target the tracker keeps losing and re-finding under new ids contributes
             only its longest pieces to the candidate that is plainly the same thing. Off by
             default: the reported chain is the validated one.
+        maturity: what "enough evidence" means. "span" (the default, the validated chain) is the
+            time between the first and the last sighting: track_dur_s to open a track,
+            report_dur_s to report. It measures the wrong thing. On flight 3 a static object
+            the detector keeps confusing with a person is sighted 86 times over 758 s and
+            matures, while a person seen continuously for 30 s on a sweep never does; and the
+            operator, located within 3 m of the truth after 2 s, is reported only at 76 s.
+            "looks" counts independent looks instead: the distinct look_s-long intervals in
+            which the thing was detected at all. Consecutive frames of one second are one look,
+            because they share the same pose error and the same background; a second sighting a
+            minute later is another. A track opens with track_min_looks, a candidate is reported
+            with report_min_looks, and every candidate carries its looks and radius_m.
+            Neither mode separates a real target from a persistent false detection: measured,
+            the chain's own signals do not (detection rate in view, confidence, apparent size,
+            and an appearance classifier that does not transfer between flights). That
+            decision belongs to whoever looks at the crop.
+        track_min_looks, report_min_looks: the "looks" thresholds. They encode how costly a
+            false report is against a late one, which changes per mission; they are decisions,
+            not measurements.
+        look_s: the length of one look, in seconds.
+        bias_sigma_m: per-axis standard deviation of the error that more looks cannot average
+            away -- GPS and heading bias, shared by every sighting of a flight. The default
+            comes from the chain's measured median error on real flights, 2.4 m: for a
+            two-dimensional Gaussian the median radial error is 1.1774 sigma.
     """
 
     def __init__(
@@ -185,9 +213,22 @@ class IncrementalIdentity:
         mobile_disp_m: Optional[float] = None,
         fusion_radius_by_class: Optional[Mapping[str, float]] = None,
         reinforce_with_fragments: bool = False,
+        maturity: str = "span",
+        track_min_looks: int = 3,
+        report_min_looks: int = 5,
+        look_s: float = 1.0,
+        bias_sigma_m: float = 2.4 / 1.1774,
     ) -> None:
+        if maturity not in ("span", "looks"):
+            raise ValueError("maturity must be 'span' or 'looks', got %r" % (maturity,))
         self.fusion_radius_m = fusion_radius_m
         self.reinforce_with_fragments = reinforce_with_fragments
+        self.maturity = maturity
+        self.track_min_looks = track_min_looks
+        self.report_min_looks = report_min_looks
+        self.look_s = look_s
+        self.bias_sigma_m = bias_sigma_m
+        self._fps = fps
         self.fusion_radius_by_class = dict(fusion_radius_by_class or {})
         self.emb_dist_max = emb_dist_max
         # Kept as given, so "derive it from the radius" stays a per-class answer while an
@@ -276,11 +317,20 @@ class IncrementalIdentity:
             t = {"imps": [], "conf_sum": 0.0,
                  "emb_sum": None, "n_emb": 0, "frames": set(),
                  "crop": None, "recorte_conf": -1.0,
-                 "t0": None, "t1": None, "cls_votos": {}}
+                 "t0": None, "t1": None, "cls_votos": {},
+                 "bins": set(), "imp_bins": []}
             self._tracks[track_id] = t
         t["imps"].append((float(ground_xy[0]), float(ground_xy[1])))
         t["conf_sum"] += float(conf)
         t["frames"].add(int(frame))
+        # The look this sighting belongs to: off the clock when there is one, else off the frame
+        # index at the declared rate, the same fallback the span mode uses.
+        if sello is not None:
+            mirada = int(math.floor(float(sello) / self.look_s))
+        else:
+            mirada = int(frame) // max(1, int(round(self._fps * self.look_s)))
+        t["bins"].add(mirada)
+        t["imp_bins"].append(mirada)
         if sello is not None:
             ts = float(sello)
             t["t0"] = ts if t["t0"] is None else min(t["t0"], ts)
@@ -320,13 +370,12 @@ class IncrementalIdentity:
             "t1": t.get("t1"),
             "cls_votos": dict(t.get("cls_votos") or {}),
             "cls": dominant_class(t.get("cls_votos")),
+            "bins": t["bins"],
         }
 
     def _track_summaries(self) -> List[dict]:
         """Tracks that earned a place in association: enough detections over enough time."""
-        return [self._summary(tid, t) for tid, t in self._tracks.items()
-                if len(t["imps"]) >= self.n_pista
-                and self._has_covered(t, self.track_dur_s, self.span_pista)]
+        return [self._summary(tid, t) for tid, t in self._tracks.items() if self._track_ok(t)]
 
     def _fragment_summaries(self) -> List[dict]:
         """
@@ -338,8 +387,34 @@ class IncrementalIdentity:
         the tracker is calibrated to the aerial detector's confidences.
         """
         return [self._summary(tid, t) for tid, t in self._tracks.items()
-                if len(t["imps"]) >= self.n_pista
-                and not self._has_covered(t, self.track_dur_s, self.span_pista)]
+                if len(t["imps"]) >= self.n_pista and not self._track_ok(t)]
+
+    def _track_ok(self, t: dict) -> bool:
+        """Has this track earned a place in association, under the configured maturity mode?"""
+        if self.maturity == "looks":
+            return len(t["bins"]) >= self.track_min_looks
+        return (len(t["imps"]) >= self.n_pista
+                and self._has_covered(t, self.track_dur_s, self.span_pista))
+
+    def _radius(self, c: dict) -> float:
+        """
+        Radius, in metres, of the circle that should hold the target 95 % of the time.
+
+        Two errors add in quadrature. The bias (bias_sigma_m) is shared by every sighting and does
+        not shrink. The random part is the spread between looks -- each look reduced to its mean
+        impact, since sightings inside one look are not independent -- divided by the square root
+        of the number of looks. With few looks the random part dominates; with many, the radius
+        settles on the bias, which is the honest floor of a single-camera system.
+        """
+        por_mirada: Dict[int, list] = {}
+        for tid in c["tids"]:
+            t = self._tracks[tid]
+            for imp, mirada in zip(t["imps"], t["imp_bins"]):
+                por_mirada.setdefault(mirada, []).append(imp)
+        medias = np.array([np.mean(v, axis=0) for v in por_mirada.values()])
+        n = len(medias)
+        var = float(medias.var(axis=0, ddof=1).mean()) if n >= 2 else 0.0
+        return RADIO_95_2D * math.sqrt(self.bias_sigma_m ** 2 + var / max(1, n))
 
     def _match(self, tk: dict, cands: List[dict]) -> Optional[int]:
         """
@@ -398,6 +473,7 @@ class IncrementalIdentity:
         c["conf"] = w * c["conf"] + (1 - w) * tk["conf"]
         c["n"] += tk["n"]
         c["frames"] |= tk["frames"]
+        c["bins"] |= tk["bins"]
         c["tids"].append(tk["tid"])
         for nombre, v in tk["cls_votos"].items():
             c["cls_votos"][nombre] = c["cls_votos"].get(nombre, 0) + v
@@ -444,7 +520,8 @@ class IncrementalIdentity:
                               "crop": tk["crop"],
                               "recorte_conf": tk["recorte_conf"],
                               "t0": tk["t0"], "t1": tk["t1"],
-                              "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]]})
+                              "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]],
+                              "bins": set(tk["bins"])})
                 continue
             mejor = self._match(tk, cands)
             if mejor is None:
@@ -454,7 +531,8 @@ class IncrementalIdentity:
                               "crop": tk["crop"],
                               "recorte_conf": tk["recorte_conf"],
                               "t0": tk["t0"], "t1": tk["t1"],
-                              "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]]})
+                              "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]],
+                              "bins": set(tk["bins"])})
             else:
                 self._absorb(cands[mejor], tk)
 
@@ -467,6 +545,8 @@ class IncrementalIdentity:
                     self._absorb(cands[mejor], tk)
 
         def mature(c):
+            if self.maturity == "looks":
+                return len(c["bins"]) >= self.report_min_looks
             return (c["n"] >= self.n_reporte
                     and self._has_covered(c, self.report_dur_s, self.span_reporte))
 
@@ -491,5 +571,9 @@ class IncrementalIdentity:
             # one target is a comparison neither of them can make alone, and position is not
             # enough: two people three metres apart are two people.
             "emb": c.get("emb"),
+            # How much independent evidence, and how far off the point may be. Only in "looks"
+            # mode, so the validated chain's report is unchanged byte for byte.
+            **({"looks": len(c["bins"]), "radius_m": round(self._radius(c), 2)}
+               if self.maturity == "looks" else {}),
             **({"tracks": sorted(c["tids"])} if with_tracks else {}),
         } for c in out]

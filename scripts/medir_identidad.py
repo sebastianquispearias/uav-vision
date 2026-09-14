@@ -75,6 +75,8 @@ def main():
                     help="only boxes at or above this confidence reach the identity layer")
     ap.add_argument("--refuerzo", action="store_true",
                     help="short tracks may reinforce an existing candidate (never open one)")
+    ap.add_argument("--miradas", action="store_true",
+                    help="maturity by independent looks instead of first-to-last span")
     ap.add_argument("--salida", default=SALIDA)
     args = ap.parse_args()
     if not os.path.exists(ETIQUETAS):
@@ -87,6 +89,8 @@ def main():
         flags_bot.append("--evidencia-min=%g" % args.evidencia_min)
     if args.refuerzo:
         flags_bot.append("--refuerzo")
+    if args.miradas:
+        flags_bot.append("--miradas")
     g_bot, texto_bot = correr_replay(*flags_bot)
     dets = g_sus["dets"]
     verdad = [etiquetas.get(str(i)) for i in range(len(dets))]
@@ -125,7 +129,7 @@ def main():
           % (n_sus, n_bot, geo.group(1) if geo else "sin POI"))
     json.dump({"condicionado_a_detecciones": True, "cajas": len(dets), "etiquetadas": etiquetadas,
                "pistas": os.path.basename(args.pistas), "evidencia_min": args.evidencia_min,
-               "refuerzo": args.refuerzo,
+               "refuerzo": args.refuerzo, "miradas": args.miradas,
                "niveles": resultado, "geolocalizacion_botsort_m": float(geo.group(1)) if geo else None},
               open(args.salida, "w", encoding="utf-8"), indent=1)
     print("guardado", args.salida)

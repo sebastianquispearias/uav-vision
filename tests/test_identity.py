@@ -175,4 +175,49 @@ print(f"  solo fragmentos, con refuerzo: {len(solos)} candidatos")
 assert solos == [], "sin una pista que dure, los fragmentos no dejan nada en el mapa"
 
 print()
+print("=" * 64)
+print("7. MIRADAS: confirma pronto, no abre con un instante, y el radio no baja del sesgo")
+print("=" * 64)
+# maturity="looks" counts independent looks instead of the time between first and last
+# sighting. Each contrast runs the same observations through both modes, so it fails if the
+# modes stop behaving differently where they are supposed to.
+
+
+def seguido(maturity, segundos, hz=FPS, t0=0.0, tid=90):
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity=maturity)
+    P = np.array([1.0, 1.0])
+    e = emb_de(13)
+    for k in range(int(segundos * hz)):
+        ident.observe(k, tid, P + ruido(), 0.7, e + 0.03 * RNG.normal(size=512), t=t0 + k / hz)
+    return ident, ident.candidates(preliminary=True)
+
+
+_, c_span = seguido("span", 10)
+_, c_look = seguido("looks", 10)
+print(f"  10 s seguidos -> span: maduro={[c['mature'] for c in c_span]} | "
+      f"miradas: maduro={[c['mature'] for c in c_look]} looks={[c.get('looks') for c in c_look]}")
+assert len(c_span) == 1 and not c_span[0]["mature"], "span no deberia confirmar con 10 s"
+assert len(c_look) == 1 and c_look[0]["mature"], "10 miradas deberian confirmar"
+
+_, c_span = seguido("span", 2.6)
+_, c_look = seguido("looks", 2.6)
+print(f"  2.6 s seguidos -> span: {len(c_span)} candidatos | miradas: {len(c_look)} candidatos, "
+      f"maduro={[c['mature'] for c in c_look]}")
+assert c_span == [], "2.6 s no llegan a la puerta de 8.6 s"
+assert len(c_look) == 1 and not c_look[0]["mature"], "3 miradas abren un preliminar, no un maduro"
+
+_, c_look = seguido("looks", 0.5, hz=40.0)
+print(f"  20 detecciones en medio segundo -> miradas: {len(c_look)} candidatos")
+assert c_look == [], "un instante es una sola mirada, por muchas cajas que tenga"
+
+i5, c5 = seguido("looks", 5)
+i60, c60 = seguido("looks", 60)
+suelo = 2.4477 * i60.bias_sigma_m
+print(f"  radio 95%: con 5 miradas {c5[0]['radius_m']} m | con 60 miradas {c60[0]['radius_m']} m "
+      f"| suelo del sesgo {suelo:.2f} m")
+assert c5[0]["radius_m"] > c60[0]["radius_m"], "mas miradas tienen que achicar el radio"
+assert c60[0]["radius_m"] >= round(suelo, 2) - 0.01, "el radio no puede bajar del sesgo compartido"
+assert "radius_m" not in seguido("span", 60)[1][0], "el modo span no cambia el reporte"
+
+print()
 print("TODO OK")
