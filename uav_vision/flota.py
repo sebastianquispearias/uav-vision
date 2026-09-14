@@ -15,7 +15,7 @@ from typing import Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 
-from uav_vision.identity import EMB_DIST_MAX_MEDIDO, radii_by_class
+from uav_vision.identity import EMB_DIST_MAX_MEDIDO, SEPARACION_MINIMA_M, radii_by_class
 
 RADIOS = radii_by_class(3.5)
 
@@ -44,6 +44,31 @@ def vector_de(poi):
     return v / n if n > 0 else None
 
 
+def distancia_maxima(a, b):
+    """
+    How far apart two drones' reports of one target can plausibly be, in metres.
+
+    Each drone carries its own GPS and heading bias, so the same target seen by two of them lands in
+    two places. When both reports carry their 95 % radius, the difference between two independent
+    errors falls inside sqrt(ra^2 + rb^2) 95 % of the time -- about 7 m for two 5 m radii. A fixed
+    3.5 m, the old rule, is narrower than either drone's own margin, and pairs of reports of one
+    target stayed two pins. The two-drone bench never showed it: both boards replayed the same
+    recording, with the same bias.
+
+    Classes with a physical minimum separation keep it as a ceiling. Two cars in adjacent bays are
+    2.5 m apart, and merging them makes one disappear with nothing on the screen saying so; two pins
+    for one car are resolved at a glance. Reports with no radius fall back to the class radius, as
+    before.
+    """
+    ca = a.get('cls') or b.get('cls')
+    ra, rb = a.get('radius_m'), b.get('radius_m')
+    if ra is None or rb is None:
+        return RADIOS.get(ca, 3.5)
+    combinado = math.hypot(float(ra), float(rb))
+    tope = SEPARACION_MINIMA_M.get(ca)
+    return min(combinado, tope) if tope is not None else combinado
+
+
 def mismo_objetivo(a, b):
     """
     Whether two POIs from different drones are one target.
@@ -61,7 +86,7 @@ def mismo_objetivo(a, b):
     ca, cb = a.get('cls'), b.get('cls')
     if ca and cb and ca != cb:
         return False
-    radio = RADIOS.get(ca or cb, 3.5)
+    radio = distancia_maxima(a, b)
     # Plain metres. separacion_m() is for lat/lng pairs; handing it x/y in metres reads them
     # as degrees and every pair comes back impossibly far apart.
     if math.hypot(a.get('x', 0.0) - b.get('x', 0.0),
