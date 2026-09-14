@@ -19,6 +19,7 @@ timestamps, since a buffer counted in frames means a different time at a differe
 Needs boxmot, which the training venv has:
     ../drone-geolocation/entrenamiento/venv/Scripts/python.exe scripts/botsort_pistas.py
 """
+import argparse
 import csv
 import os
 import sys
@@ -31,12 +32,24 @@ LAC = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 DATOS = os.path.join(LAC, "uav_vision", "demo", "data")
 FR = os.path.join(LAC, "drone-geolocation", "data", "flight_02ago", "20260802_133309")
 SALIDA = os.path.join(LAC, "drone-geolocation", "entrenamiento", "botsort_pistas_02ago.npz")
+# The flight camera's thresholds. --calibrado lowers the two that gate a detection's way into a
+# track to the chain's own reporting threshold: a tracker that demands more confidence than the
+# chain reports with silently drops detections the chain decided to keep. Measured on five flight
+# recordings, 23-50 % of the detector's boxes fall below 0.35 and 32-67 % below 0.40.
+UMBRALES_VUELO = {"track_high_thresh": 0.35, "new_track_thresh": 0.4}
 CONF_MIN = 0.25
 TRACK_BUFFER_S = 8.0  # OnboardCamera default, unchanged by the flight mission
+UMBRALES_CALIBRADOS = {"track_high_thresh": CONF_MIN, "new_track_thresh": CONF_MIN}
 
 
 def main():
     from boxmot.trackers.bbox.botsort import BotSort
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--calibrado", action="store_true")
+    args = ap.parse_args()
+    umbrales = UMBRALES_CALIBRADOS if args.calibrado else UMBRALES_VUELO
+    salida = SALIDA.replace(".npz", "_calibrado.npz") if args.calibrado else SALIDA
 
     dets_all = np.load(os.path.join(DATOS, "examen_v3_datos.npz"))["dets"]
     dets = dets_all[dets_all[:, 1] >= CONF_MIN]
@@ -62,9 +75,9 @@ def main():
         reid_model=None,
         with_reid=True,
         use_cmc=False,
-        track_high_thresh=0.35,
+        track_high_thresh=umbrales["track_high_thresh"],
         track_low_thresh=0.2,
-        new_track_thresh=0.4,
+        new_track_thresh=umbrales["new_track_thresh"],
         track_buffer=buffer_frames,
         match_thresh=0.85,
     )
@@ -93,8 +106,8 @@ def main():
     print(f"BoT-SORT: {len(ids)} tracks | {int((track >= 0).sum())}/{n} detections assigned | "
           f"boxes per track: median {int(np.median(cuenta))}, max {int(cuenta.max())} | "
           f"tracks with >=10 boxes: {int((cuenta >= 10).sum())}", flush=True)
-    np.savez(SALIDA, track=track, fps=fps, track_buffer=buffer_frames, conf_min=CONF_MIN)
-    print("saved", SALIDA)
+    np.savez(salida, track=track, fps=fps, track_buffer=buffer_frames, conf_min=CONF_MIN, **umbrales)
+    print("saved", salida, umbrales)
 
 
 if __name__ == "__main__":
