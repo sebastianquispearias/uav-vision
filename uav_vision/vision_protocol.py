@@ -552,7 +552,12 @@ class VisionProtocol(IProtocol):
         latido = False
 
         if not pois:
-            if len(self._impacts) < MIN_MEASUREMENTS:
+            # With an identity layer, no candidate means nothing is known yet, and the drone says
+            # exactly that. It used to fall back to a RANSAC consensus over every impact stored,
+            # which on flight 3 put a point between the operator and the equipment box: the
+            # mixture the identity layer exists to prevent, reported at the moment the drone knows
+            # least. The consensus stays for a drone with no identity layer, where it is the design.
+            if self.identity is not None or len(self._impacts) < MIN_MEASUREMENTS:
                 # Nothing found -- and that is exactly when the drone must still speak. From
                 # the ground, a drone that sees nobody and a drone that has died look
                 # identical: both are silence. An operator who cannot tell them apart has to
