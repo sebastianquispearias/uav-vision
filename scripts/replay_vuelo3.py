@@ -69,6 +69,7 @@ DRON = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--dron=")),
 PASADA = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--pasada=")), 0)
 
 VIVO = "--vivo" in sys.argv
+ROLL_SIGNO = next((float(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--actitud-roll=")), 0.0)
 # --vivo only makes sense with something to switch to, so it implies --vehiculos.
 CON_VEHICULOS = "--vehiculos" in sys.argv or VIVO
 # How much faster than the wall clock the flight is replayed. The flight lasted
@@ -342,6 +343,10 @@ Protocolo = VisionProtocol.with_config(
     camera=CamaraReplay(por_frame, camara_cfg),
     pitch_deg=PITCH,
     yaw_source=lambda: state["yaw"],
+    # --actitud feeds the body pitch recorded in frames.csv into each ray; --actitud-roll=+1/-1
+    # adds the roll with that sign (the August analysis could not settle it from this flight).
+    attitude_source=((lambda: (ROLL_SIGNO * state["roll"], state["pitch"]))
+                     if "--actitud" in sys.argv else None),
     see_period_s=0.1,
     report_period_s=2.0,
     # fusion_radius_m: expected ground noise of THIS scene (gps sigma +
@@ -360,7 +365,7 @@ Protocolo = VisionProtocol.with_config(
     # once on a sweep is exactly the case they exist for.
     report_preliminary="--preliminares" in sys.argv,
 )
-state = {"yaw": 0.0}
+state = {"yaw": 0.0, "roll": 0.0, "pitch": 0.0}
 
 from uav_vision.pinhole_local import pixel_to_ray
 
@@ -503,6 +508,7 @@ if VIVO:
         _decir_frame(f)
         x, y = enu(float(p["lat"]), float(p["lng"]))
         state["yaw"] = float(p["yaw"])
+        state["roll"], state["pitch"] = float(p["roll"]), float(p["pitch"])
         protocol.handle_telemetry(
             Telemetry(current_position=(x, y, float(p["alt_agl"]))))
         camera.set_frame(f)
@@ -517,6 +523,7 @@ else:
         provider.time = float(p["t_mono"]) - t0
         x, y = enu(float(p["lat"]), float(p["lng"]))
         state["yaw"] = float(p["yaw"])
+        state["roll"], state["pitch"] = float(p["roll"]), float(p["pitch"])
         protocol.handle_telemetry(
             Telemetry(current_position=(x, y, float(p["alt_agl"]))))
         camera.set_frame(f)
