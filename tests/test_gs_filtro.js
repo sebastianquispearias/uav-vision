@@ -39,11 +39,16 @@ function elem(id) {
     },
     getBoundingClientRect: () => ({ width: 800, height: 600 }),
     getContext: () => nulo,
+    addEventListener() {},
   };
   return elems[id];
 }
 global.document = { getElementById: elem };
 global.window = { devicePixelRatio: 1, addEventListener: () => {} };
+// The page polls the server on timers. Nothing is served here, so no timer may keep node alive
+// and no request may be left to fail: the filter logic is all this test exercises.
+global.setInterval = () => 0;
+global.fetch = () => new Promise(() => {});
 
 function ok(cond, msg) {
   if (!cond) { console.error('FALLO: ' + msg); process.exit(1); }
