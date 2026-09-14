@@ -214,6 +214,12 @@ class VisionProtocol(IProtocol):
     # arrive only as 'vision_buscar' packets on the data plane. Both paths end in
     # apply_search_order, so they cannot disagree on what an order means.
     station_url: Optional[str] = None
+    # Where the airframe's attitude comes from: a callable returning (roll_deg, pitch_deg), right
+    # wing down and nose up positive, or None when unavailable. The camera is fixed to the body,
+    # so a drone that noses down to fly forward points its camera elsewhere: at 30 m, 10 degrees
+    # unaccounted for put the impact 7-10 m off (tests/test_actitud.py). None keeps the mount
+    # angle alone, which is right for a loitering drone and wrong for one that escorts.
+    attitude_source: Optional[Callable[[], Optional[Tuple[float, float]]]] = None
 
     @classmethod
     def with_config(
@@ -229,6 +235,7 @@ class VisionProtocol(IProtocol):
         report_preliminary: bool = False,
         ground_extent_m: Optional[Mapping[str, float]] = None,
         station_url: Optional[str] = None,
+        attitude_source: Optional[Callable[[], Optional[Tuple[float, float]]]] = None,
     ) -> Type["VisionProtocol"]:
         """
         Builds a configured protocol class ready for the runner. pitch_deg is explicit and has
@@ -241,6 +248,8 @@ class VisionProtocol(IProtocol):
                 "camera": camera,
                 "pitch_deg": pitch_deg,
                 "yaw_source": staticmethod(yaw_source),
+                "attitude_source": (staticmethod(attitude_source)
+                                    if attitude_source is not None else None),
                 "see_period_s": see_period_s,
                 "report_period_s": report_period_s,
                 "ground_z": ground_z,
@@ -501,6 +510,8 @@ class VisionProtocol(IProtocol):
         self._frames_seen += 1
 
         cam_cfg = self.camera.camera
+        actitud = self.attitude_source() if self.attitude_source is not None else None
+        alabeo, cabeceo = actitud if actitud is not None else (0.0, 0.0)
         for det in self.camera.detect(self._position, yaw):
             origin, direction = pixel_to_ray(
                 self._position,
@@ -511,6 +522,8 @@ class VisionProtocol(IProtocol):
                 cam_cfg.image_width,
                 cam_cfg.image_height,
                 cam_cfg.principal_point,
+                body_pitch_deg=cabeceo,
+                body_roll_deg=alabeo,
             )
             impact = _ground_impact(origin, direction, self.ground_z)
             if impact is None:

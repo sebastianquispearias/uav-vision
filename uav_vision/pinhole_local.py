@@ -26,8 +26,16 @@ from uav_vision.camera_config import DEFAULT_CAMERA
 Measurement = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
 
 
-def _world_to_camera_rotation(yaw_deg: float, pitch_deg: float) -> np.ndarray:
+def _world_to_camera_rotation(yaw_deg: float, pitch_deg: float,
+                              body_pitch_deg: float = 0.0, body_roll_deg: float = 0.0) -> np.ndarray:
     """Build rotation matrix from world frame to camera frame.
+
+    body_pitch_deg and body_roll_deg are the airframe's attitude. The camera is fixed to the body at
+    pitch_deg, so when the drone noses down to fly forward the camera noses down with it: the
+    effective pitch is pitch_deg + body_pitch_deg (nose up positive, the autopilot's convention),
+    and the roll turns the camera about the direction the drone faces (right wing down positive).
+    Ignoring them was measured on flight 3: with the nose between -20 and -4 degrees the impacts
+    shifted by a median 1.92 m. At zero attitude the matrix is exactly the one without them.
 
     Camera frame convention: X_cam = right, Y_cam = down, Z_cam = forward
     (optical axis). This is the standard pinhole convention.
@@ -46,7 +54,7 @@ def _world_to_camera_rotation(yaw_deg: float, pitch_deg: float) -> np.ndarray:
         3x3 rotation matrix R such that p_cam = R @ (p_world - drone_pos).
     """
     y = math.radians(yaw_deg)
-    p = math.radians(pitch_deg)
+    p = math.radians(pitch_deg + body_pitch_deg)
     sy, cy = math.sin(y), math.cos(y)
     cp, sp = math.cos(p), math.sin(p)
 
@@ -57,6 +65,17 @@ def _world_to_camera_rotation(yaw_deg: float, pitch_deg: float) -> np.ndarray:
     cam_z = heading * cp + up * sp  # optical axis
     cam_x = right
     cam_y = np.cross(cam_z, cam_x)  # down in image
+
+    if body_roll_deg:
+        # Rodrigues rotation of the three axes about the heading: right wing down takes the
+        # camera's right axis towards the ground.
+        r = math.radians(-body_roll_deg)
+        k = heading
+        cr, sr = math.cos(r), math.sin(r)
+
+        def girar(v):
+            return v * cr + np.cross(k, v) * sr + k * np.dot(k, v) * (1.0 - cr)
+        cam_x, cam_y, cam_z = girar(cam_x), girar(cam_y), girar(cam_z)
 
     return np.array([cam_x, cam_y, cam_z])
 
@@ -70,6 +89,8 @@ def project_to_pixel(
     img_w: int = DEFAULT_CAMERA.image_width,
     img_h: int = DEFAULT_CAMERA.image_height,
     principal_point: Optional[Tuple[float, float]] = None,
+    body_pitch_deg: float = 0.0,
+    body_roll_deg: float = 0.0,
 ) -> Optional[Tuple[float, float]]:
     """Project a 3D target position to pixel coordinates.
 
@@ -93,7 +114,7 @@ def project_to_pixel(
     """
     d = np.asarray(target_pos, dtype=np.float64) - np.asarray(drone_pos, dtype=np.float64)
 
-    R = _world_to_camera_rotation(yaw_deg, pitch_deg)
+    R = _world_to_camera_rotation(yaw_deg, pitch_deg, body_pitch_deg, body_roll_deg)
     d_cam = R @ d
 
     # Camera frame: X=right, Y=down, Z=forward (optical axis)
@@ -121,6 +142,8 @@ def pixel_to_ray(
     img_w: int = DEFAULT_CAMERA.image_width,
     img_h: int = DEFAULT_CAMERA.image_height,
     principal_point: Optional[Tuple[float, float]] = None,
+    body_pitch_deg: float = 0.0,
+    body_roll_deg: float = 0.0,
 ) -> Measurement:
     """Back-project a pixel to a 3D ray (measurement for fusion).
 
@@ -153,7 +176,7 @@ def pixel_to_ray(
     ])
 
     # Rotate from camera frame to world frame (R^T = R^{-1} for orthogonal R)
-    R = _world_to_camera_rotation(yaw_deg, pitch_deg)
+    R = _world_to_camera_rotation(yaw_deg, pitch_deg, body_pitch_deg, body_roll_deg)
     d_world = R.T @ d_cam
 
     d_world = d_world / np.linalg.norm(d_world)
