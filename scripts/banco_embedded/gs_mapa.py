@@ -32,6 +32,7 @@ Then open http://localhost:8300 in a browser.
 --demo injects moving fake POIs so the page can be seen without flying.
 """
 import argparse
+import uuid
 import base64
 import json
 import math
@@ -82,6 +83,12 @@ ESTADO = {
     # with". The counter lets the drone notice a change without diffing lists.
     'buscar': None,
     'buscar_v': 0,
+    # Which run of this station issued the order. A restarted station counts from zero again,
+    # and without this a drone that took version 7 would ignore every new order below it.
+    'buscar_epoca': uuid.uuid4().hex[:8],
+    # Data-plane addresses of the drones, from --nodos, to push each order to. Empty means
+    # the drones learn it by polling /buscar.
+    'nodos': {},
 
     # One list per drone. A single shared list was replaced on every report, so a second
     # drone erased the first one's targets and the map flickered between the two views.
@@ -125,7 +132,43 @@ def ficha(ahora, mensaje):
         'fps_real': mensaje.get('fps_real'),
         'slots_perdidos': mensaje.get('slots_perdidos'),
         'slots_perdidos_total': mensaje.get('slots_perdidos_total'),
+        # What the camera is really searching for, and whether it took the last order. The
+        # station's own record of the request says nothing about a drone out of range.
+        'buscando': mensaje.get('buscando'),
     }
+
+
+def empujar_orden(nodos, clases, v, epoca):
+    """
+    Sends the search order to every drone on the fleet's data plane, without waiting.
+
+    The envelope is the one a GrADyS node uses to talk to another -- {"message", "source"}
+    POSTed to /message -- so the drone receives it in handle_packet exactly as it receives a
+    neighbour's report. Each send runs in its own thread: the operator's click must not wait on
+    a radio link, and a drone out of range still gets the order on its next poll, if it polls.
+    """
+    if not nodos:
+        return
+    import threading
+    import urllib.request
+    cuerpo = json.dumps({
+        'message': json.dumps({'type': 'vision_buscar', 'clases': clases, 'v': v,
+                               'epoca': epoca}),
+        # The embedded runtime types the source as an int, and no mission numbers a drone 0.
+        'source': 0,
+    }).encode('utf-8')
+
+    def uno(nodo, direccion):
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                'http://%s/message' % direccion, data=cuerpo,
+                headers={'Content-Type': 'application/json'}), timeout=2).read()
+            print('  orden v%d entregada al dron %s' % (v, nodo), flush=True)
+        except Exception as e:
+            print('  orden v%d NO llego al dron %s (%s)' % (v, nodo, e), flush=True)
+
+    for nodo, direccion in nodos.items():
+        threading.Thread(target=uno, args=(nodo, direccion), daemon=True).start()
 
 
 def separacion_m(a, b):
@@ -266,10 +309,14 @@ class Handler(server.BaseHTTPRequestHandler):
                 ESTADO['buscar'] = list(clases) if clases else None
                 ESTADO['buscar_v'] += 1
                 v = ESTADO['buscar_v']
+                epoca = ESTADO['buscar_epoca']
+                nodos = dict(ESTADO['nodos'])
             print('[%s] el operador pide buscar: %s' %
                   (datetime.now().strftime('%H:%M:%S'), clases or '(lo de siempre)'),
                   flush=True)
-            self._responder(json.dumps({'clases': clases, 'v': v}).encode('utf-8'))
+            empujar_orden(nodos, list(clases) if clases else None, v, epoca)
+            self._responder(json.dumps({'clases': clases, 'v': v,
+                                        'epoca': epoca}).encode('utf-8'))
             return
         self._responder(b'{"status": "ok"}')
         try:
@@ -330,7 +377,8 @@ class Handler(server.BaseHTTPRequestHandler):
             self._responder(json.dumps({'pedidos': d}).encode('utf-8'))
         elif ruta == '/buscar':
             with CANDADO:
-                d = {'clases': ESTADO['buscar'], 'v': ESTADO['buscar_v']}
+                d = {'clases': ESTADO['buscar'], 'v': ESTADO['buscar_v'],
+                     'epoca': ESTADO['buscar_epoca']}
             self._responder(json.dumps(d).encode('utf-8'))
         elif ruta == '/fondo':
             if not ESTADO['fondo']:
@@ -673,6 +721,8 @@ async function refrescar() {
     document.getElementById('luz').className = 'punto' + (vivo ? ' vivo' : '');
     pintarBotonFondo();
     pintarPedidos(estado.pedidos || []);
+    ultimoEstado = estado;
+    pintarBuscar();
 
     document.getElementById('enlace').textContent = !drones.length
       ? 'esperando al dron'
@@ -784,22 +834,55 @@ document.getElementById('btn-fondo').onclick = () => {
 // drone. The list is what the detector emits, not what has been seen so far --
 // a class you have never received is exactly the one you may want to ask for.
 const BUSCABLES = ['person', 'car', 'truck', 'bus', 'boat'];
+const ALIAS_PERSONA = ['person', 'pedestrian', 'people'];
 let buscando = null;
+let orden = {v: null, epoca: null};
+let ultimoEstado = null;
+
+// The buttons offered: the classes the drones say their detector can emit, once they say it.
+// The fixed list is only the fallback before any drone has reported. The names a model uses for
+// people ('pedestrian', 'people') collapse into the one an operator types; the drone translates
+// it back.
+function buscables(drones) {
+  const nombres = new Set(Object.values(drones || {})
+    .flatMap(d => (d.buscando && d.buscando.conocidas) || []));
+  if (!nombres.size) return BUSCABLES;
+  const lista = [...nombres].filter(c => !ALIAS_PERSONA.includes(c)).sort();
+  if (ALIAS_PERSONA.some(c => nombres.has(c))) lista.unshift('person');
+  return lista;
+}
+
+// One line per drone with what its camera is really doing. The station's record of the request
+// is no evidence that a drone out of range, or one whose model lacks the class, complied.
+function estadoBusqueda(drones, ord) {
+  return Object.entries(drones || {}).map(([id, d]) => {
+    const b = d.buscando;
+    if (!b) return `dron ${id}: no informa que busca`;
+    const pendiente = ord.v != null && ord.v > 0 && (b.v !== ord.v || b.epoca !== ord.epoca);
+    if (pendiente) return `dron ${id}: todavia no tomo la orden`;
+    if (b.rechazo) return `dron ${id}: rechazo la orden (${b.rechazo})`;
+    return `dron ${id}: busca ${b.clases ? b.clases.join(', ') : 'lo de siempre'}`;
+  });
+}
 
 function pintarBuscar() {
   const sel = new Set(buscando || []);
   const cont = document.getElementById('buscar');
-  cont.innerHTML = '<span class="etq">buscando</span>' + BUSCABLES.map(c =>
-    `<button data-b="${c}" class="${sel.has(c) ? 'on' : ''}">${c}</button>`).join('');
+  const drones = (ultimoEstado && ultimoEstado.drones) || {};
+  cont.innerHTML = '<span class="etq">buscando</span>' + buscables(drones).map(c =>
+    `<button data-b="${c}" class="${sel.has(c) ? 'on' : ''}">${c}</button>`).join('')
+    + estadoBusqueda(drones, orden).map(t => `<div class="acuse">${t}</div>`).join('');
   for (const b of cont.querySelectorAll('button')) {
     b.onclick = async () => {
       const c = b.dataset.b;
       if (sel.has(c)) sel.delete(c); else sel.add(c);
       const clases = [...sel];
       try {
-        await fetch('/buscar', {method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({clases})});
+        const r = await fetch('/buscar', {method: 'POST',
+                                          headers: {'Content-Type': 'application/json'},
+                                          body: JSON.stringify({clases})});
+        const d = await r.json();
+        orden = {v: d.v, epoca: d.epoca};
         buscando = clases;
       } catch (e) { /* the station is the one that just answered us; ignore */ }
       pintarBuscar();
@@ -809,6 +892,7 @@ function pintarBuscar() {
 
 fetch('/buscar').then(r => r.json()).then(d => {
   buscando = d.clases || [];
+  orden = {v: d.v, epoca: d.epoca};
   pintarBuscar();
 }).catch(() => pintarBuscar());
 
@@ -849,7 +933,12 @@ if __name__ == '__main__':
     ap.add_argument('--origen', default=None,
                     help='lat,lon del origen de la mision: convierte los metros a coordenadas')
     ap.add_argument('--demo', action='store_true')
+    ap.add_argument('--nodos', default=None,
+                    help='drones a los que empujar la orden de busqueda, como en node_ip_dict: '
+                         '1=192.168.1.120:8200,3=192.168.1.123:8200')
     args = ap.parse_args()
+    if args.nodos:
+        ESTADO['nodos'] = dict(par.split('=', 1) for par in args.nodos.split(','))
 
     if args.frames and os.path.isdir(args.frames):
         ESTADO['frames_dir'] = args.frames

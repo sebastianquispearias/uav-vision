@@ -40,6 +40,10 @@ from uav_vision.pinhole_local import pixel_to_ray
 
 TIMER_SEE = "uav_vision:see"
 TIMER_REPORT = "uav_vision:report"
+# A poll of the ground station must never cost the see loop more than a sliver of its period,
+# and an unreachable station is asked again only after a pause, not on every report.
+STATION_TIMEOUT_S = 0.3
+STATION_RETRY_S = 10.0
 
 # Ground extent of each class, in metres: how much of the ground the object covers along the
 # direction it is being looked at. Used to move the impact from the near edge of the object to
@@ -205,6 +209,11 @@ class VisionProtocol(IProtocol):
     # the vehicle table; people are not in it on purpose (see GROUND_EXTENT_M). Pass {} to
     # switch the correction off entirely.
     ground_extent_m: Mapping[str, float] = GROUND_EXTENT_M
+    # Where to ask what to look for, when the ground station is not a node of the fleet. With
+    # it, the drone polls the station's /buscar once per report period; without it, orders
+    # arrive only as 'vision_buscar' packets on the data plane. Both paths end in
+    # apply_search_order, so they cannot disagree on what an order means.
+    station_url: Optional[str] = None
 
     @classmethod
     def with_config(
@@ -219,6 +228,7 @@ class VisionProtocol(IProtocol):
         identity=None,
         report_preliminary: bool = False,
         ground_extent_m: Optional[Mapping[str, float]] = None,
+        station_url: Optional[str] = None,
     ) -> Type["VisionProtocol"]:
         """
         Builds a configured protocol class ready for the runner. pitch_deg is explicit and has
@@ -237,6 +247,7 @@ class VisionProtocol(IProtocol):
                 "rng_seed": rng_seed,
                 "identity": identity,
                 "report_preliminary": report_preliminary,
+                "station_url": station_url,
                 "ground_extent_m": (GROUND_EXTENT_M if ground_extent_m is None
                                     else dict(ground_extent_m)),
             },
@@ -263,6 +274,13 @@ class VisionProtocol(IProtocol):
         # How long a neighbour's report stands as current. Loose enough to cover a missed
         # report period, tight enough that it is still a claim about now.
         self.ventana_ajenos_s = 15.0
+        # The last search order taken: which station session issued it, its version, and the
+        # camera's refusal when it could not comply. The epoch is what lets a restarted
+        # station, whose counter starts again from zero, still be obeyed.
+        self._orden_epoca = None
+        self._orden_v = None
+        self._orden_rechazo = None
+        self._proxima_consulta = float("-inf")
         self._rng = np.random.default_rng(self.rng_seed)
 
         now = self.provider.current_time()
@@ -289,6 +307,8 @@ class VisionProtocol(IProtocol):
                 self._proximo_see, self.see_period_s, contar=True)
             self.provider.schedule_timer(TIMER_SEE, self._proximo_see)
         elif timer == TIMER_REPORT:
+            # Asked before reporting, so the report already says what the camera is doing.
+            self._poll_station()
             self._report()
             self._proximo_report = self._next_slot(
                 self._proximo_report, self.report_period_s)
@@ -328,13 +348,18 @@ class VisionProtocol(IProtocol):
         here and being dropped. Keeping them is what lets this drone know, without a ground
         station in the middle, that a target it is unsure about has been seen by someone else.
 
-        Nothing is acted upon. The link carries data and the stick stays with the pilot, so a
-        drone that moved because a packet told it to would be a behaviour that cannot fly. It
-        listens, it corroborates, and it says so in its own report.
+        Nothing that moves the aircraft is acted upon. The link carries data and the stick stays
+        with the pilot, so a drone that moved because a packet told it to would be a behaviour
+        that cannot fly. It listens, it corroborates, and it says so in its own report. The one
+        packet it obeys is a search order, which changes what the camera reports and nothing
+        else.
         """
         try:
             m = json.loads(message)
         except Exception:
+            return
+        if m.get("type") == "vision_buscar":
+            self.apply_search_order(m.get("clases"), m.get("v"), m.get("epoca"))
             return
         if m.get("type") != "vision_poi":
             return
@@ -344,6 +369,68 @@ class VisionProtocol(IProtocol):
         self._ajenos[quien] = {
             "t": self.provider.current_time(),
             "pois": m.get("pois") or [],
+        }
+
+    def apply_search_order(self, clases, v, epoch=None) -> bool:
+        """
+        Makes the camera look for what the operator asked, if the order is new.
+
+        An order is new when it comes from another station session (epoch) or carries a higher
+        version than the last one taken. Orders arrive by two paths -- a packet on the data plane,
+        or a poll of the station -- and both repeat, so without that test the camera would be
+        reset on every report. A class the detector cannot emit is refused rather than raised: a
+        wrong button pressed on the ground must not stop the protocol in the air. The refusal is
+        kept and travels in the next report, so the operator sees that the drone did not comply
+        instead of assuming it did.
+
+        Returns True when the order was taken as new, whether applied or refused.
+        """
+        if v is None:
+            return False
+        if epoch == self._orden_epoca and self._orden_v is not None and v <= self._orden_v:
+            return False
+        self._orden_epoca, self._orden_v = epoch, v
+        try:
+            self.camera.set_classes(list(clases) if clases else None)
+            self._orden_rechazo = None
+        except ValueError as e:
+            self._orden_rechazo = str(e)
+        return True
+
+    def _poll_station(self) -> None:
+        """Asks the ground station for its search order, when a station URL is configured."""
+        if not self.station_url:
+            return
+        ahora = self.provider.current_time()
+        if ahora < self._proxima_consulta:
+            return
+        import urllib.request
+        try:
+            with urllib.request.urlopen(self.station_url.rstrip("/") + "/buscar",
+                                        timeout=STATION_TIMEOUT_S) as r:
+                d = json.loads(r.read())
+        except Exception:
+            self._proxima_consulta = ahora + STATION_RETRY_S
+            return
+        self.apply_search_order(d.get("clases"), d.get("v"), d.get("epoca"))
+
+    def _estado_busqueda(self) -> Dict:
+        """
+        What the camera is searching for now, and the last order behind it.
+
+        The applied state, not the requested one: it is what shows an operator a drone that has
+        not heard the order yet, or refused it. The names the detector can emit travel too, so
+        the station offers buttons for those rather than a fixed list -- a button for a class
+        the model lacks is a request that can only be refused.
+        """
+        clases = getattr(self.camera, "classes", None)
+        conocidas = getattr(self.camera, "known_classes", None)
+        return {
+            "clases": sorted(clases) if clases else None,
+            "v": self._orden_v,
+            "epoca": self._orden_epoca,
+            "rechazo": self._orden_rechazo,
+            "conocidas": sorted(conocidas) if conocidas else None,
         }
 
     def _corroboracion(self, poi) -> List:
@@ -538,6 +625,7 @@ class VisionProtocol(IProtocol):
             "pos": [round(float(self._position[0]), 2),
                     round(float(self._position[1]), 2),
                     round(float(self._position[2]), 2)] if self._position is not None else None,
+            "buscando": self._estado_busqueda(),
             "pois": pois,
         }
         self.provider.send_communication_command(

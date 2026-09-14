@@ -228,6 +228,13 @@ class OnboardCamera:
         pedidas = frozenset(classes)
         conocidas = self.known_classes
         if conocidas:
+            # "person" is the name an operator uses, not the name every model emits: a COCO
+            # model says 'person', a VisDrone one 'pedestrian' and 'people'. Any of the three
+            # asks for people, and is answered with the names THIS model uses for them.
+            # Without it, the station's person button raises on the model that actually flies.
+            nombres_persona = self.CLASES_PERSONA & set(conocidas)
+            if pedidas & self.CLASES_PERSONA and nombres_persona:
+                pedidas = (pedidas - self.CLASES_PERSONA) | nombres_persona
             desconocidas = pedidas - set(conocidas)
             if desconocidas:
                 raise ValueError(

@@ -24,6 +24,8 @@ intellectually interesting. The reasoning, and what was ruled out, is in `ESTADO
 ```bash
 for t in tests/test_*.py; do echo "== $t"; python "$t" >/dev/null && echo OK || echo FAIL; done
 node tests/test_gs_filtro.js     # the ground station page, without a browser
+node tests/test_gs_buscar.js     # the search buttons and what each drone reports it is doing
+../drone-geolocation/entrenamiento/venv/Scripts/python.exe tests/test_tracker.py  # needs boxmot
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```
 

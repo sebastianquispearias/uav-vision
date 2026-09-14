@@ -136,6 +136,11 @@ class CamaraReplay:
             return
         self.clases = {self._ALIAS.get(c, c) for c in classes}
 
+    @property
+    def classes(self):
+        """What is being served, in the cached detections' names; None means everything."""
+        return self.clases
+
     def _pasa(self, cls):
         # None means "this source has no opinion on class": it is served
         # whatever is asked, exactly as the protocol treats a missing cls.
@@ -382,9 +387,6 @@ if PASADA:
 # station what it should be looking for, and each report leaves as it is
 # produced. That last part is what makes the switch visible: a batch sent at the
 # end would show the final answer and hide the moment it changed.
-_ORDEN = {"v": -1}
-
-
 def _consultar_orden():
     """Ask the station what to look for. A dead link leaves things as they are."""
     import urllib.request
@@ -393,10 +395,10 @@ def _consultar_orden():
             d = json.loads(r.read())
     except Exception:
         return
-    if d.get("v") == _ORDEN["v"]:
+    # The protocol's own handler, the one a drone runs: the replay exercises the flying code
+    # path instead of a copy of it, and a stale or repeated order is ignored the same way.
+    if not protocol.apply_search_order(d.get("clases"), d.get("v"), d.get("epoca")):
         return
-    _ORDEN["v"] = d.get("v")
-    camera.set_classes(d.get("clases"))
     # The flight second matters more than the wall clock: whether an order
     # arrived in time is a question about the flight, not about the operator.
     print("  [operador] segundo %.0f del vuelo: ahora se busca %s"
