@@ -69,6 +69,7 @@ ESTADO = {
     'pois': [],            # last list received, annotated
     'historia': [],        # every report, for the trail
     'drones': {},          # id -> last seen
+    'veredictos_dir': 'veredictos',   # where the operator's verdicts and their crops are kept
     'origen': None,        # in use: the drone's, if it declares one
     'origen_cli': None,    # what the operator typed, kept to check the drone against
     'desacuerdo': None,    # metres between the two, when they disagree
@@ -343,6 +344,40 @@ class Handler(server.BaseHTTPRequestHandler):
             empujar_orden(nodos, list(clases) if clases else None, v, epoca)
             self._responder(json.dumps({'clases': clases, 'v': v,
                                         'epoca': epoca}).encode('utf-8'))
+            return
+        if self.path.split('?')[0] == '/veredicto':
+            # The operator's verdict on a point, kept on disk with the crop it was given on. The
+            # drone's own signals cannot tell a person from an object the detector keeps
+            # confusing with one; the operator can, and every "no es" is exactly the hard
+            # negative a detector trained on public aerial data is missing. Keeping them turns
+            # using the system into labelling it.
+            try:
+                d = json.loads(crudo)
+                if d.get('v') not in ('si', 'no'):
+                    raise ValueError('v')
+                x, y = float(d['x']), float(d['y'])
+            except Exception:
+                self._responder(b'{"error": "veredicto"}', codigo=400)
+                return
+            import base64
+            carpeta = ESTADO['veredictos_dir']
+            os.makedirs(carpeta, exist_ok=True)
+            sello = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            archivo = None
+            if d.get('crop'):
+                archivo = '%s_%s.jpg' % (sello, d['v'])
+                with open(os.path.join(carpeta, archivo), 'wb') as f:
+                    f.write(base64.b64decode(d['crop']))
+            fila = {'t': sello, 'v': d['v'], 'x': x, 'y': y, 'cls': d.get('cls'),
+                    'dron': d.get('dron'), 'n_obs': d.get('n_obs'), 'looks': d.get('looks'),
+                    'radius_m': d.get('radius_m'), 'crop': archivo}
+            with CANDADO:
+                with open(os.path.join(carpeta, 'veredictos.jsonl'), 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(fila) + '\n')
+            print('[%s] veredicto del operador: %s en (%.1f, %.1f)%s' %
+                  (datetime.now().strftime('%H:%M:%S'), d['v'], x, y,
+                   ' con recorte' if archivo else ''), flush=True)
+            self._responder(json.dumps({'status': 'ok', 'crop': archivo}).encode('utf-8'))
             return
         self._responder(b'{"status": "ok"}')
         try:
@@ -764,6 +799,11 @@ function veredictoDe(p) {
 function marcar(p, v) {
   veredictos.push({ x: p.x, y: p.y, r: p.radius_m || 0, v });
   pintar();
+  // Kept on the station's disk too, with the crop: the page forgets on reload, the data must not.
+  fetch('/veredicto', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({v, x: p.x, y: p.y, cls: p.cls, dron: p.dron, n_obs: p.n_obs,
+                          looks: p.looks, radius_m: p.radius_m, crop: p.crop})})
+    .catch(() => {});
 }
 
 function pintar() {
@@ -1012,8 +1052,11 @@ if __name__ == '__main__':
     ap.add_argument('--nodos', default=None,
                     help='drones a los que empujar la orden de busqueda, como en node_ip_dict: '
                          '1=192.168.1.120:8200,3=192.168.1.123:8200')
+    ap.add_argument('--veredictos', default='veredictos',
+                    help='carpeta donde se guardan los veredictos del operador y sus recortes')
     args = ap.parse_args()
     DRON_CALLADO_S = args.callado_s
+    ESTADO['veredictos_dir'] = args.veredictos
     if args.nodos:
         ESTADO['nodos'] = dict(par.split('=', 1) for par in args.nodos.split(','))
 

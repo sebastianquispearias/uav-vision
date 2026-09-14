@@ -1,0 +1,36 @@
+{
+  "status": "provisional",
+  "note": "Working values chosen to have something to measure against, pending the numbers BeEyes / the LAC group actually need. Change them here; every value says why it was picked.",
+  "requirements": {
+    "confirm_latency_s": {
+      "value": 30,
+      "unit": "seconds with the target in view, from first sighting to a confirmed report",
+      "why": "An operator deciding whether to send a ground team should not wait longer than half a minute of looking. Measured on flight 3: first-to-last-span maturity takes 52 s; looks >= 20 takes 22 s."
+    },
+    "false_confirmations_per_hour": {
+      "value": 6,
+      "unit": "confirmed reports that are not the target, per hour of flight",
+      "why": "One false alarm every ten minutes is a crop an operator can check without learning to ignore the alerts."
+    },
+    "radius_95_max_m": {
+      "value": 10,
+      "unit": "metres, radius of the reported 95 % circle",
+      "why": "A circle a ground team can search on foot in a minute or two. Measured: about 5 m, set by GPS and heading bias."
+    },
+    "radius_coverage_min": {
+      "value": 0.95,
+      "unit": "fraction of confirmed true targets whose true position lies inside the reported radius",
+      "why": "A 95 % circle that holds the truth less often than that is lying to the ground team."
+    },
+    "sweep_find_rate_60s_min": {
+      "value": 0.8,
+      "unit": "fraction of 60 s passes with the target in view that confirm it",
+      "why": "A search that crosses a person for a minute and stays silent most of the time is not a search. Measured: span maturity 47 %."
+    },
+    "crop_on_every_report": {
+      "value": true,
+      "unit": "boolean",
+      "why": "No on-board signal separates a person from an object the detector confuses with one; the operator needs the photograph to decide."
+    }
+  }
+}
