@@ -16,7 +16,9 @@ uav_vision/identity_metrics.py) and say so in their output.
 
     python scripts/etiquetar_identidad.py     # first: the labels
     python scripts/medir_identidad.py
+    python scripts/medir_identidad.py --desde 3000 --hasta 3700   # only boxes in a reviewed frame window
 """
+import argparse
 import contextlib
 import io
 import json
@@ -59,6 +61,10 @@ def por_candidato(g, track_de):
 
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--desde", type=int, default=0)
+    ap.add_argument("--hasta", type=int, default=10 ** 9)
+    args = ap.parse_args()
     if not os.path.exists(ETIQUETAS):
         sys.exit("faltan las etiquetas: corre antes scripts/etiquetar_identidad.py")
     etiquetas = json.load(open(ETIQUETAS, encoding="utf-8"))["etiquetas"]
@@ -68,6 +74,9 @@ def main():
     dets = g_sus["dets"]
     verdad = [etiquetas.get(str(i)) for i in range(len(dets))]
     orden = [float(d[0]) for d in dets]
+    # Scoring a reviewed window only, while labels elsewhere are still in progress. The trackers and the
+    # identity layer still run over the whole flight; only which boxes are scored changes.
+    verdad = [v if args.desde <= dets[i][0] <= args.hasta else None for i, v in enumerate(verdad)]
 
     pistas_sus = g_sus["track_de"]
     pistas_bot = np.load(BOTSORT)["track"]
@@ -81,8 +90,8 @@ def main():
     }
 
     etiquetadas = sum(1 for v in verdad if v is not None)
-    print("vuelo 02ago: %d cajas, %d etiquetadas | metricas CONDICIONADAS A LAS DETECCIONES"
-          % (len(dets), etiquetadas))
+    print("vuelo 02ago: %d cajas, %d etiquetadas en frames %d-%d | metricas CONDICIONADAS A LAS DETECCIONES"
+          % (len(dets), etiquetadas, args.desde, min(args.hasta, int(dets[:, 0].max()))))
     print("%-27s %6s %6s %6s %5s %7s %8s %6s" % ("nivel", "IDF1", "IDP", "IDR", "IDsw",
                                                   "con id", "ids", "reales"))
     resultado = {}
