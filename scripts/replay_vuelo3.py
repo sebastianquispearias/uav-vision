@@ -271,6 +271,17 @@ def pistas(dets, idx_por_frame, frames, base_id=0):
 track_de, n_tracks = pistas(dets, idx_por_frame, frames_aire)
 print(f"tracker de replay: {n_tracks} pistas")
 
+# --pistas=file.npz replaces the stand-in with track ids computed elsewhere; scripts/botsort_pistas.py
+# writes the ones the flight's BoT-SORT gives. A detection that tracker left without an id reaches
+# the protocol without one, exactly as on the drone, and the identity layer never sees it.
+PISTAS = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--pistas=")), None)
+if PISTAS:
+    track_de = np.load(PISTAS)["track"]
+    assert len(track_de) == len(dets), "las pistas externas no corresponden a estas detecciones"
+    n_tracks = int(track_de.max()) + 1 if (track_de >= 0).any() else 0
+    print(f"pistas externas ({os.path.basename(PISTAS)}): {len(set(track_de[track_de >= 0]))} "
+          f"pistas, {int((track_de >= 0).sum())}/{len(track_de)} detecciones con id")
+
 # The cached people detections predate the class reaching the report, so they
 # carry no class of their own. Naming them costs nothing when they are alone --
 # one class never disagrees with itself -- and is what lets the ground station
@@ -279,7 +290,8 @@ _CLASE_PERSONA = "pedestrian" if CON_VEHICULOS else None
 
 por_frame = {}
 for f, ix in idx_por_frame.items():
-    por_frame[f] = [(dets[i], int(track_de[i]), embs[i], _CLASE_PERSONA) for i in ix]
+    por_frame[f] = [(dets[i], int(track_de[i]) if track_de[i] >= 0 else None, embs[i],
+                     _CLASE_PERSONA) for i in ix]
 
 if CON_VEHICULOS:
     V = np.load(VEHICULOS_NPZ)
