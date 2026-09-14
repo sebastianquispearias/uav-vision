@@ -243,6 +243,14 @@ class IncrementalIdentity:
             also exceeds three times the standard error of its own estimate, so that projection
             noise on a standing person is not read as motion. A decision, not a measurement: a
             walking person is about 1.4 m/s.
+        extrapolation_max_s: how far ahead, in seconds, a moving candidate is carried from its last
+            sighting to the report time. Separate from the window its velocity is estimated over: a
+            target that turns keeps going on paper for as long as this allows. With 5 s, a synthetic
+            patrol turning every 6.25 s at 8 m/s was reported past its turn. Measured on that patrol
+            (error median / p90 at 1.5, 4 and 8 m/s): 5 s gives 0.35/11.39, 2.80/21.38, 7.91/17.09 m;
+            3 s gives 2.30/14.40, 2.82/13.44, 6.69/17.09 m; 2 s gives 2.56/15.90, 1.89/11.29,
+            6.69/17.91 m. No value wins at every speed; 3 s has the smallest worst case, and that is
+            the choice -- a decision about which failure to tolerate, not an optimum.
     """
 
     def __init__(
@@ -264,6 +272,7 @@ class IncrementalIdentity:
         gps_sigma_m: float = GPS_SIGMA_M,
         motion_window_s: float = 5.0,
         mobile_speed_mps: float = 0.5,
+        extrapolation_max_s: float = 3.0,
     ) -> None:
         if maturity not in ("span", "looks"):
             raise ValueError("maturity must be 'span' or 'looks', got %r" % (maturity,))
@@ -277,6 +286,7 @@ class IncrementalIdentity:
         self.gps_sigma_m = gps_sigma_m
         self.motion_window_s = motion_window_s
         self.mobile_speed_mps = mobile_speed_mps
+        self.extrapolation_max_s = extrapolation_max_s
         # The heading error that, with gps_sigma_m, reproduces bias_sigma_m at the reference range.
         self.yaw_sigma_rad = math.sqrt(max(0.0, bias_sigma_m ** 2 - gps_sigma_m ** 2)) / RANGO_REFERENCIA_M
         self._fps = fps
@@ -589,7 +599,7 @@ class IncrementalIdentity:
         """
         if now is None or not c.get("mobile") or c.get("vel") is None or c.get("t_ultimo") is None:
             return c["pos"]
-        dt = min(max(0.0, float(now) - c["t_ultimo"]), self.motion_window_s)
+        dt = min(max(0.0, float(now) - c["t_ultimo"]), self.extrapolation_max_s)
         return np.asarray(c["pos"]) + np.asarray(c["vel"]) * dt
 
     def candidates(self, preliminary: bool = False, with_tracks: bool = False,
