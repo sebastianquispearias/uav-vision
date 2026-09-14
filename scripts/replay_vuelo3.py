@@ -350,10 +350,11 @@ Protocolo = VisionProtocol.with_config(
     # already opened. Off by default: the people-only run is the equivalence gate.
     identity=IncrementalIdentity(fusion_radius_m=3.5, fps=fps_replay,
                                  reinforce_with_fragments="--refuerzo" in sys.argv,
-                                 # --miradas: maturity by independent looks, with a radius per POI.
-                                 maturity="looks" if "--miradas" in sys.argv else "span",
+                                 # Maturity by independent looks is the default. --span reproduces the
+                                 # rule every number before it was measured with (the 2.39 m gate).
+                                 maturity="span" if "--span" in sys.argv else "looks",
                                  report_min_looks=next((int(a.split("=", 1)[1]) for a in sys.argv
-                                                        if a.startswith("--miradas-min=")), 5)),
+                                                        if a.startswith("--miradas-min=")), 20)),
     # --preliminares shows the candidates that formed but did not mature. Off by
     # default: for a loitering drone they are noise. A vehicle the drone crosses
     # once on a sweep is exactly the case they exist for.

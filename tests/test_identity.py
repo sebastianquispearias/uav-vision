@@ -108,7 +108,9 @@ print("=" * 64)
 # The sweep case, measured on flight 3: a pass of 30 s never matures a candidate. A track
 # forms and then the drone is gone. Without preliminaries the system says nothing at all
 # about a person it tracked perfectly well for half a minute.
-ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, report_dur_s=36.0)
+# This section documents the span rule, the one that measured it; the default is now maturity by
+# looks, under which a 20 s pass does mature (section 7). Asked for explicitly so it keeps testing it.
+ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, report_dur_s=36.0, maturity="span")
 P = np.array([4.0, -2.0])
 ep = emb_de(9)
 n_pasada = int(20 * FPS)          # 20 s of pass, well under the 36 s report bar
@@ -146,7 +148,9 @@ print("=" * 64)
 
 
 def escena(refuerzo, con_pista_larga=True):
-    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS,
+    # A fragment is defined against the span rule's 8.6 s track gate; under looks, four seconds
+    # of sightings are already a track. So this section asks for span explicitly.
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity="span",
                                 reinforce_with_fragments=refuerzo)
     P, Q = np.array([0.0, 0.0]), np.array([30.0, 30.0])
     e_p, e_otro = emb_de(11), emb_de(12)
@@ -183,8 +187,9 @@ print("=" * 64)
 # modes stop behaving differently where they are supposed to.
 
 
-def seguido(maturity, segundos, hz=FPS, t0=0.0, tid=90):
-    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity=maturity)
+def seguido(maturity, segundos, hz=FPS, t0=0.0, tid=90, **kw):
+    kw.setdefault("report_min_looks", 5)      # this section was written for 5; the default is checked below
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity=maturity, **kw)
     P = np.array([1.0, 1.0])
     e = emb_de(13)
     for k in range(int(segundos * hz)):
@@ -218,6 +223,19 @@ print(f"  radio 95%: con 5 miradas {c5[0]['radius_m']} m | con 60 miradas {c60[0
 assert c5[0]["radius_m"] > c60[0]["radius_m"], "mas miradas tienen que achicar el radio"
 assert c60[0]["radius_m"] >= round(suelo, 2) - 0.01, "el radio no puede bajar del sesgo compartido"
 assert "radius_m" not in seguido("span", 60)[1][0], "el modo span no cambia el reporte"
+
+# The default itself: 20 looks. Ten seconds seen are not enough, twenty-five are.
+def por_defecto(segundos):
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
+    e = emb_de(14)
+    for k in range(int(segundos * FPS)):
+        ident.observe(k, 91, np.array([1.0, 1.0]) + ruido(), 0.7, e + 0.03 * RNG.normal(size=512), t=k / FPS)
+    return ident.candidates(preliminary=True)
+d10, d25 = por_defecto(10), por_defecto(25)
+print(f"  por defecto (20 miradas): 10 s maduro={[c['mature'] for c in d10]} | 25 s maduro={[c['mature'] for c in d25]}")
+assert IncrementalIdentity(fusion_radius_m=3.5, fps=FPS).maturity == "looks"
+assert len(d10) == 1 and not d10[0]["mature"], "con el defecto, 10 miradas no confirman"
+assert len(d25) == 1 and d25[0]["mature"], "con el defecto, 25 miradas confirman"
 
 print()
 print("=" * 64)

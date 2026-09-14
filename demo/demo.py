@@ -72,6 +72,10 @@ def main():
     vivo = "--vivo" in extra
     if vivo and "--preliminares" not in extra:
         extra.append("--preliminares")
+    # The demo reproduces the numbers the README quotes, measured with the span maturity rule.
+    # The chain now defaults to maturity by looks; pass --miradas to see that instead.
+    if "--miradas" not in sys.argv:
+        extra.append("--span")
     entorno = dict(os.environ, UAV_VISION_DATOS=DATOS)
     estacion = None
 

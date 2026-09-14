@@ -76,14 +76,16 @@ def main():
     ap.add_argument("--refuerzo", action="store_true",
                     help="short tracks may reinforce an existing candidate (never open one)")
     ap.add_argument("--miradas", action="store_true",
-                    help="maturity by independent looks instead of first-to-last span")
+                    help="maturity by independent looks (now the default; kept for old commands)")
+    ap.add_argument("--span", action="store_true",
+                    help="the old first-to-last span maturity, to reproduce earlier numbers")
     ap.add_argument("--salida", default=SALIDA)
     args = ap.parse_args()
     if not os.path.exists(ETIQUETAS):
         sys.exit("faltan las etiquetas: corre antes scripts/etiquetar_identidad.py")
     etiquetas = json.load(open(ETIQUETAS, encoding="utf-8"))["etiquetas"]
 
-    g_sus, _ = correr_replay()
+    g_sus, _ = correr_replay(*(["--span"] if args.span else []))
     flags_bot = ["--pistas=" + args.pistas]
     if args.evidencia_min is not None:
         flags_bot.append("--evidencia-min=%g" % args.evidencia_min)
@@ -91,6 +93,8 @@ def main():
         flags_bot.append("--refuerzo")
     if args.miradas:
         flags_bot.append("--miradas")
+    if args.span:
+        flags_bot.append("--span")
     g_bot, texto_bot = correr_replay(*flags_bot)
     dets = g_sus["dets"]
     verdad = [etiquetas.get(str(i)) for i in range(len(dets))]

@@ -81,7 +81,7 @@ def correr(trabajo_s, periodo_s, hasta_s, detecciones=(), fps_declarado=None,
     Protocolo = VisionProtocol.with_config(
         camera=camera, pitch_deg=-55.0, yaw_source=lambda: 0.0,
         see_period_s=periodo_s, report_period_s=2.0,
-        identity=IncrementalIdentity(fusion_radius_m=3.5, fps=fps,
+        identity=IncrementalIdentity(fusion_radius_m=3.5, fps=fps, maturity="span",
                                        report_dur_s=report_dur_s),
         report_preliminary=True)
     protocolo = Protocolo.instantiate(provider)
@@ -163,7 +163,7 @@ for trabajo, etiqueta in [(0.05, "lazo holgado"), (0.45, "lazo saturado")]:
             "objetivo 36.0 s")
 
 # And the fallback still works for callers replaying recorded data with no clock at all.
-ident = IncrementalIdentity(fusion_radius_m=3.5, fps=4.0, report_dur_s=10.0)
+ident = IncrementalIdentity(fusion_radius_m=3.5, fps=4.0, report_dur_s=10.0, maturity="span")
 for f in range(200):
     ident.observe(frame=f, track_id=1, ground_xy=(5.0, 5.0), conf=0.9)
 c = ident.candidates()

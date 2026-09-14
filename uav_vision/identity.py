@@ -189,9 +189,11 @@ class IncrementalIdentity:
             gate -- a target the tracker keeps losing and re-finding under new ids contributes
             only its longest pieces to the candidate that is plainly the same thing. Off by
             default: the reported chain is the validated one.
-        maturity: what "enough evidence" means. "span" (the default, the validated chain) is the
-            time between the first and the last sighting: track_dur_s to open a track,
-            report_dur_s to report. It measures the wrong thing. On flight 3 a static object
+        maturity: what "enough evidence" means. "looks", the default, counts independent looks;
+            "span" is the rule the chain used until it was measured against a flight, and is kept
+            so those numbers stay reproducible. "span" is the time between the first and the
+            last sighting: track_dur_s to open a track, report_dur_s to report. It measures the
+            wrong thing. On flight 3 a static object
             the detector keeps confusing with a person is sighted 86 times over 758 s and
             matures, while a person seen continuously for 30 s on a sweep never does; and the
             operator, located within 3 m of the truth after 2 s, is reported only at 76 s.
@@ -206,7 +208,10 @@ class IncrementalIdentity:
             decision belongs to whoever looks at the crop.
         track_min_looks, report_min_looks: the "looks" thresholds. They encode how costly a
             false report is against a late one, which changes per mission; they are decisions,
-            not measurements.
+            not measurements. The default of 20 is the value that, on flight 3 with the flight's
+            tracker, confirmed the same targets the span rule did in 22 s instead of 52, and met the
+            provisional mission requirements (docs/requisitos_mision.json); 5 confirms in 6 s but
+            also confirmed a non-person.
         look_s: the length of one look, in seconds.
         bias_sigma_m: per-axis standard deviation of the error that more looks cannot average
             away -- GPS and heading bias, shared by every sighting of a flight. The default
@@ -225,9 +230,9 @@ class IncrementalIdentity:
         mobile_disp_m: Optional[float] = None,
         fusion_radius_by_class: Optional[Mapping[str, float]] = None,
         reinforce_with_fragments: bool = False,
-        maturity: str = "span",
+        maturity: str = "looks",
         track_min_looks: int = 3,
-        report_min_looks: int = 5,
+        report_min_looks: int = 20,
         look_s: float = 1.0,
         bias_sigma_m: float = 2.4 / 1.1774,
     ) -> None:
