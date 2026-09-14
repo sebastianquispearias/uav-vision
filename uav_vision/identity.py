@@ -233,6 +233,16 @@ class IncrementalIdentity:
             so the model gives bias_sigma_m back at that range. From 12 m the 95 % radius is about
             4.2 m, from 20 m 5.0 m, from 90 m about 15 m.
         gps_sigma_m: the GPS part of that error, per axis. Assumed, see GPS_SIGMA_M.
+        motion_window_s: how far back, in seconds, "where is it now and how fast is it going" looks,
+            in "looks" mode. A target that moves has to be described by its recent past. Over its
+            whole life, a boat patrolling back and forth has its median in the middle of the patrol
+            and a straight line through its last quarter of sightings -- 20 to 29 s, 81 to 235 m on
+            flight 3 with a synthetic target at 4 and 8 m/s -- crosses the turns and points there
+            too: it was reported 10-14 m from where it was.
+        mobile_speed_mps: speed above which a target counts as moving, in "looks" mode, provided it
+            also exceeds three times the standard error of its own estimate, so that projection
+            noise on a standing person is not read as motion. A decision, not a measurement: a
+            walking person is about 1.4 m/s.
     """
 
     def __init__(
@@ -252,6 +262,8 @@ class IncrementalIdentity:
         look_s: float = 1.0,
         bias_sigma_m: float = 2.4 / 1.1774,
         gps_sigma_m: float = GPS_SIGMA_M,
+        motion_window_s: float = 5.0,
+        mobile_speed_mps: float = 0.5,
     ) -> None:
         if maturity not in ("span", "looks"):
             raise ValueError("maturity must be 'span' or 'looks', got %r" % (maturity,))
@@ -263,6 +275,8 @@ class IncrementalIdentity:
         self.look_s = look_s
         self.bias_sigma_m = bias_sigma_m
         self.gps_sigma_m = gps_sigma_m
+        self.motion_window_s = motion_window_s
+        self.mobile_speed_mps = mobile_speed_mps
         # The heading error that, with gps_sigma_m, reproduces bias_sigma_m at the reference range.
         self.yaw_sigma_rad = math.sqrt(max(0.0, bias_sigma_m ** 2 - gps_sigma_m ** 2)) / RANGO_REFERENCIA_M
         self._fps = fps
@@ -412,7 +426,34 @@ class IncrementalIdentity:
             "cls_votos": dict(t.get("cls_votos") or {}),
             "cls": dominant_class(t.get("cls_votos")),
             "bins": t["bins"],
+            **self._movimiento_reciente(ii, t.get("ts")),
         }
+
+    def _movimiento_reciente(self, ii: np.ndarray, ts) -> dict:
+        """
+        Position now and speed, from the last motion_window_s seconds of sightings, in "looks" mode.
+
+        A straight-line fit against time over that window, evaluated at the last sighting. The speed
+        comes with its standard error from the fit residuals; a speed that noise alone could produce
+        is reported as None, which leaves the older rule to decide. Empty outside "looks" mode or
+        without a clock, so the span mode stays exactly as it was.
+        """
+        if self.maturity != "looks" or not ts or any(x is None for x in ts):
+            return {}
+        tt = np.asarray(ts, dtype=float)
+        sel = tt >= tt[-1] - self.motion_window_s
+        if sel.sum() < 3 or np.ptp(tt[sel]) < 1.0:
+            return {}
+        x = tt[sel] - tt[-1]
+        v = ii[sel]
+        coef = np.polynomial.polynomial.polyfit(x, v, 1)
+        pos, vel = np.asarray(coef[0]), np.asarray(coef[1])
+        resid = v - (coef[0] + np.outer(x, coef[1]))
+        dof = max(1, len(x) - 2)
+        s_r = math.sqrt(float((resid ** 2).sum()) / (2 * dof))
+        se = s_r / math.sqrt(max(1e-9, float(((x - x.mean()) ** 2).sum())))
+        rapidez = float(np.linalg.norm(vel))
+        return {"pos_reciente": pos, "rapidez": rapidez, "rapidez_se": se}
 
     def _track_summaries(self) -> List[dict]:
         """Tracks that earned a place in association: enough detections over enough time."""
@@ -561,9 +602,15 @@ class IncrementalIdentity:
         """
         cands: List[dict] = []
         for tk in sorted(self._track_summaries(), key=lambda p: -p["n"]):
-            if (tk["desplaz"] > self._disp_movil(tk["cls"]) and tk["n"] >= self.n_movil
-                    and self._has_covered(tk, self.mobile_dur_s, self.span_movil)):
-                cands.append({"mobile": True, "pos": tk["pos_actual"].copy(),
+            regla_vieja = (tk["desplaz"] > self._disp_movil(tk["cls"]) and tk["n"] >= self.n_movil
+                           and self._has_covered(tk, self.mobile_dur_s, self.span_movil))
+            # In "looks" mode a target is moving when its recent speed clears both the threshold and
+            # three standard errors of its own estimate. The older rule stays as an alternative so a
+            # patrol does not flicker to "static" at the instant it turns round.
+            rapido = ("rapidez" in tk and tk["rapidez"] > max(self.mobile_speed_mps, 3.0 * tk["rapidez_se"]))
+            if rapido or regla_vieja:
+                ahora = tk["pos_reciente"] if "pos_reciente" in tk else tk["pos_actual"]
+                cands.append({"mobile": True, "pos": np.asarray(ahora).copy(),
                               "emb": tk["emb"], "conf": tk["conf"],
                               "n": tk["n"], "frames": set(tk["frames"]),
                               "crop": tk["crop"],

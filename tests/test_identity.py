@@ -296,4 +296,41 @@ assert r_cerca < r_ref, "desde cerca el margen tiene que ser menor"
 assert abs(r_ref - r_sin) < 0.3, "en la distancia de referencia el modelo tiene que devolver el radio medido"
 
 print()
+print("=" * 64)
+print("10. PATRULLA: un blanco que va y vuelve se describe por su pasado reciente")
+print("=" * 64)
+# A boat patrolling x in [-25, 25] at 6 m/s, seen in bursts. Over its whole life its median is the
+# middle of the patrol and a line through its last quarter crosses the turns. The same sightings
+# through both modes: span reports it far from where it is, looks must report it close.
+
+
+def patrulla(maturity, v=6.0, quieto=False):
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity=maturity)
+    rng = np.random.default_rng(5)
+    e = emb_de(51)
+    k, real = 0, None
+    for t0 in np.arange(0.0, 90.0, 3.0):                 # a burst of 5 sightings every 3 s
+        for j in range(5):
+            t = t0 + 0.2 * j
+            s_ = (v * t) % 100.0
+            x = -25.0 + (s_ if s_ <= 50.0 else 100.0 - s_)
+            real = np.array([0.0 if quieto else x, 30.0])
+            ident.observe(k, 99, real + rng.normal(0, 1.2, size=2), 0.7,
+                          e + 0.03 * RNG.normal(size=512), t=t)
+            k += 1
+    c = ident.candidates(preliminary=True)[0]
+    return c, float(np.hypot(c["x"] - real[0], c["y"] - real[1]))
+
+
+c_span, e_span = patrulla("span")
+c_look, e_look = patrulla("looks")
+c_quieto, e_quieto = patrulla("looks", quieto=True)
+print(f"  patrulla a 6 m/s: span movil={c_span['mobile']} error {e_span:.1f} m | "
+      f"miradas movil={c_look['mobile']} error {e_look:.1f} m")
+print(f"  blanco quieto con el mismo ruido: miradas movil={c_quieto['mobile']} error {e_quieto:.2f} m")
+assert c_look["mobile"] and e_look < 3.0, "la patrulla tiene que salir movil y cerca de donde esta"
+assert e_span > 3 * e_look, "el contraste con la regla vieja tiene que verse"
+assert not c_quieto["mobile"], "el ruido de un blanco quieto no puede leerse como movimiento"
+
+print()
 print("TODO OK")

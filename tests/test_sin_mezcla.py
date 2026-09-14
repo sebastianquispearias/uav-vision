@@ -35,7 +35,9 @@ for modo in ([], ["--span"]):
           % (nombre, len(reps), len(mezcla), latidos, d))
     assert not mezcla, "con capa de identidad no puede salir un punto RANSAC: %s" % mezcla[:1]
     assert latidos > 0, "antes del primer candidato el dron tiene que mandar latidos"
-    esperado = 2.39 if modo else 2.18
+    # 2.18 m until moving targets were described by their recent past: with it some of the flight's
+    # walkers are classified mobile and stop merging into the operator's candidate (670 -> 519 impacts).
+    esperado = 2.39 if modo else 2.25
     assert abs(d - esperado) < 0.005, "el resultado del vuelo cambio: %.2f m en vez de %.2f" % (d, esperado)
 
 print()
