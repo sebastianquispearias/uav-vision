@@ -21,7 +21,13 @@ from typing import Dict, Hashable, List, Optional, Sequence
 
 import numpy as np
 
+# Labels that are not an identity. Case does not matter: "X" and "x" both mean "not a person",
+# because a labeller holding shift must not turn every false positive into a person named X.
 NO_IDENTITY = frozenset({"x", "?"})
+
+
+def _is_identity(label) -> bool:
+    return label is not None and str(label).lower() not in NO_IDENTITY
 
 
 def identity_scores(
@@ -33,7 +39,8 @@ def identity_scores(
     Scores predicted ids against ground-truth identities over the same boxes.
 
     Args:
-        truth: ground-truth identity per box. None, or a label in NO_IDENTITY, leaves the box out.
+        truth: ground-truth identity per box. None, or a label in NO_IDENTITY in any case, leaves
+            the box out.
         predicted: id the system assigned per box. None means the system gave it no id.
         order: a time key per box (frame index or timestamp), used only to count switches.
 
@@ -49,7 +56,7 @@ def identity_scores(
     if not (len(truth) == len(predicted) == len(order)):
         raise ValueError("truth, predicted and order must describe the same boxes")
 
-    keep = [i for i, g in enumerate(truth) if g is not None and g not in NO_IDENTITY]
+    keep = [i for i, g in enumerate(truth) if _is_identity(g)]
     excluded = len(truth) - len(keep)
     gts = sorted({truth[i] for i in keep}, key=str)
     preds = sorted({predicted[i] for i in keep if predicted[i] is not None}, key=str)

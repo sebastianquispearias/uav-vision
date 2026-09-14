@@ -69,6 +69,10 @@ r = ver("un falso positivo marcado x", [1, 1, 1, 1, 2, 2, 2, 9], 1.0, 0,
         verdad=VERDAD[:7] + ["x"])
 assert r["excluded"] == 1 and r["boxes"] == 7, r
 print("  la caja 'x' queda fuera y se cuenta aparte: excluded=%d" % r["excluded"])
+r = ver("el mismo, marcado X mayuscula", [1, 1, 1, 1, 2, 2, 2, 9], 1.0, 0,
+        verdad=VERDAD[:7] + ["X"])
+assert r["excluded"] == 1 and r["identities"] == 2, "X mayuscula conto como una persona: %r" % (r,)
+print("  X mayuscula tambien queda fuera: identities=%d" % r["identities"])
 
 print("=" * 70)
 print("7. EL ORDEN TEMPORAL MANDA, NO EL ORDEN DE LA LISTA")
