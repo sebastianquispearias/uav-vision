@@ -20,6 +20,10 @@ source, reviewed the same way.
         --salida ../drone-geolocation/entrenamiento/grupos_vuelo2a.json
     -> http://127.0.0.1:8412/
 
+The recorded flights have a shortcut, so the command fits on one line:
+
+    python scripts/etiquetar_grupos.py --vuelo 2a
+
 The output keys are row indices of the --cajas CSV, so each label points back at a frame and a box.
 """
 import argparse
@@ -32,6 +36,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 ETIQUETAS = ("persona", "no")
+
+_ENT = os.path.join("..", "drone-geolocation", "entrenamiento")
+_DATOS = os.path.join("..", "drone-geolocation", "data", "flight_01ago")
+# Flights whose boxes and embeddings are already on disk: --vuelo fills the four paths.
+VUELOS = {
+    "2a": (os.path.join(_ENT, "valida_ident_cajas_vuelo2a.csv"), os.path.join(_ENT, "valida_ident_embs_vuelo2a.npy"),
+           os.path.join(_DATOS, "20260801_184259", "frames"), os.path.join(_ENT, "grupos_vuelo2a.json")),
+    "2b": (os.path.join(_ENT, "valida_ident_cajas_vuelo2b.csv"), os.path.join(_ENT, "valida_ident_embs_vuelo2b.npy"),
+           os.path.join(_DATOS, "20260801_185326", "frames"), os.path.join(_ENT, "grupos_vuelo2b.json")),
+}
 MUESTRA = 24          # crops shown per group: enough to see what it is, few enough to load fast
 LADO = 96             # crop side, px
 
@@ -220,15 +234,24 @@ def servir(sesion, puerto):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cajas", required=True, help="CSV con frame,conf,x1,y1,x2,y2")
-    ap.add_argument("--embs", required=True, help="embeddings OSNet, una fila por caja del CSV")
-    ap.add_argument("--frames", required=True, help="carpeta con frame_NNNN.jpg")
-    ap.add_argument("--salida", required=True, help="JSON de etiquetas; si existe, se retoma")
+    ap.add_argument("--vuelo", choices=sorted(VUELOS), help="atajo: rellena --cajas --embs --frames --salida")
+    ap.add_argument("--cajas", help="CSV con frame,conf,x1,y1,x2,y2")
+    ap.add_argument("--embs", help="embeddings OSNet, una fila por caja del CSV")
+    ap.add_argument("--frames", help="carpeta con frame_NNNN.jpg")
+    ap.add_argument("--salida", help="JSON de etiquetas; si existe, se retoma")
     ap.add_argument("--grupos", type=int, default=30)
     ap.add_argument("--desde", type=int, default=None)
     ap.add_argument("--hasta", type=int, default=None)
     ap.add_argument("--puerto", type=int, default=8412)
     args = ap.parse_args()
+    if args.vuelo:
+        raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for campo, ruta in zip(("cajas", "embs", "frames", "salida"), VUELOS[args.vuelo]):
+            if getattr(args, campo) is None:
+                setattr(args, campo, os.path.normpath(os.path.join(raiz, ruta)))
+    faltan = [c for c in ("cajas", "embs", "frames", "salida") if getattr(args, c) is None]
+    if faltan:
+        ap.error("faltan %s (o usa --vuelo %s)" % (", ".join("--" + c for c in faltan), "/".join(sorted(VUELOS))))
     s = Sesion(args.cajas, np.load(args.embs), args.frames, args.salida, args.grupos, args.desde, args.hasta)
     print("%d cajas en %d grupos, %d ya etiquetadas -> http://127.0.0.1:%d/"
           % (len(s.filas), len(s.grupos), len(s.etiquetas), args.puerto), flush=True)
