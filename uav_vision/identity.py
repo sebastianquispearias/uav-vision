@@ -112,19 +112,31 @@ def dominant_class(votos: Optional[Mapping[str, int]]) -> Optional[str]:
     return max(sorted(votos), key=lambda nombre: votos[nombre])
 
 
-def _current_position(ii: np.ndarray) -> np.ndarray:
+def _current_position(ii: np.ndarray, ts: Optional[List[Optional[float]]] = None) -> np.ndarray:
     """
     Estimates where a track is NOW from its recent impacts.
 
     The median of the recent window systematically lags a moving target, since it is the center
     of the recent past. A straight-line fit over the same window, evaluated at the last sample,
-    removes that lag while still averaging out projection noise. The observation index stands in
-    for time: samples arrive at a near-uniform rate.
+    removes that lag while still averaging out projection noise.
+
+    The fit is against the time of each sighting whenever the caller supplied one. It used to be
+    against the observation index, on the assumption that sightings arrive at a near-uniform rate,
+    and they do not: a target in frame is detected in 4.6 % to 38 % of the frames on flight 3, in
+    bursts. Against the index, a burst of sightings a second apart and two sightings twenty seconds
+    apart count as the same step, and the line through a moving target bends accordingly. The
+    index remains the fallback for callers with no clock.
     """
     q = max(2, len(ii) // 4)
     v = ii[-q:]
     if len(v) < 3:
         return np.median(v, axis=0)
+    if ts is not None and len(ts) == len(ii) and all(t is not None for t in ts[-q:]):
+        x = np.asarray(ts[-q:], dtype=float)
+        x = x - x[-1]
+        if np.ptp(x) > 0:
+            ajuste = np.polynomial.polynomial.polyfit(x, v, 1)
+            return np.asarray(ajuste[0])            # the line at x = 0, the last sighting
     idx = np.arange(len(v), dtype=float)
     ajuste = np.polynomial.polynomial.polyfit(idx, v, 1)  # rows: intercept, slope
     return np.asarray(ajuste[0] + ajuste[1] * idx[-1])
@@ -318,9 +330,10 @@ class IncrementalIdentity:
                  "emb_sum": None, "n_emb": 0, "frames": set(),
                  "crop": None, "recorte_conf": -1.0,
                  "t0": None, "t1": None, "cls_votos": {},
-                 "bins": set(), "imp_bins": []}
+                 "bins": set(), "imp_bins": [], "ts": []}
             self._tracks[track_id] = t
         t["imps"].append((float(ground_xy[0]), float(ground_xy[1])))
+        t["ts"].append(float(sello) if sello is not None else None)
         t["conf_sum"] += float(conf)
         t["frames"].add(int(frame))
         # The look this sighting belongs to: off the clock when there is one, else off the frame
@@ -359,7 +372,7 @@ class IncrementalIdentity:
         return {
             "tid": tid, "n": n,
             "pos": np.median(ii, axis=0),  # robust lifetime center
-            "pos_actual": _current_position(ii),
+            "pos_actual": _current_position(ii, t.get("ts")),
             "desplaz": desplaz,
             "conf": t["conf_sum"] / n,
             "emb": emb,

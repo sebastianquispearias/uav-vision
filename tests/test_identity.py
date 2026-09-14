@@ -220,4 +220,36 @@ assert c60[0]["radius_m"] >= round(suelo, 2) - 0.01, "el radio no puede bajar de
 assert "radius_m" not in seguido("span", 60)[1][0], "el modo span no cambia el reporte"
 
 print()
+print("=" * 64)
+print("8. BLANCO MOVIL DETECTADO A RAFAGAS: la posicion actual se ajusta contra el reloj")
+print("=" * 64)
+# A target in frame is detected in 4.6-38 % of frames on flight 3, in bursts. Here a boat-like
+# target crosses at 6 m/s and is seen in bursts of five frames with long gaps. Fitting against
+# the observation index treats every sighting as one equal step; fitting against time does not.
+from uav_vision.identity import _current_position
+
+vel = np.array([6.0, 0.0])
+tiempos = [t0 + k * 0.2 for t0 in (0.0, 1.0, 9.0, 10.0, 17.0, 18.0, 26.0, 27.0, 34.0, 35.0) for k in range(5)]
+reales = np.array([vel * t for t in tiempos])
+ruido_rng = np.random.default_rng(21)
+imps = reales + ruido_rng.normal(0, 0.8, size=reales.shape)
+fin = reales[-1]
+err_indice = float(np.linalg.norm(_current_position(imps) - fin))
+err_reloj = float(np.linalg.norm(_current_position(imps, tiempos) - fin))
+print(f"  error de la posicion actual: contra el indice {err_indice:.2f} m | contra el reloj {err_reloj:.2f} m")
+assert err_reloj < 0.5 * err_indice, "ajustar contra el reloj tiene que corregir las rafagas"
+assert err_reloj < 2.0
+
+ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
+e = emb_de(31)
+for k, (t, xy) in enumerate(zip(tiempos, imps)):
+    ident.observe(k, 95, xy, 0.7, e + 0.03 * RNG.normal(size=512), t=t)
+c = ident.candidates(preliminary=True)
+movil = [x for x in c if x["mobile"]]
+assert len(movil) == 1, f"el blanco a 6 m/s tiene que salir movil: {c}"
+d = float(np.hypot(movil[0]["x"] - fin[0], movil[0]["y"] - fin[1]))
+print(f"  por la capa de identidad con t: MOVIL, a {d:.2f} m de donde esta")
+assert d < 2.0
+
+print()
 print("TODO OK")
