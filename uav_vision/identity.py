@@ -165,6 +165,13 @@ class IncrementalIdentity:
             the 3.5 m radius tuned for people reports them as one car -- and nothing
             downstream can undo that, because by then there is one candidate. Set a class to
             min(noise radius, smallest plausible separation for that class).
+        reinforce_with_fragments: let a track too short to stand on its own join a candidate
+            that already exists, by the same rules that merge two full tracks. It never creates
+            a candidate: track_dur_s is there so that a few seconds of noise cannot put a point
+            on the map, and that stays true. What it removes is the other effect of the same
+            gate -- a target the tracker keeps losing and re-finding under new ids contributes
+            only its longest pieces to the candidate that is plainly the same thing. Off by
+            default: the reported chain is the validated one.
     """
 
     def __init__(
@@ -177,8 +184,10 @@ class IncrementalIdentity:
         report_dur_s: float = 36.0,
         mobile_disp_m: Optional[float] = None,
         fusion_radius_by_class: Optional[Mapping[str, float]] = None,
+        reinforce_with_fragments: bool = False,
     ) -> None:
         self.fusion_radius_m = fusion_radius_m
+        self.reinforce_with_fragments = reinforce_with_fragments
         self.fusion_radius_by_class = dict(fusion_radius_by_class or {})
         self.emb_dist_max = emb_dist_max
         # Kept as given, so "derive it from the radius" stays a per-class answer while an
@@ -287,35 +296,119 @@ class IncrementalIdentity:
 
     # -- association -------------------------------------------------------
 
+    def _summary(self, tid: int, t: dict) -> dict:
+        """One track reduced to what association needs: where, how much, what it looks like."""
+        n = len(t["imps"])
+        ii = np.asarray(t["imps"])
+        q = max(1, n // 4)
+        desplaz = float(np.linalg.norm(
+            np.median(ii[:q], axis=0) - np.median(ii[-q:], axis=0)))
+        emb = None
+        if t["n_emb"] > 0:
+            emb = t["emb_sum"] / (np.linalg.norm(t["emb_sum"]) + 1e-9)
+        return {
+            "tid": tid, "n": n,
+            "pos": np.median(ii, axis=0),  # robust lifetime center
+            "pos_actual": _current_position(ii),
+            "desplaz": desplaz,
+            "conf": t["conf_sum"] / n,
+            "emb": emb,
+            "frames": t["frames"],
+            "crop": t.get("crop"),
+            "recorte_conf": t.get("recorte_conf", -1.0),
+            "t0": t.get("t0"),
+            "t1": t.get("t1"),
+            "cls_votos": dict(t.get("cls_votos") or {}),
+            "cls": dominant_class(t.get("cls_votos")),
+        }
+
     def _track_summaries(self) -> List[dict]:
-        tracks = []
-        for tid, t in self._tracks.items():
-            n = len(t["imps"])
-            if n < self.n_pista or not self._has_covered(t, self.track_dur_s, self.span_pista):
+        """Tracks that earned a place in association: enough detections over enough time."""
+        return [self._summary(tid, t) for tid, t in self._tracks.items()
+                if len(t["imps"]) >= self.n_pista
+                and self._has_covered(t, self.track_dur_s, self.span_pista)]
+
+    def _fragment_summaries(self) -> List[dict]:
+        """
+        Tracks with enough detections that did not last track_dur_s.
+
+        A tracker that loses its target and finds it again under a new id leaves exactly these
+        behind. Measured on flight 3, over the hand-labelled window: of the operator's boxes that
+        the flight's BoT-SORT gave an id, 62 % sit in tracks shorter than 8.6 s, and 96 % once
+        the tracker is calibrated to the aerial detector's confidences.
+        """
+        return [self._summary(tid, t) for tid, t in self._tracks.items()
+                if len(t["imps"]) >= self.n_pista
+                and not self._has_covered(t, self.track_dur_s, self.span_pista)]
+
+    def _match(self, tk: dict, cands: List[dict]) -> Optional[int]:
+        """
+        Index of the static candidate this track belongs to, or None.
+
+        The rules apply in order -- class, co-occurrence, distance, appearance -- and among the
+        candidates that pass all of them the one closest in position and appearance wins.
+        """
+        radio = self._radio(tk["cls"])
+        mejor, smin = None, math.inf
+        for k, c in enumerate(cands):
+            if c["mobile"]:
                 continue
-            ii = np.asarray(t["imps"])
-            q = max(1, n // 4)
-            desplaz = float(np.linalg.norm(
-                np.median(ii[:q], axis=0) - np.median(ii[-q:], axis=0)))
-            emb = None
-            if t["n_emb"] > 0:
-                emb = t["emb_sum"] / (np.linalg.norm(t["emb_sum"]) + 1e-9)
-            tracks.append({
-                "tid": tid, "n": n,
-                "pos": np.median(ii, axis=0),  # robust lifetime center
-                "pos_actual": _current_position(ii),
-                "desplaz": desplaz,
-                "conf": t["conf_sum"] / n,
-                "emb": emb,
-                "frames": t["frames"],
-                "crop": t.get("crop"),
-                "recorte_conf": t.get("recorte_conf", -1.0),
-                "t0": t.get("t0"),
-                "t1": t.get("t1"),
-                "cls_votos": dict(t.get("cls_votos") or {}),
-                "cls": dominant_class(t.get("cls_votos")),
-            })
-        return tracks
+            # Two names, two things. This veto comes before every other rule, the twin
+            # exception included: a car is not the person standing beside it however
+            # close they are and however alike their crops look at 35 m. Silence on
+            # either side is not disagreement -- a track with no votes still merges the
+            # way it always did, which is what keeps every camera without a class
+            # working unchanged.
+            c_cls = dominant_class(c["cls_votos"])
+            if (tk["cls"] is not None and c_cls is not None
+                    and tk["cls"] != c_cls):
+                continue
+            dp = float(np.linalg.norm(tk["pos"] - c["pos"]))
+            if len(tk["frames"] & c["frames"]) >= COOCURRENCIA_MIN:
+                # Seen together: two different things — unless this is the duplicate-box
+                # case (same spot, same appearance).
+                es_gemelo = (
+                    dp < POS_FRAC_GEMELO * radio
+                    and tk["emb"] is not None and c["emb"] is not None
+                    and float(np.linalg.norm(tk["emb"] - c["emb"]))
+                    < EMB_DIST_GEMELO)
+                if not es_gemelo:
+                    continue
+            if dp >= radio:
+                continue
+            if tk["emb"] is not None and c["emb"] is not None:
+                de = float(np.linalg.norm(tk["emb"] - c["emb"]))
+                if de >= self.emb_dist_max:
+                    continue
+                s = dp / radio + 0.5 * de / self.emb_dist_max
+            else:
+                s = dp / radio
+            if s < smin:
+                mejor, smin = k, s
+        return mejor
+
+    @staticmethod
+    def _absorb(c: dict, tk: dict) -> None:
+        """Folds a track into a candidate, weighting position and appearance by evidence."""
+        w = c["n"] / (c["n"] + tk["n"])
+        c["pos"] = w * c["pos"] + (1 - w) * tk["pos"]
+        if c["emb"] is not None and tk["emb"] is not None:
+            e = w * c["emb"] + (1 - w) * tk["emb"]
+            c["emb"] = e / (np.linalg.norm(e) + 1e-9)
+        c["conf"] = w * c["conf"] + (1 - w) * tk["conf"]
+        c["n"] += tk["n"]
+        c["frames"] |= tk["frames"]
+        c["tids"].append(tk["tid"])
+        for nombre, v in tk["cls_votos"].items():
+            c["cls_votos"][nombre] = c["cls_votos"].get(nombre, 0) + v
+        # Positions and appearances average; a photograph cannot. Keep the clearest
+        # of the two, which is the one the verifier would have chosen.
+        if tk["crop"] and tk["recorte_conf"] > c["recorte_conf"]:
+            c["crop"], c["recorte_conf"] = tk["crop"], tk["recorte_conf"]
+        # Two tracks of one target: the evidence spans the union of their intervals.
+        if tk["t0"] is not None:
+            c["t0"] = tk["t0"] if c["t0"] is None else min(c["t0"], tk["t0"])
+            c["t1"] = tk["t1"] if c["t1"] is None else max(c["t1"], tk["t1"])
 
     def candidates(self, preliminary: bool = False, with_tracks: bool = False) -> List[dict]:
         """
@@ -343,7 +436,6 @@ class IncrementalIdentity:
         """
         cands: List[dict] = []
         for tk in sorted(self._track_summaries(), key=lambda p: -p["n"]):
-            radio = self._radio(tk["cls"])
             if (tk["desplaz"] > self._disp_movil(tk["cls"]) and tk["n"] >= self.n_movil
                     and self._has_covered(tk, self.mobile_dur_s, self.span_movil)):
                 cands.append({"mobile": True, "pos": tk["pos_actual"].copy(),
@@ -354,42 +446,7 @@ class IncrementalIdentity:
                               "t0": tk["t0"], "t1": tk["t1"],
                               "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]]})
                 continue
-            mejor, smin = None, math.inf
-            for k, c in enumerate(cands):
-                if c["mobile"]:
-                    continue
-                # Two names, two things. This veto comes before every other rule, the twin
-                # exception included: a car is not the person standing beside it however
-                # close they are and however alike their crops look at 35 m. Silence on
-                # either side is not disagreement -- a track with no votes still merges the
-                # way it always did, which is what keeps every camera without a class
-                # working unchanged.
-                c_cls = dominant_class(c["cls_votos"])
-                if (tk["cls"] is not None and c_cls is not None
-                        and tk["cls"] != c_cls):
-                    continue
-                dp = float(np.linalg.norm(tk["pos"] - c["pos"]))
-                if len(tk["frames"] & c["frames"]) >= COOCURRENCIA_MIN:
-                    # Seen together: two different things — unless this is the duplicate-box
-                    # case (same spot, same appearance).
-                    es_gemelo = (
-                        dp < POS_FRAC_GEMELO * radio
-                        and tk["emb"] is not None and c["emb"] is not None
-                        and float(np.linalg.norm(tk["emb"] - c["emb"]))
-                        < EMB_DIST_GEMELO)
-                    if not es_gemelo:
-                        continue
-                if dp >= radio:
-                    continue
-                if tk["emb"] is not None and c["emb"] is not None:
-                    de = float(np.linalg.norm(tk["emb"] - c["emb"]))
-                    if de >= self.emb_dist_max:
-                        continue
-                    s = dp / radio + 0.5 * de / self.emb_dist_max
-                else:
-                    s = dp / radio
-                if s < smin:
-                    mejor, smin = k, s
+            mejor = self._match(tk, cands)
             if mejor is None:
                 cands.append({"mobile": False, "pos": tk["pos"].copy(),
                               "emb": tk["emb"], "conf": tk["conf"],
@@ -399,26 +456,15 @@ class IncrementalIdentity:
                               "t0": tk["t0"], "t1": tk["t1"],
                               "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]]})
             else:
-                c = cands[mejor]
-                w = c["n"] / (c["n"] + tk["n"])
-                c["pos"] = w * c["pos"] + (1 - w) * tk["pos"]
-                if c["emb"] is not None and tk["emb"] is not None:
-                    e = w * c["emb"] + (1 - w) * tk["emb"]
-                    c["emb"] = e / (np.linalg.norm(e) + 1e-9)
-                c["conf"] = w * c["conf"] + (1 - w) * tk["conf"]
-                c["n"] += tk["n"]
-                c["frames"] |= tk["frames"]
-                c["tids"].append(tk["tid"])
-                for nombre, v in tk["cls_votos"].items():
-                    c["cls_votos"][nombre] = c["cls_votos"].get(nombre, 0) + v
-                # Positions and appearances average; a photograph cannot. Keep the clearest
-                # of the two, which is the one the verifier would have chosen.
-                if tk["crop"] and tk["recorte_conf"] > c["recorte_conf"]:
-                    c["crop"], c["recorte_conf"] = tk["crop"], tk["recorte_conf"]
-                # Two tracks of one target: the evidence spans the union of their intervals.
-                if tk["t0"] is not None:
-                    c["t0"] = tk["t0"] if c["t0"] is None else min(c["t0"], tk["t0"])
-                    c["t1"] = tk["t1"] if c["t1"] is None else max(c["t1"], tk["t1"])
+                self._absorb(cands[mejor], tk)
+
+        # Fragments come last and only reinforce: every candidate above was opened by a track
+        # that lasted, so no amount of short noise can add a point to the map.
+        if self.reinforce_with_fragments:
+            for tk in sorted(self._fragment_summaries(), key=lambda p: -p["n"]):
+                mejor = self._match(tk, cands)
+                if mejor is not None:
+                    self._absorb(cands[mejor], tk)
 
         def mature(c):
             return (c["n"] >= self.n_reporte

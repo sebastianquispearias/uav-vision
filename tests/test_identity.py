@@ -135,4 +135,44 @@ assert len(maduros) == 1 and maduros[0]["mature"] is True,     "con evidencia su
 print(f"  tras 60 s: mature=True, n_obs={maduros[0]['n_obs']}")
 
 print()
+print("=" * 64)
+print("6. FRAGMENTOS: refuerzan un candidato existente, nunca crean uno")
+print("=" * 64)
+# A tracker that keeps losing a target leaves pieces shorter than track_dur_s. With
+# reinforce_with_fragments they may join the candidate a lasting track opened, by the same
+# rules as any merge. Three contrasts, each of which fails if the rule is wrong: the same
+# fragment joins only with the option on; a fragment alone opens nothing even with it on;
+# a fragment in the right place with another appearance stays out.
+
+
+def escena(refuerzo, con_pista_larga=True):
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS,
+                                reinforce_with_fragments=refuerzo)
+    P, Q = np.array([0.0, 0.0]), np.array([30.0, 30.0])
+    e_p, e_otro = emb_de(11), emb_de(12)
+    if con_pista_larga:
+        for f in range(300):                                 # 60 s: a lasting track
+            ident.observe(f, 80, P + ruido(), 0.7, e_p + 0.03 * RNG.normal(size=512))
+    for f in range(300, 320):                                # 4 s, same person, new id
+        ident.observe(f, 81, P + ruido(), 0.7, e_p + 0.03 * RNG.normal(size=512))
+        ident.observe(f, 82, Q + ruido(), 0.7, e_p + 0.03 * RNG.normal(size=512))
+    for f in range(320, 340):                                # 4 s, right place, other look
+        ident.observe(f, 83, P + ruido(), 0.7, e_otro + 0.03 * RNG.normal(size=512))
+    return ident.candidates(preliminary=True, with_tracks=True)
+
+
+apagado, encendido = escena(False), escena(True)
+print(f"  sin refuerzo: {[(c['tracks'], c['n_obs']) for c in apagado]}")
+print(f"  con refuerzo: {[(c['tracks'], c['n_obs']) for c in encendido]}")
+assert len(apagado) == 1 and apagado[0]["tracks"] == [80], "sin la opcion un fragmento no deberia entrar"
+assert len(encendido) == 1, "un fragmento aislado no puede abrir un candidato"
+assert 81 in encendido[0]["tracks"], "el fragmento de la misma persona deberia reforzar"
+assert 82 not in encendido[0]["tracks"], "un fragmento a 42 m no es la misma cosa"
+assert 83 not in encendido[0]["tracks"], "otra apariencia en el mismo sitio no deberia entrar"
+assert encendido[0]["n_obs"] == apagado[0]["n_obs"] + 20
+solos = escena(True, con_pista_larga=False)
+print(f"  solo fragmentos, con refuerzo: {len(solos)} candidatos")
+assert solos == [], "sin una pista que dure, los fragmentos no dejan nada en el mapa"
+
+print()
 print("TODO OK")
