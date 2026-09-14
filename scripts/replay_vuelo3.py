@@ -351,7 +351,9 @@ Protocolo = VisionProtocol.with_config(
     identity=IncrementalIdentity(fusion_radius_m=3.5, fps=fps_replay,
                                  reinforce_with_fragments="--refuerzo" in sys.argv,
                                  # --miradas: maturity by independent looks, with a radius per POI.
-                                 maturity="looks" if "--miradas" in sys.argv else "span"),
+                                 maturity="looks" if "--miradas" in sys.argv else "span",
+                                 report_min_looks=next((int(a.split("=", 1)[1]) for a in sys.argv
+                                                        if a.startswith("--miradas-min=")), 5)),
     # --preliminares shows the candidates that formed but did not mature. Off by
     # default: for a loitering drone they are noise. A vehicle the drone crosses
     # once on a sweep is exactly the case they exist for.

@@ -268,6 +268,10 @@ def registrar(mensaje, fuente):
             'mobile': p.get('mobile'),
             'mature': bool(p.get('mature', False)),
             'crop': p.get('crop'),
+            # How much independent evidence, and how far off the point may be, when the drone
+            # matures by looks. Absent from older reports, and then simply not drawn.
+            'looks': p.get('looks'),
+            'radius_m': p.get('radius_m'),
             # Kept so the station can decide whether two drones are looking at one target.
             # Never drawn: it is evidence, not something an operator reads.
             'emb': p.get('emb'),
@@ -478,6 +482,9 @@ PAGINA = r"""<!doctype html>
             gap:2px 10px; font-size:13px; }
   .poi dt { color:var(--tenue); }
   .poi dd { margin:0; font-variant-numeric:tabular-nums; }
+  .veredicto button { font:600 11px system-ui; padding:3px 9px; margin:8px 6px 0 0;
+                      border-radius:99px; border:1px solid var(--linea); background:transparent;
+                      color:inherit; cursor:pointer; }
   .crop { display:block; margin:10px 0 0; width:128px; max-width:100%;
              border-radius:4px; border:1px solid var(--linea); background:#0b0d12; }
   .sinrecorte { margin:8px 0 0; font-size:12px; color:var(--tenue); font-style:italic; }
@@ -660,6 +667,13 @@ function dibujar() {
     // be read as one. The real uncertainty is a few metres and would swallow the pin.
     ctx.beginPath(); ctx.arc(x, y, 22, 0, 6.2832);
     ctx.fillStyle = col + '22'; ctx.fill();
+    if (p.radius_m != null) {
+      // This one IS the uncertainty: the drone's own 95 % circle, in metres on the ground.
+      // Where to send someone is inside it, not at the pin.
+      const [xr] = aPantalla(p.x + p.radius_m, p.y);
+      ctx.beginPath(); ctx.setLineDash([6, 5]); ctx.arc(x, y, Math.abs(xr - x), 0, 6.2832);
+      ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+    }
     ctx.beginPath(); ctx.arc(x, y, 9, 0, 6.2832);
     ctx.fillStyle = col; ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = '#12141a'; ctx.stroke();
@@ -668,7 +682,8 @@ function dibujar() {
       ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 2; ctx.stroke();
     }
     ctx.fillStyle = '#e6e9ef'; ctx.font = '600 12px system-ui';
-    ctx.fillText(p.mature ? 'CONFIRMADO' : 'POR VERIFICAR', x + 16, y - 12);
+    ctx.fillText(veredictoDe(p) === 'si' ? 'VERIFICADO'
+                 : (p.mature ? 'CONFIRMADO' : 'POR VERIFICAR'), x + 16, y - 12);
     if (p.cls) {
       // The class under the verdict, dimmer: the verdict decides whether to look, the class
       // decides whether it is what you are looking for.
@@ -687,17 +702,26 @@ function pintarLista(pois) {
         <span class="chip ${p.mature ? 'ok' : 'duda'}">${p.mature ? 'CONFIRMADO' : 'POR VERIFICAR'}</span>
         ${p.mobile ? '<span class="chip mobile">MOVIL</span>' : ''}
         ${p.cls ? `<span class="chip clase">${p.cls}</span>` : ''}
+        ${veredictoDe(p) === 'si' ? '<span class="chip ok">VERIFICADO</span>' : ''}
       </div>
       <dl>
         <dt>local</dt><dd>${p.x} m E, ${p.y} m N</dd>
         ${p.lat != null ? `<dt>coords</dt><dd>${p.lat}, ${p.lng}</dd>` : ''}
         <dt>evidencia</dt><dd>${p.n_obs} obs${p.conf != null ? ', conf ' + p.conf : ''}</dd>
         <dt>dron</dt><dd>${p.dron}</dd>
+        ${p.radius_m != null
+          ? `<dt>margen</dt><dd>&plusmn;${p.radius_m} m (95 %), ${p.looks} miradas</dd>` : ''}
       </dl>
       ${p.crop
         ? `<img class="crop" src="data:image/jpeg;base64,${p.crop}" alt="lo que vio el dron">`
         : (p.mature ? '' : '<div class="sinrecorte">sin crop: no se puede verificar</div>')}
+      <div class="veredicto">${veredictoDe(p) === 'si' ? '' :
+        `<button data-v="si" data-i="${i}">es lo que busco</button>`
+        + `<button data-v="no" data-i="${i}">no es</button>`}</div>
     </div>`).join('');
+  for (const b of cont.querySelectorAll('button[data-v]')) {
+    b.onclick = () => marcar(pois[+b.dataset.i], b.dataset.v);
+  }
 }
 
 function pintarFiltro(pois) {
@@ -720,11 +744,36 @@ function pintarFiltro(pois) {
   }
 }
 
+// What the operator decided about a point after looking at its crop. The drone cannot tell a
+// person from an object it keeps confusing with one -- measured, none of its signals separate
+// them -- so this is not a convenience, it is the step that makes a report actionable.
+//
+// Kept by position, never by list index: the list is rebuilt on every report, reorders as
+// evidence grows, and a POI carries no id that survives it. A later report of the same thing
+// lands within its own margin of where the verdict was given.
+const veredictos = [];
+
+function veredictoDe(p) {
+  for (const v of veredictos) {
+    const r = Math.max(v.r || 0, p.radius_m || 0, 3);
+    if (Math.hypot(p.x - v.x, p.y - v.y) <= r) return v.v;
+  }
+  return null;
+}
+
+function marcar(p, v) {
+  veredictos.push({ x: p.x, y: p.y, r: p.radius_m || 0, v });
+  pintar();
+}
+
 function pintar() {
-  visibles = estado.pois.filter(p => !ocultas.has(claseDe(p)));
+  const recibidos = estado.pois.filter(p => !ocultas.has(claseDe(p)));
+  visibles = recibidos.filter(p => veredictoDe(p) !== 'no');
+  const descartados = recibidos.length - visibles.length;
   pintarFiltro(estado.pois);
   document.getElementById('cuenta').textContent = visibles.length + ' POI'
-    + (visibles.length === estado.pois.length ? '' : ` de ${estado.pois.length}`);
+    + (visibles.length === estado.pois.length ? '' : ` de ${estado.pois.length}`)
+    + (descartados ? ` \u00b7 ${descartados} descartados` : '');
   ajustarVista(visibles);
   pintarLista(visibles);
   dibujar();
