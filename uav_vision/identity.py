@@ -602,6 +602,23 @@ class IncrementalIdentity:
         dt = min(max(0.0, float(now) - c["t_ultimo"]), self.extrapolation_max_s)
         return np.asarray(c["pos"]) + np.asarray(c["vel"]) * dt
 
+    def _radio_ahora(self, c: dict, now: Optional[float]) -> float:
+        """
+        The 95 % radius at `now`: for a moving candidate, grown by how far it can have gone unseen.
+
+        The radius was the uncertainty at the last sighting. Between sightings a moving target keeps
+        going, and extrapolating along its velocity is right only while it does not turn. So the
+        margin grows by speed times the time since it was last seen: on a synthetic patrol at 4 m/s
+        the reported point was 22.4 m from the target while its circle still said 5 m. A margin that
+        does not hold the truth sends someone to the wrong place with confidence; a wide one says
+        honestly that the drone has lost precise track.
+        """
+        base = self._radius(c)
+        if now is None or not c.get("mobile") or c.get("vel") is None or c.get("t_ultimo") is None:
+            return base
+        edad = max(0.0, float(now) - c["t_ultimo"])
+        return base + float(np.linalg.norm(c["vel"])) * edad
+
     def candidates(self, preliminary: bool = False, with_tracks: bool = False,
                    now: Optional[float] = None) -> List[dict]:
         """
@@ -699,7 +716,7 @@ class IncrementalIdentity:
             "emb": c.get("emb"),
             # How much independent evidence, and how far off the point may be. Only in "looks"
             # mode, so the validated chain's report is unchanged byte for byte.
-            **({"looks": len(c["bins"]), "radius_m": round(self._radius(c), 2)}
+            **({"looks": len(c["bins"]), "radius_m": round(self._radio_ahora(c, now), 2)}
                if self.maturity == "looks" else {}),
             **({"tracks": sorted(c["tids"])} if with_tracks else {}),
         } for c in out]

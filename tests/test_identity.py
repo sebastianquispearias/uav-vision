@@ -367,4 +367,30 @@ a, b = quieto.candidates(preliminary=True)[0], quieto.candidates(preliminary=Tru
 assert (a["x"], a["y"]) == (b["x"], b["y"]), "un blanco quieto no se mueve por pasar el tiempo"
 
 print()
+print("=" * 64)
+print("12. SIN VERLO, EL MARGEN CRECE: el radio de un movil dice cuanto puede haberse ido")
+print("=" * 64)
+# A target at 6 m/s turns back right after its last sighting. Four seconds later the report is 48 m
+# off the extrapolated line's end; a radius frozen at the last sighting claims to hold it and does not.
+ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
+e = emb_de(71)
+vel = np.array([6.0, 0.0])
+for k in range(200):
+    ident.observe(k, 103, vel * (0.2 * k) + RNG.normal(0, 1.0, size=2), 0.7,
+                  e + 0.03 * RNG.normal(size=512), t=0.2 * k)
+t_ultimo = 0.2 * 199
+ahora = t_ultimo + 4.0
+real = vel * t_ultimo - vel * 4.0                        # it turned round and came back
+fijo = ident.candidates(preliminary=True)[0]
+vivo = ident.candidates(preliminary=True, now=ahora)[0]
+d_vivo = float(np.hypot(vivo["x"] - real[0], vivo["y"] - real[1]))
+print(f"  4 s despues de dar la vuelta: radio sin 'now' {fijo['radius_m']} m | con 'now' {vivo['radius_m']} m "
+      f"| el blanco a {d_vivo:.1f} m del punto reportado")
+assert vivo["radius_m"] >= fijo["radius_m"] + 6.0 * 4.0 - 0.5, "el margen tiene que crecer con rapidez x tiempo"
+assert d_vivo <= vivo["radius_m"], "con el margen que crece, la verdad tiene que caer dentro"
+assert d_vivo > fijo["radius_m"], "el contraste: el margen congelado no la contenia"
+r_quieto = (quieto.candidates(preliminary=True)[0]["radius_m"], quieto.candidates(preliminary=True, now=500.0)[0]["radius_m"])
+assert r_quieto[0] == r_quieto[1], "un blanco quieto no gana margen por pasar el tiempo"
+
+print()
 print("TODO OK")
