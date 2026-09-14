@@ -214,10 +214,14 @@ class OnboardCamera:
     def set_classes(self, classes: Optional[Sequence[str]] = None) -> None:
         """Changes what counts as a target, mid-flight.
 
-        Costs nothing. The detector is called without a class filter and already
-        scores every class it knows on every frame; self.classes only decides which
-        of those survive the loop in detect(). Switching from people to vehicles
-        reloads no model and adds no inference time.
+        Adds no inference time: the detector is called without a class filter and
+        already scores every class it knows on every frame; self.classes only decides
+        which of those survive the loop in detect(), and switching reloads no model.
+        What a wider search does cost is everything done per surviving box. Measured on
+        the Pi 5 with the flight chain on 600 frames of the 02-ago flight
+        (scripts/medir_multiclase_pi.py): about 33 ms per box, mostly the OSNet
+        embedding, so adding cars to people took the median frame from 206 to 245 ms
+        (4.85 to 4.08 fps) in a scene with 1.1 cars per frame, without throttling.
 
         Pass None to go back to people. Names must be names the model emits --
         see known_classes -- because a typo would silently report nothing.
