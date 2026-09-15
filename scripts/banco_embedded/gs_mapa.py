@@ -30,6 +30,14 @@ Without --fondo it draws a metric grid, which works anywhere and needs no imager
 Then open http://localhost:8300 in a browser.
 
 --demo injects moving fake POIs so the page can be seen without flying.
+
+--clip adds a CLIP score to each person candidate's crop (filtro_clip.py). Doubtful ones go to the
+end of the list with a "probable no persona" mark; nothing is hidden. torch and open_clip live
+only in the training venv, which also runs everything else this file imports:
+
+    ../drone-geolocation/entrenamiento/venv/Scripts/python.exe scripts/banco_embedded/gs_mapa.py --clip
+
+Without open_clip, --clip prints a warning and the station runs without scores.
 """
 import argparse
 import uuid
@@ -104,6 +112,10 @@ ESTADO = {
     'frames_dir': None,
 }
 CANDADO = threading.Lock()
+
+# The optional CLIP second opinion on each crop (filtro_clip.Anotador), set by --clip. None means
+# the station never started one, and then no POI carries a score field at all.
+CLIP = None
 
 
 def a_latlng(x, y, origen):
@@ -238,6 +250,9 @@ def pois_vigentes(ahora):
     pois = fundir(vivos)
     for q in pois:
         q['lat'], q['lng'] = a_latlng(q['x'], q['y'], ESTADO['origen'])
+    # What CLIP doubts goes to the end of the queue, and nothing else moves: the sort is stable
+    # and a POI without a score is never demoted. Nothing is removed either -- the operator decides.
+    pois.sort(key=lambda q: bool(q.get('clip_no_persona')))
     return pois
 
 
@@ -279,6 +294,11 @@ def registrar(mensaje, fuente):
             'dron': fuente,
             't': ahora,
         })
+    # Scored outside the station's lock: the drone already has its answer, and a model call must
+    # not stall the page's reads. Each distinct crop goes through the model once.
+    if CLIP is not None:
+        for q in pois:
+            CLIP.anotar(q)
     with CANDADO:
         ESTADO['pois_por_dron'][str(fuente)] = pois
         # Concatenated, not merged: two drones seeing the same person still produce two pins
@@ -486,6 +506,7 @@ PAGINA = r"""<!doctype html>
   .chip.duda { background:rgba(251,191,36,.15); color:var(--duda); }
   .chip.mobile { background:rgba(96,165,250,.15); color:var(--mobile); }
   .chip.clase { background:rgba(230,233,239,.10); color:var(--texto); }
+  .chip.noper { background:rgba(248,113,113,.15); color:#f87171; }
   #btn-fondo { font:600 11px system-ui; padding:3px 10px; border-radius:99px;
                cursor:pointer; border:1px solid var(--linea); background:#171b23;
                color:var(--tenue); }
@@ -738,6 +759,8 @@ function pintarLista(pois) {
         ${p.mobile ? '<span class="chip mobile">MOVIL</span>' : ''}
         ${p.cls ? `<span class="chip clase">${p.cls}</span>` : ''}
         ${veredictoDe(p) === 'si' ? '<span class="chip ok">VERIFICADO</span>' : ''}
+        ${p.clip_no_persona
+          ? `<span class="chip noper">probable no persona (CLIP ${p.clip.toFixed(2)})</span>` : ''}
       </div>
       <dl>
         <dt>local</dt><dd>${p.x} m E, ${p.y} m N</dd>
@@ -808,7 +831,10 @@ function marcar(p, v) {
 
 function pintar() {
   const recibidos = estado.pois.filter(p => !ocultas.has(claseDe(p)));
-  visibles = recibidos.filter(p => veredictoDe(p) !== 'no');
+  // What CLIP doubts is shown last, never hidden. The station already sends them in that order;
+  // sorting here too keeps the page honest with a station that does not. Array sort is stable.
+  visibles = recibidos.filter(p => veredictoDe(p) !== 'no')
+    .sort((a, b) => !!a.clip_no_persona - !!b.clip_no_persona);
   const descartados = recibidos.length - visibles.length;
   pintarFiltro(estado.pois);
   document.getElementById('cuenta').textContent = visibles.length + ' POI'
@@ -1054,8 +1080,22 @@ if __name__ == '__main__':
                          '1=192.168.1.120:8200,3=192.168.1.123:8200')
     ap.add_argument('--veredictos', default='veredictos',
                     help='carpeta donde se guardan los veredictos del operador y sus recortes')
+    ap.add_argument('--clip', action='store_true',
+                    help='puntua cada crop con CLIP: los "probable no persona" van al final de la '
+                         'lista, marcados, sin ocultarse. Necesita open_clip (venv de entrenamiento)')
+    ap.add_argument('--clip-umbral', type=float, default=None,
+                    help='umbral del puntaje CLIP (por defecto 0.687, fijado con los vuelos del 01ago)')
     args = ap.parse_args()
     DRON_CALLADO_S = args.callado_s
+    if args.clip:
+        # Imported only when asked for: the station stays droppable anywhere without torch.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import filtro_clip
+        print('cargando CLIP ViT-B-32/openai...', flush=True)
+        CLIP = filtro_clip.cargar(args.clip_umbral if args.clip_umbral is not None
+                                  else filtro_clip.UMBRAL)
+        if CLIP is not None:
+            print('CLIP listo: umbral %.3f' % CLIP.umbral, flush=True)
     ESTADO['veredictos_dir'] = args.veredictos
     if args.nodos:
         ESTADO['nodos'] = dict(par.split('=', 1) for par in args.nodos.split(','))
