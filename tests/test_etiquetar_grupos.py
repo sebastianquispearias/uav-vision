@@ -230,6 +230,19 @@ try:
     ign = [b for b in pedir('/frames/1')['cajas'] if b['i'] == per[0]['i']][0]
     assert ign['etiqueta'] == 'ignorar' and 'ignorar' in REVISION and not ign['doble'], ign
     print('  ignorar              : la caja queda "ignorar" y deja de contar como persona para los dobles')
+
+    # The groups page shows the label of each crop, so one box corrected apart from its group is visible
+    # there, and Z undoes it by sending a null label, which drops the correction.
+    crops = {m['i']: m for g in pedir('/estado')['grupos'] for m in g['muestra']}
+    assert crops[per[0]['i']]['etiqueta'] == 'ignorar' and crops[per[0]['i']]['corregida'], crops[per[0]['i']]
+    sin_corregir = [m for m in crops.values() if not m['corregida']][0]
+    assert sin_corregir['etiqueta'] in ('persona', 'no'), sin_corregir
+    print('  grupos por recorte   : el recorte corregido dice "ignorar"; los demas, la etiqueta de su grupo')
+    pedir('/frames/caja', {'i': per[0]['i'], 'v': None})
+    vuelto = {m['i']: m for g in pedir('/estado')['grupos'] for m in g['muestra']}[per[0]['i']]
+    assert vuelto['etiqueta'] == 'persona' and not vuelto['corregida'], vuelto
+    pedir('/frames/caja', {'i': per[0]['i'], 'v': 'ignorar'})
+    print('  deshacer (Z)         : etiqueta nula quita la correccion y la caja vuelve a la de su grupo')
 finally:
     proc.terminate(); proc.wait(timeout=5)
 
@@ -268,7 +281,22 @@ try:
     assert mini[:2] == b'\xff\xd8' and im.shape[1] == 480 and contar(mini, 'contexto') == 0
     verde = int(((im[..., 1] > 170) & (im[..., 0] < 130) & (im[..., 2] < 130)).sum())
     assert verde > 50, 'la caja dibujada del frame 9 tiene que verse verde en la miniatura: %d px' % verde
+    # The checks page: frame 1 was cleaned up in the review, frames 3 and 4 still have five people on
+    # top of each other. A gap is a frame with nobody between two frames with somebody: emptying frame 3
+    # makes one, because frames 2 and 4 keep their people.
+    ch = pedir('/chequeos/estado')
+    assert 1 not in ch['dobles'] and 1 not in ch['medias'], ch
+    assert 3 in ch['dobles'] and 3 in ch['medias'] and 4 in ch['dobles'], ch
+    assert ch['huecos'] == [] and ch['sin_revisar'] == [1], ch
+    print('  chequeos             : dobles %s, medias %s, huecos %s, sin revisar %s' % (ch['dobles'], ch['medias'], ch['huecos'], ch['sin_revisar']))
+    for b in pedir('/frames/3')['cajas']:
+        if b['etiqueta'] == 'persona':
+            pedir('/frames/caja', {'i': b['i'], 'v': 'no'})
+    ch = pedir('/chequeos/estado')
+    assert ch['huecos'] == [3] and 3 not in ch['dobles'], ch
+    print('  hueco                : vaciar el frame 3 entre el 2 y el 4 lo deja como hueco %s' % ch['huecos'])
     assert 'mosaico' in pedir('/mosaico', crudo=True).decode('utf-8')
+    assert 'chequeos' in pedir('/chequeos', crudo=True).decode('utf-8')
     print('  miniatura            : JPEG 480 px de ancho con %d px verdes de la caja dibujada; /mosaico sirve' % verde)
     grupos_despues = json.load(open(os.path.join(dirt, 'etiquetas.json'), encoding='utf-8'))['etiquetas']
     assert grupos_despues == grupos_antes, 'la revision no puede reescribir las etiquetas de grupos'

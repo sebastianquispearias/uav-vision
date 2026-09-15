@@ -129,6 +129,14 @@ def solape_menor(a, b):
     return ix * iy / menor if menor > 0 else 0.0
 
 
+def contenida(a, b):
+    """Fraction of box a that lies inside box b: 1 when a is entirely inside b."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    ar = (a[2] - a[0]) * (a[3] - a[1])
+    return ix * iy / ar if ar > 0 else 0.0
+
+
 def agrupar(emb, k):
     """Agglomerative clustering on cosine distance, the grouping the labelling cost was measured with."""
     if len(emb) < 2:
@@ -193,8 +201,10 @@ class Sesion:
             else:
                 etiqueta = "parcial"
             paso = max(1, len(miembros) // MUESTRA)
+            # Each crop carries its own final label, so a single box corrected apart from its group shows it.
             out.append({"g": g, "n": len(miembros), "etiqueta": etiqueta,
-                        "muestra": miembros[::paso][:MUESTRA]})
+                        "muestra": [{"i": i, "etiqueta": self.final(i), "corregida": i in self.correcciones}
+                                    for i in miembros[::paso][:MUESTRA]]})
         # Unlabelled first, then the largest: the next click is always the one that labels most.
         out.sort(key=lambda d: (d["etiqueta"] not in (None, "parcial"), -d["n"]))
         return {"grupos": out, "cajas": len(self.filas), "etiquetadas": len(self.etiquetas), "nombre": self.nombre,
@@ -279,11 +289,16 @@ class Sesion:
                 "contexto": [list(c) for c in self.contexto.get(f, [])]}
 
     def corregir(self, i, v):
-        if v not in REVISION:
-            raise ValueError("etiqueta invalida en la revision: persona, no o duplicado")
+        """Sets the label of one box apart from its group; v = None drops the correction, which is
+        what undo needs to leave a box exactly as the group had left it."""
+        if v is not None and v not in REVISION:
+            raise ValueError("etiqueta invalida en la revision: persona, no, duplicado o ignorar")
         if not 0 <= i < len(self.filas):
             raise ValueError("caja invalida")
-        self.correcciones[i] = v
+        if v is None:
+            self.correcciones.pop(i, None)
+        else:
+            self.correcciones[i] = v
         self._guardar_revision()
 
     def nueva(self, f, caja):
@@ -340,6 +355,29 @@ class Sesion:
             except ValueError as e:
                 rechazados.append({"f": int(f), "error": str(e)})
         return {"hechos": hechos, "rechazados": rechazados}
+
+    def chequeos(self):
+        """The checks a reviewer would otherwise have to run by hand, over the whole flight.
+
+        "medias" are person boxes lying inside another person box, the half-body duplicates; "dobles"
+        are person boxes that cover half of another one; "huecos" are frames with nobody between two
+        frames that do have somebody, where a person was probably left without a box.
+        """
+        dobles, medias, personas = [], [], {}
+        for f in self.lista:
+            d = self.frame_cajas(f)
+            P = [b["caja"] for b in d["cajas"] if b["etiqueta"] == "persona"] + [tuple(n["caja"]) for n in d["nuevas"]]
+            personas[f] = len(P)
+            if any(b["doble"] for b in d["cajas"] + d["nuevas"]):
+                dobles.append(f)
+            if any(contenida(a, b) >= 0.8 for a in P for b in P if a is not b):
+                medias.append(f)
+        huecos = [self.lista[k] for k in range(1, len(self.lista) - 1)
+                  if personas[self.lista[k]] == 0 and personas[self.lista[k - 1]] > 0 and personas[self.lista[k + 1]] > 0]
+        return {"nombre": self.nombre, "total": len(self.lista), "revisados": len(self.revisados & set(self.lista)),
+                "personas": sum(personas.values()), "dobles": dobles, "medias": medias, "huecos": huecos,
+                "sin_revisar": [f for f in self.lista if f not in self.revisados],
+                "sin_etiquetar": [f for f in self.lista if any(self.final(i) is None for i in self.por_frame.get(f, []))]}
 
     def miniatura(self, f, ancho=480):
         """A small copy of frame f with its person boxes drawn thick green, the rest thin red and the
@@ -433,7 +471,13 @@ PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</t
   .grupo.persona { border-left:5px solid #4ade80; } .grupo.no { border-left:5px solid #f87171; }
   .grupo.parcial { border-left:5px solid #fbbf24; }
   .rejilla { display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }
-  .rejilla img { width:128px; height:128px; border-radius:4px; }
+  .rejilla img { width:128px; height:128px; border-radius:4px; display:block; border:3px solid transparent; }
+  .rejilla a.persona img { border-color:#22c55e; } .rejilla a.no img { border-color:#ef4444; }
+  .rejilla a.duplicado img { border-color:#9ca3af; } .rejilla a.ignorar img { border-color:#60a5fa; }
+  .rejilla a { position:relative; } .rejilla a.corregida::after { content:'corregida'; position:absolute; left:4px;
+    bottom:4px; background:#000b; padding:0 4px; border-radius:3px; font-size:11px; }
+  .k { display:inline-block; min-width:1.3em; padding:0 4px; border:1px solid #3a3f4b; border-radius:4px;
+       text-align:center; font:12px monospace; }
   button { font:600 13px system-ui; padding:5px 14px; margin-right:6px; border-radius:99px;
            border:1px solid #3a3f4b; background:#1c1f27; color:#e6e9ef; cursor:pointer; }
 </style>
@@ -441,7 +485,10 @@ PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</t
 <p>Despues de los grupos, dos pasos cortos:
 <b>1.</b> <a href="/frames?solo=dobles" style="color:#93c5fd">frames donde una persona tiene dos cajas</a> (apretar D en la caja chica) &middot;
 <b>2.</b> <a href="/mosaico" style="color:#93c5fd">mosaico del resto</a> (mirar 24 a la vez; clic solo si falta o sobra algo) &middot;
-<a href="/frames" style="color:#93c5fd">todos, uno por uno</a></p>
+<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a></p>
+<p id="sueltas">Si en un grupo hay UN recorte mal, no hace falta partirlo: con el <b>raton encima de ese recorte</b>,
+<span class="k">P</span> persona <span class="k">N</span> no <span class="k">D</span> duplicado <span class="k">I</span> ignorar.
+Corrige esa caja sola, queda con el borde de su color y el grupo no se toca. <span class="k">Z</span> deshace.</p>
 <p id="cuenta"></p>
 <p id="ayuda">Un clic etiqueta TODO el grupo. Si en la rejilla hay de las dos cosas, "mezcla" lo parte en dos.</p>
 <p id="cajas">Borde <b style="color:#ffe600">amarillo grueso</b> = esta caja, la que se etiqueta.
@@ -465,10 +512,12 @@ async function cargar() {
        ${e.letras.map(l => `<button onclick="enviar('/marcar', {g: ${g.g}, v: '${l}'})">${l}</button>`).join('')}`
     : `<button onclick="enviar('/marcar', {g: ${g.g}, v: 'persona'})">persona</button>
        <button onclick="enviar('/marcar', {g: ${g.g}, v: 'no'})">no es persona</button>`;
+  e.grupos.forEach(g => g.muestra.forEach(m => { etiquetaDe[m.i] = m.corregida ? m.etiqueta : undefined; }));
   document.getElementById('grupos').innerHTML = e.grupos.map(g => `
     <div class="grupo ${g.etiqueta === 'persona' || g.etiqueta === 'no' || g.etiqueta === 'parcial' ? g.etiqueta : (g.etiqueta ? 'persona' : '')}">
       <b>grupo ${g.g}</b> · ${g.n} cajas · ${g.etiqueta || 'sin etiquetar'}
-      <div class="rejilla">${g.muestra.map(i => `<a href="/frame/${i}" target="_blank"><img loading="lazy" src="/recorte/${i}"></a>`).join('')}</div>
+      <div class="rejilla">${g.muestra.map(m => `<a href="/frame/${m.i}" target="_blank" class="${m.etiqueta || ''} ${m.corregida ? 'corregida' : ''}"
+           onmouseenter="raton = ${m.i}" onmouseleave="raton = null"><img loading="lazy" src="/recorte/${m.i}"></a>`).join('')}</div>
       ${botones(g)}
       ${g.n > 1 ? `<button onclick="enviar('/partir', {g: ${g.g}})">mezcla: partir</button>` : ''}
     </div>`).join('');
@@ -478,6 +527,20 @@ async function enviar(ruta, cuerpo) {
   if (!r.ok) alert((await r.json()).error);
   cargar();
 }
+// One crop at a time, without touching its group: the label of that box alone, and Z to undo.
+let raton = null, deshacer = [], etiquetaDe = {};
+const TECLA = {p: 'persona', n: 'no', d: 'duplicado', i: 'ignorar'};
+document.addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT') return;
+  const k = ev.key.toLowerCase();
+  if (raton !== null && TECLA[k]) {
+    deshacer.push({i: raton, v: etiquetaDe[raton] === undefined ? null : etiquetaDe[raton]});
+    enviar('/frames/caja', {i: raton, v: TECLA[k]});
+  } else if (k === 'z' && deshacer.length) {
+    const u = deshacer.pop();
+    enviar('/frames/caja', {i: u.i, v: u.v});
+  }
+});
 cargar();
 </script>
 """
@@ -520,10 +583,12 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     Con el raton encima: <span class="k">P</span> persona <span class="k">N</span> no <span class="k">D</span> duplicado
     <span class="k">I</span> ignorar.<br>
     <b>Arrastrar</b>: dibuja la caja de una persona que ninguna caja cubre.<br>
-    <b>Clic derecho</b> en una caja dibujada: la borra. <span class="k">R</span> desmarca revisado.</p>
+    <b>Clic derecho</b> en una caja dibujada: la borra. <span class="k">R</span> desmarca revisado.
+    <span class="k">Z</span> deshace lo ultimo (etiqueta, caja dibujada o borrada).</p>
   <p>Un frame esta <b>revisado</b> cuando cada persona tiene UNA caja verde y nada mas es verde.
     Una caja corrida (piernas, sombra, media persona) de alguien que ya tiene la suya es <b>duplicado</b>.</p>
-  <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a></p>
+  <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a>
+    &middot; <a href="/chequeos">chequeos</a></p>
 </div>
 <script>
 const cv = document.getElementById('cv'), cx = cv.getContext('2d');
@@ -531,7 +596,7 @@ const lupa = document.getElementById('lupa'), lx = lupa.getContext('2d');
 const COLOR = {persona: '#22c55e', no: '#ef4444', duplicado: '#9ca3af', ignorar: '#60a5fa'};
 const SIGUIENTE = {persona: 'no', no: 'persona', duplicado: 'persona', ignorar: 'persona'};
 const TECLA = {p: 'persona', n: 'no', d: 'duplicado', i: 'ignorar'};
-let lista = [], pos = 0, datos = null, img = new Image(), abajo = null, raton = null, nombre = '';
+let lista = [], pos = 0, datos = null, img = new Image(), abajo = null, raton = null, nombre = '', deshacer = [];
 
 async function pedir(ruta, cuerpo) {
   const r = await fetch(ruta, cuerpo === undefined ? {} :
@@ -632,7 +697,18 @@ function bajo(p) {
   });
   return mejor;
 }
-async function poner(i, v) { try { await pedir('/frames/caja', {i, v}); } catch (e) {} recargar(); }
+async function poner(i, v) {
+  const antes = datos.cajas.find(b => b.i === i);
+  deshacer.push(() => pedir('/frames/caja', {i, v: antes && antes.corregida ? antes.etiqueta : null}));
+  try { await pedir('/frames/caja', {i, v}); } catch (e) {}
+  recargar();
+}
+async function deshacerUltimo() {
+  const u = deshacer.pop();
+  if (!u) return aviso('no hay nada que deshacer');
+  try { await u(); } catch (e) {}
+  recargar();
+}
 async function terminar() {
   try { await pedir('/frames/revisado', {f: datos.f, v: true}); } catch (e) { return; }   // the refusal is already in the notice
   lista[pos].revisado = true;
@@ -655,7 +731,11 @@ window.addEventListener('mouseup', async ev => {
   const a = abajo, p = raton || a;
   abajo = null;
   if (a.arrastrando) {
-    try { await pedir('/frames/nueva', {f: datos.f, caja: [Math.min(a.x, p.x), Math.min(a.y, p.y), Math.max(a.x, p.x), Math.max(a.y, p.y)]}); } catch (e) {}
+    const f = datos.f;
+    try {
+      const {k} = await pedir('/frames/nueva', {f, caja: [Math.min(a.x, p.x), Math.min(a.y, p.y), Math.max(a.x, p.x), Math.max(a.y, p.y)]});
+      deshacer.push(() => pedir('/frames/borrar', {f, k}));
+    } catch (e) {}
     return recargar();
   }
   const b = bajo(a);
@@ -664,7 +744,12 @@ window.addEventListener('mouseup', async ev => {
 cv.addEventListener('contextmenu', async ev => {
   ev.preventDefault();
   const b = bajo(punto(ev));
-  if (b && b.tipo === 'nueva') { await pedir('/frames/borrar', {f: datos.f, k: b.k}); recargar(); }
+  if (b && b.tipo === 'nueva') {
+    const f = datos.f, caja = b.caja;
+    await pedir('/frames/borrar', {f, k: b.k});
+    deshacer.push(() => pedir('/frames/nueva', {f, caja}));
+    recargar();
+  }
 });
 document.addEventListener('keydown', async ev => {
   if (ev.target.tagName === 'INPUT' || !datos) return;
@@ -673,6 +758,7 @@ document.addEventListener('keydown', async ev => {
   else if (k === 'arrowright') ir(pos + 1);
   else if (k === 'arrowleft') ir(pos - 1);
   else if (k === 'u') irSinRevisar();
+  else if (k === 'z') deshacerUltimo();
   else if (k === 'r') { await pedir('/frames/revisado', {f: datos.f, v: false}); lista[pos].revisado = false; recargar(); }
   else if (raton && TECLA[k]) {
     const b = bajo(raton);
@@ -739,6 +825,47 @@ cargar();
 """
 
 
+CHEQUEOS = r"""<!doctype html><meta charset="utf-8"><title>Chequeos</title>
+<style>
+  body { background:#12141a; color:#e6e9ef; font:14px system-ui; margin:0; padding:16px; max-width:900px; }
+  .c { border:1px solid #2a2e38; border-left:5px solid #22c55e; border-radius:8px; padding:10px 14px; margin-bottom:10px; }
+  .c.hay { border-left-color:#fb923c; } h3 { margin:0 0 4px; } p { margin:4px 0; }
+  a { color:#93c5fd; } .f { display:inline-block; margin:2px 6px 2px 0; }
+</style>
+<h2 id="titulo">Chequeos</h2>
+<p id="resumen"></p>
+<div id="lista"></div>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/frames">frames</a> &middot; <a href="/mosaico">mosaico</a></p>
+<script>
+const QUE = [
+  ['medias', 'Media persona con caja propia',
+   'Una caja de persona esta dentro de otra caja de persona: el torso o las piernas de alguien que ya tiene su caja entera. Poner la chica en duplicado (tecla D).'],
+  ['dobles', 'La misma persona en dos cajas',
+   'Dos cajas de persona se pisan mas de la mitad. Si son la misma persona, una es duplicado; si son dos personas pegadas, esta bien asi.'],
+  ['huecos', 'Frame sin nadie entre dos frames con alguien',
+   'La persona estaba antes y despues, asi que lo mas probable es que siga ahi sin caja. Mirar el borde del frame y los frames movidos, y dibujar la caja si esta.'],
+  ['sin_etiquetar', 'Cajas sin etiquetar', 'Frames con alguna caja amarilla. No se pueden dar por revisados asi.'],
+  ['sin_revisar', 'Frames sin revisar', 'Todavia no pasaron por el mosaico ni por la revision frame a frame.'],
+];
+async function cargar() {
+  const e = await (await fetch('/chequeos/estado')).json();
+  document.title = e.nombre + ' - chequeos';
+  document.getElementById('titulo').textContent = e.nombre + ' - chequeos';
+  document.getElementById('resumen').textContent =
+    `${e.revisados} de ${e.total} frames revisados · ${e.personas} cajas de persona en total`;
+  document.getElementById('lista').innerHTML = QUE.map(([k, titulo, ayuda]) => {
+    const fs = e[k] || [];
+    const enlaces = fs.slice(0, 60).map(f => `<a class="f" href="/frames#${f}" target="_blank">${f}</a>`).join('') +
+      (fs.length > 60 ? ` y ${fs.length - 60} mas` : '');
+    return `<div class="c ${fs.length ? 'hay' : ''}"><h3>${titulo}: ${fs.length}</h3><p>${ayuda}</p><p>${enlaces || 'ninguno'}</p></div>`;
+  }).join('');
+}
+window.addEventListener('focus', cargar);
+cargar();
+</script>
+"""
+
+
 def servir(sesion, puerto):
     class Manejador(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -771,6 +898,11 @@ def servir(sesion, puerto):
                 self._responder(FRAMES.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path == "/mosaico":
                 self._responder(MOSAICO.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/chequeos":
+                self._responder(CHEQUEOS.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/chequeos/estado":
+                with sesion.lock:
+                    self._responder(json.dumps(sesion.chequeos()).encode("utf-8"))
             elif self.path.startswith("/miniatura/"):
                 try:
                     f = int(self.path.split("?")[0].rsplit("/", 1)[1])
