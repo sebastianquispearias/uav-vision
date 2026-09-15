@@ -667,8 +667,11 @@ function edadDe(p) {
 
 function persistente(p) { return !!p.mature || veredictoDe(p) === 'si'; }
 
+// Whether POI p is the contact recorded at cleared place v: the same reach as an operator's verdict,
+// never the POI's own 95 % radius, which for a mobile contact spans hundreds of metres and would hide
+// contacts that appeared after the click.
 function cercaDe(p, v) {
-  return Math.hypot(p.x - v.x, p.y - v.y) <= Math.max(v.r || 0, p.radius_m || 0, 3);
+  return veredictoAplica(v, p);
 }
 
 // A cleared contact comes back with a newer sighting: an age smaller than the one it had when it
