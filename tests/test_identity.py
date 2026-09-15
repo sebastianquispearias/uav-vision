@@ -394,4 +394,39 @@ r_quieto = (quieto.candidates(preliminary=True)[0]["radius_m"], quieto.candidate
 assert r_quieto[0] == r_quieto[1], "un blanco quieto no gana margen por pasar el tiempo"
 
 print()
+print("=" * 64)
+print("13. TRAMOS CORTOS DE UNO QUIETO: el ruido no es movimiento")
+print("=" * 64)
+# Measured on flight 3: the operator, standing, left tracks of 6-21 sightings over 1-5 s whose ground points
+# jump 1-3 m, and their fitted speed (0.75-1.95 m/s) cleared the speed test, so each became a separate mobile
+# candidate. A mobile is never merged, so one standing person was eight points. Here: a standing person seen as
+# eight short tracks with that jitter must be one static candidate, and a person who really walks must stay mobile.
+
+
+def tramos_cortos(caminando):
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
+    rng = np.random.default_rng(31)
+    e = emb_de(95)
+    k = 0
+    for tramo in range(8):
+        t0 = tramo * 6.0
+        for j in range(15):                                   # 15 sightings over 2.8 s: three looks, a track
+            t = t0 + 0.2 * j
+            real = np.array([-10.0 + 1.4 * t, 3.0]) if caminando else np.array([2.0, 3.0])
+            salto = rng.normal(0, 1.2, size=2) + (rng.normal(0, 2.5, size=2) if rng.random() < 0.2 else 0.0)
+            ident.observe(k, 400 + tramo if not caminando else 400, real + salto, 0.6,
+                          e + 0.03 * rng.normal(size=512), t=t)
+            k += 1
+    return ident.candidates(preliminary=True)
+
+
+quieto_cortos = tramos_cortos(False)
+camina = tramos_cortos(True)
+print(f"  quieto en 8 tramos cortos: {len(quieto_cortos)} candidato(s), moviles {sum(c['mobile'] for c in quieto_cortos)}, "
+      f"radios {[c.get('radius_m') for c in quieto_cortos]}")
+print(f"  caminando 1.4 m/s (una pista): movil={camina[0]['mobile']}")
+assert len(quieto_cortos) == 1 and not quieto_cortos[0]["mobile"], "una persona quieta tiene que ser un solo punto quieto"
+assert camina[0]["mobile"], "el contraste: quien camina de verdad sigue siendo movil"
+
+print()
 print("TODO OK")

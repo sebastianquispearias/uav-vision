@@ -37,7 +37,9 @@ for modo in ([], ["--span"]):
     assert latidos > 0, "antes del primer candidato el dron tiene que mandar latidos"
     # 2.18 m until moving targets were described by their recent past: with it some of the flight's
     # walkers are classified mobile and stop merging into the operator's candidate (670 -> 519 impacts).
-    esperado = 2.39 if modo else 2.25
+    # 2.25 m until a fitted motion also had to carry the target further than projection noise: short
+    # tracks of the standing operator stopped being mobile and merge back into one candidate.
+    esperado = 2.39 if modo else 2.27
     assert abs(d - esperado) < 0.005, "el resultado del vuelo cambio: %.2f m en vez de %.2f" % (d, esperado)
 
 print()

@@ -242,7 +242,11 @@ class IncrementalIdentity:
         mobile_speed_mps: speed above which a target counts as moving, in "looks" mode, provided it
             also exceeds three times the standard error of its own estimate, so that projection
             noise on a standing person is not read as motion. A decision, not a measurement: a
-            walking person is about 1.4 m/s.
+            walking person is about 1.4 m/s. The speed alone is not enough on a short track: on flight 3
+            the standing operator left tracks of 6-21 sightings over 1-5 s with fitted speeds of 0.75 to
+            1.95 m/s, and each became a separate mobile candidate -- eight points for one person. So the
+            fitted motion must also carry the target further than the mobile displacement across the
+            sightings it was fitted on, the distance projection noise alone can move a standing target.
         extrapolation_max_s: how far ahead, in seconds, a moving candidate is carried from its last
             sighting to the report time. Separate from the window its velocity is estimated over: a
             target that turns keeps going on paper for as long as this allows. With 5 s, a synthetic
@@ -464,6 +468,8 @@ class IncrementalIdentity:
         se = s_r / math.sqrt(max(1e-9, float(((x - x.mean()) ** 2).sum())))
         rapidez = float(np.linalg.norm(vel))
         return {"pos_reciente": pos, "rapidez": rapidez, "rapidez_se": se,
+                # How far the fitted motion carries the target across the sightings it was fitted on.
+                "desplaz_ventana": rapidez * float(np.ptp(x)),
                 "vel": vel, "t_ultimo": float(tt[-1]),
                 # Variance of the fitted position at the last sighting, per axis. A line's value at the
                 # end of its window is about four times as uncertain as its mean.
@@ -665,7 +671,10 @@ class IncrementalIdentity:
             # In "looks" mode a target is moving when its recent speed clears both the threshold and
             # three standard errors of its own estimate. The older rule stays as an alternative so a
             # patrol does not flicker to "static" at the instant it turns round.
-            rapido = ("rapidez" in tk and tk["rapidez"] > max(self.mobile_speed_mps, 3.0 * tk["rapidez_se"]))
+            # A speed that carries the target less far than projection noise moves a standing one is not
+            # motion: the displacement over the fitted sightings must also clear the mobile displacement.
+            rapido = ("rapidez" in tk and tk["rapidez"] > max(self.mobile_speed_mps, 3.0 * tk["rapidez_se"])
+                      and tk["desplaz_ventana"] > self._disp_movil(tk["cls"]))
             if rapido or regla_vieja:
                 ahora = tk["pos_reciente"] if "pos_reciente" in tk else tk["pos_actual"]
                 cands.append({"mobile": True, "pos": np.asarray(ahora).copy(),
