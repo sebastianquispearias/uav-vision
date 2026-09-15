@@ -1084,14 +1084,14 @@ if __name__ == '__main__':
                     help='puntua cada crop con CLIP: los "probable no persona" van al final de la '
                          'lista, marcados, sin ocultarse. Necesita open_clip (venv de entrenamiento)')
     ap.add_argument('--clip-umbral', type=float, default=None,
-                    help='umbral del puntaje CLIP (por defecto 0.687, fijado con los vuelos del 01ago)')
+                    help='umbral del puntaje CLIP (por defecto 1.496, fijado con los vuelos del 01ago)')
     args = ap.parse_args()
     DRON_CALLADO_S = args.callado_s
     if args.clip:
         # Imported only when asked for: the station stays droppable anywhere without torch.
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import filtro_clip
-        print('cargando CLIP ViT-B-32/openai...', flush=True)
+        print('cargando CLIP ViT-B-32-quickgelu/openai...', flush=True)
         CLIP = filtro_clip.cargar(args.clip_umbral if args.clip_umbral is not None
                                   else filtro_clip.UMBRAL)
         if CLIP is not None:

@@ -31,6 +31,12 @@ RAIZ = os.path.dirname(AQUI)
 HNO = os.path.join(RAIZ, "..", "drone-geolocation")
 ENT = os.path.join(HNO, "entrenamiento")
 
+# The OpenAI weights were trained with QuickGELU. Loaded under the plain "ViT-B-32" config they run with
+# the wrong activation (open_clip warns about it) and separate worse: on 128 px crops AUC 0.928 / 0.891 /
+# 0.896 on 02ago / 01ago-2a / 01ago-2b, against 0.947 / 0.923 / 0.944 with the matching config.
+MODELO = "ViT-B-32-quickgelu"
+PESOS = "openai"
+
 POSITIVOS = ["an aerial photo of a person", "a person seen from a drone", "a pedestrian walking",
              "a person standing", "the legs of a person"]
 NEGATIVOS = ["an aerial photo of a traffic cone", "a fire hydrant", "a trash bin", "a pole",
@@ -114,8 +120,8 @@ def sonda(Xtr, ytr, Xte, pasos=400):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--modelo", default="ViT-B-32")
-    ap.add_argument("--pesos", default="openai")
+    ap.add_argument("--modelo", default=MODELO)
+    ap.add_argument("--pesos", default=PESOS)
     ap.add_argument("--degradar", type=int, default=None,
                     help="lado en px del recorte que viaja (p.ej. 128), con JPEG calidad 70")
     args = ap.parse_args()

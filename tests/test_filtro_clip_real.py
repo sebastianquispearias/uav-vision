@@ -1,15 +1,22 @@
-"""The station's CLIP scorer gives the numbers the measurement gave.
+"""The station's CLIP scorer gives the numbers the measurement gives.
 
-scripts/medir_filtro_clip.py fixed the threshold on image features cached on disk. The station
-scores with its own code, so the question is whether it is the same score, not a similar one.
-Two contrasts:
+scripts/medir_filtro_clip.py fixed the threshold with its own code path: recortar(..., degradar=128),
+the model named by its MODELO and PESOS, and the zero-shot score over its prompt lists. The station
+scores with a different path (filtro_clip.PuntuadorClip), so the question is whether it is the same
+score, not a similar one. Two contrasts:
 
     equivalence  the station's scorer, on the exact array medir_filtro_clip.recortar(...,
-                 degradar=128) builds, against the score recomputed from that script's cached
-                 features for the same box: a non-person and a person of flight 02ago.
+                 degradar=128) builds, against the score of a separate model loaded the way the
+                 measurement loads it, for a non-person and a person of flight 02ago. A station on
+                 another model or another activation lands far outside the tolerance: measured on
+                 three crops of flight 02ago, the plain ViT-B-32 config and the QuickGELU one differ
+                 by 0.30 to 1.57, against a tolerance of 0.05.
     travelling   the path the station really runs: the crop cut the way the camera cuts it,
                  128 px JPEG q70 bytes, decoded and scored. Printed for the operator's frame 2571
                  (a person) and for the non-person above.
+
+The reference is recomputed rather than read from cached features, so the check does not depend on a
+cache built from an older label set.
 
 Needs open_clip, which only the training venv has; any other python prints SALTADO:
 
@@ -21,14 +28,12 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 HNO = os.path.join(RAIZ, '..', 'drone-geolocation')
 FRAMES = os.path.join(HNO, 'data', 'flight_02ago', '20260802_133309', 'frames')
-CACHE = os.path.join(HNO, 'entrenamiento', 'clip_ViT-B-32_openai_02ago_d128.npz')
 
 print('======================================================================')
 print('PUNTAJE CLIP DE LA ESTACION CONTRA LA MEDICION')
 print('======================================================================')
 faltan = [n for n, ok in (('open_clip', importlib.util.find_spec('open_clip') is not None),
-                          ('frames 02ago', os.path.isdir(FRAMES)),
-                          ('cache de features', os.path.exists(CACHE))) if not ok]
+                          ('frames 02ago', os.path.isdir(FRAMES))) if not ok]
 if faltan:
     print('  SALTADO: falta %s' % ', '.join(faltan))
     print()
@@ -37,6 +42,9 @@ if faltan:
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
+import open_clip  # noqa: E402
+import torch  # noqa: E402
+from PIL import Image  # noqa: E402
 
 sys.path.insert(0, os.path.join(RAIZ, 'scripts'))
 sys.path.insert(0, os.path.join(RAIZ, 'scripts', 'banco_embedded'))
@@ -48,16 +56,21 @@ d = d[d[:, 1] >= 0.25]
 et = json.load(open(os.path.join(HNO, 'entrenamiento', 'identidad_gt_02ago.json'),
                     encoding='utf-8'))['etiquetas']
 ix = [i for i in range(len(d)) if 3000 <= d[i, 0] <= 3700 and et.get(str(i)) not in (None, '?')]
-feats = np.load(CACHE)['feats']
-assert len(feats) == len(ix), 'la cache no corresponde a estas cajas'
-feats = feats / np.linalg.norm(feats, axis=1, keepdims=True)
 
 puntuador = filtro_clip.PuntuadorClip()
-t = puntuador.texto.cpu().numpy()
+ref, _, ref_prep = open_clip.create_model_and_transforms(m.MODELO, pretrained=m.PESOS, device=puntuador.dev)
+ref.eval()
+with torch.no_grad():
+    texto = ref.encode_text(open_clip.get_tokenizer(m.MODELO)(m.POSITIVOS + m.NEGATIVOS).to(puntuador.dev)).float()
+    texto = (texto / texto.norm(dim=-1, keepdim=True)).cpu().numpy()
 
 
-def de_cache(k):
-    sim = 100.0 * feats[k] @ t.T
+def referencia(rgb):
+    """The measurement's score for one crop: its model, its preprocessing, its prompts."""
+    with torch.no_grad():
+        f = ref.encode_image(ref_prep(Image.fromarray(rgb)).unsqueeze(0).to(puntuador.dev)).float().cpu().numpy()[0]
+    f = f / np.linalg.norm(f)
+    sim = 100.0 * f @ texto.T
     n = len(m.POSITIVOS)
     return float(np.log(np.exp(sim[:n]).sum()) - np.log(np.exp(sim[n:]).sum()))
 
@@ -83,19 +96,18 @@ def como_la_camara(frame, caja, lado_px=128, calidad=70, margen=0.25):
     return cv2.imencode('.jpg', p, [int(cv2.IMWRITE_JPEG_QUALITY), calidad])[1].tobytes()
 
 
-print('  modelo ViT-B-32/openai en %s | umbral %.3f' % (puntuador.dev, filtro_clip.UMBRAL))
+print('  medicion %s/%s | estacion en %s | umbral %.3f' % (m.MODELO, m.PESOS, puntuador.dev, filtro_clip.UMBRAL))
 print('  %-28s %9s %9s %8s' % ('caja', 'medicion', 'estacion', 'dif'))
-k_no = next(k for k, i in enumerate(ix) if et[str(i)] in ('X', 'x'))
-k_si = next(k for k, i in enumerate(ix) if et[str(i)] not in ('X', 'x'))
-for k, nombre in ((k_no, 'no persona'), (k_si, 'persona')):
-    i = ix[k]
+i_no = next(i for i in ix if et[str(i)] in ('X', 'x'))
+i_si = next(i for i in ix if et[str(i)] not in ('X', 'x'))
+for i, nombre in ((i_no, 'no persona'), (i_si, 'persona')):
     rgb = m.recortar(img(int(d[i, 0])), *d[i, 2:6], degradar=128)
-    a, b = de_cache(k), puntuador.puntuar_rgb(rgb)
+    a, b = referencia(rgb), puntuador.puntuar_rgb(rgb)
     print('  fila %4d frame %4d %-9s %9.3f %9.3f %8.4f' % (i, d[i, 0], nombre, a, b, abs(a - b)))
     assert abs(a - b) < 0.05, 'la estacion no puntua como la medicion'
 
 print('  crop que viaja (JPEG 128 px q70):')
-for i, nombre in ((189, 'persona'), (ix[k_no], 'no persona')):
+for i, nombre in ((189, 'persona'), (i_no, 'no persona')):
     jpeg = como_la_camara(int(d[i, 0]), d[i, 2:6])
     s = puntuador.puntuar(jpeg)
     print('  fila %4d frame %4d %-10s %5d bytes  CLIP %6.3f -> %s' % (

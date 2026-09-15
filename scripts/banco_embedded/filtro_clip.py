@@ -6,16 +6,17 @@ own signals separate them. A general image-text model, which was never trained o
 so cannot have memorised them, can. Measured with scripts/medir_filtro_clip.py and nothing tuned
 here:
 
-    threshold 0.687   fixed on the 01ago flights, on crops degraded to what the radio carries
-                      (128 px, JPEG quality 70): keeps 95 % of the people, rejects 66.7 % of the
-                      non-people.
-    flight 3 queue    applied unchanged to the operator's verification queue of another day:
-                      non-people 8 -> 1, people 20 -> 20.
+    threshold 1.496   fixed on the 01ago flights, on crops degraded to what the radio carries
+                      (128 px, JPEG quality 70), where it keeps 95 % of the people. On flight 3,
+                      another day, it keeps 90.0 % of them and rejects 84.3 % of the non-people.
+    flight 3 queue    applied unchanged to the operator's verification queue of that flight:
+                      non-people 3 -> 0 and 7 -> 0, people 6 -> 5 and 11 -> 9 (flight tracker,
+                      stand-in tracker). Not every person survives, which is why nothing is hidden.
 
 That is a good ordering signal and a bad reason to delete anything, so the station uses it to
 order and to mark, and the operator still decides.
 
-The score is exactly the zero-shot score of that script -- same model (ViT-B-32, "openai"
+The score is exactly the zero-shot score of that script -- same model (ViT-B-32-quickgelu, "openai"
 weights), the same prompt lists imported from it, and
 
     score = logsumexp(100 * sim to POSITIVOS) - logsumexp(100 * sim to NEGATIVOS)
@@ -32,7 +33,7 @@ import sys
 import threading
 from collections import OrderedDict
 
-UMBRAL = 0.687
+UMBRAL = 1.496
 
 # The classes a "person or not" score means anything for. A car scored against "a person seen
 # from a drone" would always be flagged, and demoting every car in a search for cars is wrong.
@@ -48,7 +49,7 @@ class PuntuadorClip:
     vision tower, which is the only part that depends on the crop.
     """
 
-    def __init__(self, modelo='ViT-B-32', pesos='openai', dev=None):
+    def __init__(self, modelo='ViT-B-32-quickgelu', pesos='openai', dev=None):
         import open_clip
         import torch
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
