@@ -106,6 +106,15 @@ try:
 finally:
     proc.terminate(); proc.wait(timeout=5)
 
+def rechaza(ruta, cuerpo, que):
+    try:
+        pedir(ruta, cuerpo)
+    except urllib.error.HTTPError as err:
+        assert err.code == 400, '%s: codigo %d' % (que, err.code)
+        return
+    raise AssertionError('%s tenia que dar 400' % que)
+
+
 proc = arrancar(dirt, grupos=2)
 try:
     assert pedir('/estado')['etiquetadas'] == 40, 'al reabrir se perdieron etiquetas'
@@ -117,6 +126,9 @@ try:
     except urllib.error.HTTPError as err:
         assert err.code == 400
     print('  modo persona/no      : una letra da 400')
+    rechaza('/letras/renombrar', {'de': 'A', 'a': 'B'}, 'renombrar letras sin --identidad')
+    assert pedir('/estado')['catalogo'] == [], 'sin --identidad no hay catalogo de letras'
+    print('  sin identidad        : renombrar da 400 y el catalogo viene vacio')
 finally:
     proc.terminate(); proc.wait(timeout=5)
 
@@ -139,6 +151,17 @@ try:
     assert json.load(open(os.path.join(dirt, 'identidad.json'), encoding='utf-8'))['etiquetas'] == et
     assert json.load(open(os.path.join(dirt, 'etiquetas.json'), encoding='utf-8'))['etiquetas'] != et
     print("  identidad invalida   : 'persona', 'AB', '', '7' dan 400; archivos intactos y separados")
+    # The letter catalogue: each letter with the first crop labelled with it, and renaming, which is how
+    # two letters given to the same person are merged.
+    cat = {c['letra']: c for c in pedir('/estado')['catalogo']}
+    assert set(cat) == {'F', 'X'} and cat['F']['n'] == 20 and isinstance(cat['F']['i'], int), cat
+    print('  catalogo de letras   : F y X, con %d y %d cajas y un recorte de referencia' % (cat['F']['n'], cat['X']['n']))
+    assert pedir('/letras/renombrar', {'de': 'F', 'a': 'G'})['cajas'] == 20
+    et = json.load(open(os.path.join(dirt, 'identidad.json'), encoding='utf-8'))['etiquetas']
+    assert set(et.values()) == {'G', 'X'}, set(et.values())
+    assert {c['letra'] for c in pedir('/estado')['catalogo']} == {'G', 'X'}
+    rechaza('/letras/renombrar', {'de': 'F', 'a': 'G'}, 'renombrar una letra que ya no existe')
+    print('  renombrar o fundir   : F -> G cambia 20 cajas; repetirlo da 400')
     jpg = pedir('/frame/5', crudo=True)
     img = cv2.imdecode(np.frombuffer(jpg, np.uint8), 1)
     assert jpg[:2] == b'\xff\xd8' and img.shape[1] > 96, 'la vista de frame tiene que ser el frame, no el recorte'
@@ -172,15 +195,6 @@ try:
     print('  ayuda                : explica grueso = esta caja, fino = las del vuelo')
 finally:
     proc.terminate(); proc.wait(timeout=5)
-
-
-def rechaza(ruta, cuerpo, que):
-    try:
-        pedir(ruta, cuerpo)
-    except urllib.error.HTTPError as err:
-        assert err.code == 400, '%s: codigo %d' % (que, err.code)
-        return
-    raise AssertionError('%s tenia que dar 400' % que)
 
 
 # Frame review, the unit a detector trains on. Every CSV box starts at x 50+i, 40 px wide, so the boxes
@@ -276,6 +290,31 @@ try:
     assert lote['hechos'] == [3, 4] and [x['f'] for x in lote['rechazados']] == [7], lote
     assert pedir('/frames/estado')['revisados'] == 4
     print('  lote del mosaico     : [3, 7, 4] -> hechos [3, 4], rechazado 7; 4 frames revisados')
+
+    # Resizing a drawn box by a corner: the box is replaced, not added, and a box of 2 px is still refused.
+    pedir('/frames/mover', {'f': 9, 'k': 0, 'caja': [100, 100, 150, 220]})
+    assert pedir('/frames/9')['nuevas'] == [{'k': 0, 'caja': [100.0, 100.0, 150.0, 220.0], 'doble': False}], pedir('/frames/9')
+    rechaza('/frames/mover', {'f': 9, 'k': 5, 'caja': [10, 10, 60, 90]}, 'mover una caja que no existe')
+    rechaza('/frames/mover', {'f': 9, 'k': 0, 'caja': [10, 10, 12, 12]}, 'achicar a 2 px')
+    print('  redimensionar        : la caja 0 del frame 9 pasa a 100,100-150,220; k=5 y 2 px dan 400')
+
+    # Blind re-check: it asks about a fixed sample of the reviewed frames and must not reveal the count
+    # before the answer. Frame 9 has one drawn box, so its true count is 1.
+    e = pedir('/repaso/estado')
+    assert len(e['frames']) == 1 and e['frames'][0]['dicho'] is None and e['frames'][0]['tenia'] is None, e
+    f = e['pendiente']
+    assert f in (2, 3, 4, 9), e
+    tenia = pedir('/repaso', {'f': f, 'n': 99})['tenia']
+    e = pedir('/repaso/estado')
+    assert e['contestadas'] == 1 and e['acuerdo'] == 0 and e['frames'][0]['tenia'] == tenia, e
+    pedir('/repaso', {'f': f, 'n': tenia})
+    e = pedir('/repaso/estado')
+    assert e['contestadas'] == 1 and e['acuerdo'] == 1 and e['pendiente'] is None, e
+    rechaza('/repaso', {'f': 1, 'n': 1}, 'repasar un frame sin revisar')
+    rechaza('/repaso', {'f': f, 'n': -2}, 'un numero negativo de personas')
+    print('  repaso ciego         : el frame %d no revela su cuenta antes de contestar; 99 -> acuerdo 0, %d -> acuerdo 1' % (f, tenia))
+    assert 'saltar' in pedir('/frames', crudo=True).decode('utf-8'), 'la pagina tiene que traer el campo de salto'
+    print('  saltar a un frame    : la pagina trae el campo')
     mini = pedir('/miniatura/9', crudo=True)
     im = cv2.imdecode(np.frombuffer(mini, np.uint8), 1)
     assert mini[:2] == b'\xff\xd8' and im.shape[1] == 480 and contar(mini, 'contexto') == 0

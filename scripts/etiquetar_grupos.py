@@ -63,6 +63,7 @@ import argparse
 import csv
 import json
 import os
+import random
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -97,6 +98,8 @@ VECINA = (255, 255, 0)    # BGR cyan: other boxes of the CSV being labelled, in 
 # something that cannot be called either way (a lone foot, a person cut to a sliver by the frame edge):
 # the export blanks it out, so the detector is neither rewarded nor punished for finding it.
 REVISION = ("persona", "no", "duplicado", "ignorar")
+REPASO = 0.05             # share of the reviewed frames the blind re-check asks about again
+SEMILLA_REPASO = 1234     # fixed, so reopening the tool asks about the same frames
 LADO_MIN_NUEVA = 4        # px: a drawn box smaller than this is a slip of the mouse, not a person
 
 
@@ -182,13 +185,14 @@ class Sesion:
         dentro = lambda f: (desde is None or f >= desde) and (hasta is None or f <= hasta)
         self.lista = sorted({int(f) for f in list(lista_frames or []) + list(self.por_frame) if dentro(int(f))})
         self.ruta_revision = os.path.splitext(salida)[0] + "_frames.json"
-        self.revisados, self.correcciones, self.nuevas = set(), {}, {}
+        self.revisados, self.correcciones, self.nuevas, self.repaso = set(), {}, {}, {}
         if os.path.exists(self.ruta_revision):
             r = json.load(open(self.ruta_revision, encoding="utf-8"))
             local = {o: j for j, o in enumerate(self.orig)}
             self.revisados = {int(f) for f in r.get("revisados", [])}
             self.correcciones = {local[int(i)]: v for i, v in r.get("correcciones", {}).items() if int(i) in local}
             self.nuevas = {int(f): [[float(x) for x in c] for c in v] for f, v in r.get("nuevas", {}).items()}
+            self.repaso = {int(f): int(n) for f, n in r.get("repaso", {}).items()}
 
     def estado(self):
         out = []
@@ -208,6 +212,7 @@ class Sesion:
         # Unlabelled first, then the largest: the next click is always the one that labels most.
         out.sort(key=lambda d: (d["etiqueta"] not in (None, "parcial"), -d["n"]))
         return {"grupos": out, "cajas": len(self.filas), "etiquetadas": len(self.etiquetas), "nombre": self.nombre,
+                "catalogo": self.catalogo() if self.identidad else [],
                 "identidad": self.identidad, "letras": sorted(set(self.etiquetas.values()))}
 
     def validar(self, v):
@@ -301,17 +306,29 @@ class Sesion:
             self.correcciones[i] = v
         self._guardar_revision()
 
-    def nueva(self, f, caja):
-        """Adds the box of a person no candidate covers, in pixels of the original frame."""
-        if f not in self.lista:
-            raise ValueError("frame fuera de la lista")
+    @staticmethod
+    def _caja_valida(caja):
         x1, y1, x2, y2 = (float(v) for v in caja)
         if not np.all(np.isfinite([x1, y1, x2, y2])) or min(x1, y1) < 0 \
                 or x2 - x1 < LADO_MIN_NUEVA or y2 - y1 < LADO_MIN_NUEVA:
             raise ValueError("caja invalida: x1 < x2, y1 < y2 y al menos %d px de lado" % LADO_MIN_NUEVA)
-        self.nuevas.setdefault(f, []).append([round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)])
+        return [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]
+
+    def nueva(self, f, caja):
+        """Adds the box of a person no candidate covers, in pixels of the original frame."""
+        if f not in self.lista:
+            raise ValueError("frame fuera de la lista")
+        self.nuevas.setdefault(f, []).append(self._caja_valida(caja))
         self._guardar_revision()
         return len(self.nuevas[f]) - 1
+
+    def mover(self, f, k, caja):
+        """Replaces a drawn box, which is what dragging one of its corners does: a box that came out
+        too big or too small is fixed without drawing it again."""
+        if not 0 <= k < len(self.nuevas.get(f, [])):
+            raise ValueError("no hay caja dibujada %d en el frame %d" % (k, f))
+        self.nuevas[f][k] = self._caja_valida(caja)
+        self._guardar_revision()
 
     def borrar(self, f, k):
         if not 0 <= k < len(self.nuevas.get(f, [])):
@@ -338,7 +355,8 @@ class Sesion:
         datos = {"cajas": os.path.abspath(self.cajas), "clave": "fila del CSV de cajas",
                  "revisados": sorted(self.revisados),
                  "correcciones": {str(self.orig[i]): v for i, v in sorted(self.correcciones.items())},
-                 "nuevas": {str(f): v for f, v in sorted(self.nuevas.items())}}
+                 "nuevas": {str(f): v for f, v in sorted(self.nuevas.items())},
+                 "repaso": {str(f): n for f, n in sorted(self.repaso.items())}}
         tmp = self.ruta_revision + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(datos, fh, indent=1)
@@ -355,6 +373,59 @@ class Sesion:
             except ValueError as e:
                 rechazados.append({"f": int(f), "error": str(e)})
         return {"hechos": hechos, "rechazados": rechazados}
+
+    def personas_en(self, f):
+        """How many people the labels say frame f has: the answer the blind re-check compares against."""
+        return sum(self.final(i) == "persona" for i in self.por_frame.get(f, [])) + len(self.nuevas.get(f, []))
+
+    def repaso_estado(self):
+        """The blind re-check: a fixed sample of the reviewed frames, asked about again without showing
+        their boxes. It measures agreement with oneself, which is the honest way to say whether the
+        labelling is consistent; the count of a frame is only revealed once it has been answered.
+        """
+        rev = sorted(self.revisados & set(self.lista))
+        muestra = []
+        if rev:
+            n = max(1, int(round(REPASO * len(rev))))
+            muestra = sorted(random.Random(SEMILLA_REPASO).sample(rev, min(n, len(rev))))
+        filas = [{"f": f, "dicho": self.repaso.get(f),
+                  "tenia": self.personas_en(f) if f in self.repaso else None} for f in muestra]
+        hechas = [x for x in filas if x["dicho"] is not None]
+        return {"nombre": self.nombre, "frames": filas, "contestadas": len(hechas),
+                "acuerdo": sum(x["dicho"] == x["tenia"] for x in hechas),
+                "pendiente": next((x["f"] for x in filas if x["dicho"] is None), None)}
+
+    def repasar(self, f, n):
+        if f not in self.revisados:
+            raise ValueError("el frame %d no esta revisado" % f)
+        if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+            raise ValueError("cuantas personas ves: un numero de 0 en adelante")
+        self.repaso[f] = n
+        self._guardar_revision()
+        return {"f": f, "dicho": n, "tenia": self.personas_en(f)}
+
+    def catalogo(self):
+        """In identity mode, every letter in use with the first crop labelled with it and how many
+        boxes carry it: choosing a person by picture, not by memory, is what keeps one person from
+        collecting two letters."""
+        out = {}
+        for i, v in sorted(self.etiquetas.items()):
+            d = out.setdefault(v, {"letra": v, "i": i, "n": 0})
+            d["n"] += 1
+        return sorted(out.values(), key=lambda d: d["letra"])
+
+    def renombrar(self, de, a):
+        """Renames a letter, or merges two: every box labelled `de` ends up labelled `a`."""
+        if not self.identidad:
+            raise ValueError("renombrar letras es del modo --identidad")
+        de, a = self.validar(de), self.validar(a)
+        cambiadas = [i for i, v in self.etiquetas.items() if v == de]
+        if not cambiadas:
+            raise ValueError("no hay cajas con la letra %s" % de)
+        for i in cambiadas:
+            self.etiquetas[i] = a
+        self._guardar()
+        return {"de": de, "a": a, "cajas": len(cambiadas)}
 
     def chequeos(self):
         """The checks a reviewer would otherwise have to run by hand, over the whole flight.
@@ -496,6 +567,7 @@ Borde <b style="color:#ff00ff">magenta fino</b> = las detecciones del vuelo (--c
 si la persona ya tiene una caja fina del vuelo, el vuelo no la perdio y esta caja es <b>no</b>.
 Borde <b style="color:#00ffff">cian fino</b> = otras cajas de esta misma lista en el mismo frame.
 <b>Clic en un recorte</b>: el frame entero con las mismas cajas.</p>
+<div id="catalogo"></div>
 <div id="grupos"></div>
 <script>
 async function cargar() {
@@ -512,6 +584,16 @@ async function cargar() {
        ${e.letras.map(l => `<button onclick="enviar('/marcar', {g: ${g.g}, v: '${l}'})">${l}</button>`).join('')}`
     : `<button onclick="enviar('/marcar', {g: ${g.g}, v: 'persona'})">persona</button>
        <button onclick="enviar('/marcar', {g: ${g.g}, v: 'no'})">no es persona</button>`;
+  // Identity mode: the letters in use, each with the first crop labelled with it, and renaming, which
+  // is also how two letters given to the same person are merged into one.
+  document.getElementById('catalogo').innerHTML = !e.catalogo.length ? '' :
+    `<div class="grupo"><b>personas de este vuelo</b> (elegir por la foto, no de memoria)
+      <div class="rejilla">${e.catalogo.map(c => `<a href="/frame/${c.i}" target="_blank" title="${c.n} cajas">
+        <img src="/recorte/${c.i}"><div style="text-align:center">${c.letra} &middot; ${c.n}</div></a>`).join('')}</div>
+      renombrar o fundir: <input id="de" size="2" maxlength="1" placeholder="de"> &rarr;
+      <input id="a" size="2" maxlength="1" placeholder="a">
+      <button onclick="enviar('/letras/renombrar', {de: document.getElementById('de').value, a: document.getElementById('a').value})">cambiar</button>
+      <span style="color:#9ca3af">(todas las cajas de la primera letra pasan a la segunda)</span></div>`;
   e.grupos.forEach(g => g.muestra.forEach(m => { etiquetaDe[m.i] = m.corregida ? m.etiqueta : undefined; }));
   document.getElementById('grupos').innerHTML = e.grupos.map(g => `
     <div class="grupo ${g.etiqueta === 'persona' || g.etiqueta === 'no' || g.etiqueta === 'parcial' ? g.etiqueta : (g.etiqueta ? 'persona' : '')}">
@@ -575,6 +657,8 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
   <button onclick="ir(pos + 1)"><span class="k">&rarr;</span></button>
   <button onclick="irSinRevisar()">sin revisar <span class="k">U</span></button>
   <label><input type="checkbox" id="ocultarNo" onchange="pintar()"> ocultar las "no"</label>
+  <p>ir al frame <input id="saltar" size="6" placeholder="numero"
+       onkeydown="if (event.key === 'Enter') saltar(this.value)"> <span class="k">G</span></p>
   <p class="ley"><span style="background:#22c55e"></span>persona<span style="background:#ef4444"></span>no
     <span style="background:#9ca3af"></span>duplicado<br><span style="background:#60a5fa"></span>ignorar
     <span style="background:#facc15"></span>sin etiquetar<span style="background:#fb923c"></span>&iquest;doble?
@@ -583,12 +667,13 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     Con el raton encima: <span class="k">P</span> persona <span class="k">N</span> no <span class="k">D</span> duplicado
     <span class="k">I</span> ignorar.<br>
     <b>Arrastrar</b>: dibuja la caja de una persona que ninguna caja cubre.<br>
+    <b>Arrastrar una esquina</b> de una caja dibujada: la agranda o la achica.<br>
     <b>Clic derecho</b> en una caja dibujada: la borra. <span class="k">R</span> desmarca revisado.
     <span class="k">Z</span> deshace lo ultimo (etiqueta, caja dibujada o borrada).</p>
   <p>Un frame esta <b>revisado</b> cuando cada persona tiene UNA caja verde y nada mas es verde.
     Una caja corrida (piernas, sombra, media persona) de alguien que ya tiene la suya es <b>duplicado</b>.</p>
   <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a>
-    &middot; <a href="/chequeos">chequeos</a></p>
+    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/repaso">repaso ciego</a></p>
 </div>
 <script>
 const cv = document.getElementById('cv'), cx = cv.getContext('2d');
@@ -649,10 +734,19 @@ function dibujar(g, ox, oy, s, w, h) {
     rect(b.caja, e ? COLOR[e] : '#facc15', e === 'persona' || !e ? 2 : 1,
          e && e !== 'persona' ? [4, 3] : null, {duplicado: 'dup', ignorar: 'ign'}[e] || null);
   });
-  datos.nuevas.forEach(b => rect(b.caja, b.doble ? '#fb923c' : '#22c55e', b.doble ? 3 : 2, null, '+'));
-  if (abajo && abajo.arrastrando && raton)
-    rect([Math.min(abajo.x, raton.x), Math.min(abajo.y, raton.y), Math.max(abajo.x, raton.x), Math.max(abajo.y, raton.y)],
+  datos.nuevas.forEach(b => {
+    rect(b.caja, b.doble ? '#fb923c' : '#22c55e', b.doble ? 3 : 2, null, '+');
+    const [x1, y1, x2, y2] = b.caja;   // handles to grab: a drawn box can be resized by a corner
+    [[x1, y1], [x2, y1], [x1, y2], [x2, y2]].forEach(([x, y]) => {
+      g.fillStyle = '#22c55e';
+      g.fillRect((x - ox) * s - 3, (y - oy) * s - 3, 6, 6);
+    });
+  });
+  if (abajo && abajo.arrastrando && raton) {
+    const o = abajo.redim ? abajo.redim.fija : {x: abajo.x, y: abajo.y};
+    rect([Math.min(o.x, raton.x), Math.min(o.y, raton.y), Math.max(o.x, raton.x), Math.max(o.y, raton.y)],
          '#22c55e', 1, [3, 2]);
+  }
 }
 function pintar() {
   if (!datos || !img.naturalWidth) return;
@@ -714,12 +808,32 @@ async function terminar() {
   lista[pos].revisado = true;
   if (pos + 1 < lista.length) ir(pos + 1); else { recargar(); aviso('ultimo frame de la lista'); }
 }
+function saltar(v) {
+  const f = parseInt(v), k = lista.findIndex(x => x.f === f);
+  if (k < 0) return aviso('el frame ' + v + ' no esta en la lista');
+  document.getElementById('saltar').blur();
+  ir(k);
+}
 function irSinRevisar() {
   for (let k = 1; k <= lista.length; k++) { const q = (pos + k) % lista.length; if (!lista[q].revisado) return ir(q); }
   aviso('todos los frames estan revisados');
 }
 
-cv.addEventListener('mousedown', ev => { if (ev.button === 0 && datos) { const p = punto(ev); abajo = {x: p.x, y: p.y, arrastrando: false}; } });
+function esquinaDe(p) {
+  const cerca = 12 * img.naturalWidth / cv.width;   // 12 screen px, in pixels of the frame
+  for (const b of datos.nuevas) {
+    const [x1, y1, x2, y2] = b.caja;
+    for (const [x, y, fx, fy] of [[x1, y1, x2, y2], [x2, y1, x1, y2], [x1, y2, x2, y1], [x2, y2, x1, y1]])
+      if (Math.abs(p.x - x) < cerca && Math.abs(p.y - y) < cerca)
+        return {k: b.k, caja: b.caja, fija: {x: fx, y: fy}};
+  }
+  return null;
+}
+cv.addEventListener('mousedown', ev => {
+  if (ev.button !== 0 || !datos) return;
+  const p = punto(ev), e = esquinaDe(p);
+  abajo = {x: p.x, y: p.y, arrastrando: !!e, redim: e};
+});
 cv.addEventListener('mousemove', ev => {
   raton = punto(ev);
   if (abajo && Math.hypot(raton.x - abajo.x, raton.y - abajo.y) * cv.width / img.naturalWidth > 5) abajo.arrastrando = true;
@@ -732,6 +846,14 @@ window.addEventListener('mouseup', async ev => {
   abajo = null;
   if (a.arrastrando) {
     const f = datos.f;
+    if (a.redim) {
+      const {k, caja, fija} = a.redim;
+      try {
+        await pedir('/frames/mover', {f, k, caja: [Math.min(fija.x, p.x), Math.min(fija.y, p.y), Math.max(fija.x, p.x), Math.max(fija.y, p.y)]});
+        deshacer.push(() => pedir('/frames/mover', {f, k, caja}));
+      } catch (e) {}
+      return recargar();
+    }
     try {
       const {k} = await pedir('/frames/nueva', {f, caja: [Math.min(a.x, p.x), Math.min(a.y, p.y), Math.max(a.x, p.x), Math.max(a.y, p.y)]});
       deshacer.push(() => pedir('/frames/borrar', {f, k}));
@@ -759,6 +881,7 @@ document.addEventListener('keydown', async ev => {
   else if (k === 'arrowleft') ir(pos - 1);
   else if (k === 'u') irSinRevisar();
   else if (k === 'z') deshacerUltimo();
+  else if (k === 'g') { ev.preventDefault(); document.getElementById('saltar').focus(); }
   else if (k === 'r') { await pedir('/frames/revisado', {f: datos.f, v: false}); lista[pos].revisado = false; recargar(); }
   else if (raton && TECLA[k]) {
     const b = bajo(raton);
@@ -825,6 +948,66 @@ cargar();
 """
 
 
+REPASO_PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Repaso ciego</title>
+<style>
+  body { background:#12141a; color:#e6e9ef; font:14px system-ui; margin:0; padding:16px; }
+  img { max-width:100%; border-radius:6px; display:block; margin:8px 0; }
+  input { font:16px system-ui; padding:6px 10px; width:5em; border-radius:6px; border:1px solid #3a3f4b;
+          background:#1c1f27; color:#e6e9ef; }
+  button { font:600 14px system-ui; padding:7px 14px; border-radius:99px; border:1px solid #3a3f4b;
+           background:#1c1f27; color:#e6e9ef; cursor:pointer; }
+  a { color:#93c5fd; } #veredicto { font-weight:600; } .mal { color:#fb923c; } .bien { color:#22c55e; }
+</style>
+<h2 id="titulo">Repaso ciego</h2>
+<p>La herramienta te muestra, <b>sin las cajas</b>, algunos frames que ya diste por revisados, y te pregunta cuantas
+personas ves. Compara tu respuesta con lo que dejaste etiquetado. No cambia ninguna etiqueta: mide si etiquetas
+igual la segunda vez, que es la forma honesta de decir que el etiquetado es consistente.</p>
+<p id="cuenta"></p>
+<div id="caja">
+  <img id="foto" alt="">
+  <p>personas que ves en este frame: <input id="n" type="number" min="0" step="1"
+      onkeydown="if (event.key === 'Enter') responder()"> <button onclick="responder()">responder</button></p>
+  <p id="veredicto"></p>
+</div>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/chequeos">chequeos</a></p>
+<script>
+let actual = null;
+async function cargar() {
+  const e = await (await fetch('/repaso/estado')).json();
+  document.title = e.nombre + ' - repaso ciego';
+  document.getElementById('titulo').textContent = e.nombre + ' - repaso ciego';
+  const dichas = e.frames.filter(x => x.dicho !== null);
+  document.getElementById('cuenta').textContent = e.frames.length
+    ? `${e.contestadas} de ${e.frames.length} frames repasados · coinciden ${e.acuerdo}` +
+      (e.contestadas ? ` (${Math.round(100 * e.acuerdo / e.contestadas)} %)` : '') +
+      (dichas.length ? ' · ' + dichas.map(x => `f${x.f}: dijiste ${x.dicho}, tenia ${x.tenia}`).join(' · ') : '')
+    : 'todavia no hay frames revisados: el repaso aparece cuando empieces a dar frames por revisados';
+  actual = e.pendiente;
+  document.getElementById('caja').hidden = actual === null;
+  if (actual !== null) {
+    document.getElementById('foto').src = '/imagen/' + actual;
+    document.getElementById('n').value = '';
+    document.getElementById('veredicto').textContent = '';
+    document.getElementById('n').focus();
+  } else if (e.frames.length) {
+    document.getElementById('cuenta').textContent += ' · no queda ninguno por repasar';
+  }
+}
+async function responder() {
+  const n = parseInt(document.getElementById('n').value);
+  if (isNaN(n)) return;
+  const r = await (await fetch('/repaso', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({f: actual, n})})).json();
+  const v = document.getElementById('veredicto');
+  v.textContent = r.dicho === r.tenia ? `coincide: ${r.tenia}` : `dijiste ${r.dicho} y habias etiquetado ${r.tenia}`;
+  v.className = r.dicho === r.tenia ? 'bien' : 'mal';
+  setTimeout(cargar, 1600);
+}
+cargar();
+</script>
+"""
+
+
 CHEQUEOS = r"""<!doctype html><meta charset="utf-8"><title>Chequeos</title>
 <style>
   body { background:#12141a; color:#e6e9ef; font:14px system-ui; margin:0; padding:16px; max-width:900px; }
@@ -835,7 +1018,8 @@ CHEQUEOS = r"""<!doctype html><meta charset="utf-8"><title>Chequeos</title>
 <h2 id="titulo">Chequeos</h2>
 <p id="resumen"></p>
 <div id="lista"></div>
-<p><a href="/">&larr; grupos</a> &middot; <a href="/frames">frames</a> &middot; <a href="/mosaico">mosaico</a></p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/frames">frames</a> &middot; <a href="/mosaico">mosaico</a>
+ &middot; <a href="/repaso">repaso ciego</a></p>
 <script>
 const QUE = [
   ['medias', 'Media persona con caja propia',
@@ -847,6 +1031,7 @@ const QUE = [
   ['sin_etiquetar', 'Cajas sin etiquetar', 'Frames con alguna caja amarilla. No se pueden dar por revisados asi.'],
   ['sin_revisar', 'Frames sin revisar', 'Todavia no pasaron por el mosaico ni por la revision frame a frame.'],
 ];
+
 async function cargar() {
   const e = await (await fetch('/chequeos/estado')).json();
   document.title = e.nombre + ' - chequeos';
@@ -903,6 +1088,11 @@ def servir(sesion, puerto):
             elif self.path == "/chequeos/estado":
                 with sesion.lock:
                     self._responder(json.dumps(sesion.chequeos()).encode("utf-8"))
+            elif self.path == "/repaso":
+                self._responder(REPASO_PAGINA.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/repaso/estado":
+                with sesion.lock:
+                    self._responder(json.dumps(sesion.repaso_estado()).encode("utf-8"))
             elif self.path.startswith("/miniatura/"):
                 try:
                     f = int(self.path.split("?")[0].rsplit("/", 1)[1])
@@ -944,6 +1134,13 @@ def servir(sesion, puerto):
                         r = {"status": "ok"}
                     elif self.path == "/frames/nueva":
                         r = {"k": sesion.nueva(int(d["f"]), d["caja"])}
+                    elif self.path == "/frames/mover":
+                        sesion.mover(int(d["f"]), int(d["k"]), d["caja"])
+                        r = {"status": "ok"}
+                    elif self.path == "/repaso":
+                        r = sesion.repasar(int(d["f"]), d.get("n"))
+                    elif self.path == "/letras/renombrar":
+                        r = sesion.renombrar(d.get("de"), d.get("a"))
                     elif self.path == "/frames/borrar":
                         sesion.borrar(int(d["f"]), int(d["k"]))
                         r = {"status": "ok"}
