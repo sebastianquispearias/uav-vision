@@ -159,7 +159,7 @@ class OnboardCamera:
         tracker: bool = False,
         fps: Optional[float] = None,
         track_buffer_s: float = 8.0,
-        compensate_motion: bool = False,
+        compensate_motion: bool = True,
         startup_pause_s: float = 0.0,
         crops: bool = False,
         crop_side_px: int = 128,
@@ -183,8 +183,13 @@ class OnboardCamera:
         self.rastreador_habilitado = tracker
         self.fps = fps
         self.track_buffer_s = track_buffer_s
-        # Camera-motion compensation improves tracking from a moving camera but costs CPU;
-        # disabled until measured on the target hardware.
+        # Camera-motion compensation: the drone moves, so every box shifts in the image between frames
+        # and the tracker's prediction misses the next box unless the background motion is removed
+        # first. Measured with the flight's tracker settings and hand labels: without it the standing
+        # operator got 32 track ids in the labelled windows of flight 02ago, with sparse optical flow
+        # 5; on flights 2a / 2b of another day the ids over people halved (10 -> 6, 22 -> 11) with no
+        # non-person box absorbed. Cost on the Raspberry Pi 5 at boxmot's default 0.15 image scale:
+        # +8.1 ms median per frame (1.0 -> 9.1 ms), about 4 % of the chain's 206 ms, no throttling.
         self.compensate_motion = compensate_motion
         # A crop is the cheapest thing the drone can say that the ground can check. The link
         # budget is the constraint the whole architecture was built around -- video off the
@@ -356,6 +361,10 @@ class OnboardCamera:
             # it must run motion-only.
             with_reid=self.reid_model is not None,
             use_cmc=self.compensate_motion,
+            # boxmot's default method is 'ecc': on the same flight and the same calibrated thresholds it
+            # recovered far fewer ids (IDF1 0.376 against 0.656 with 'sof') and cost more on the Pi
+            # (p90 20.5 ms against 10.4 ms).
+            cmc_method="sof",
             track_high_thresh=0.35,
             track_low_thresh=0.2,
             new_track_thresh=0.4,
