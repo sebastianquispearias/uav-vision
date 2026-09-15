@@ -13,6 +13,15 @@ closed page loses nothing and reopening resumes.
 What it cannot label: people the detector never boxed. Those need boxes proposed by another
 source, reviewed the same way.
 
+With --identidad it labels WHO instead of WHAT: one capital letter per real person, X for not a
+person, ? for cannot tell. Measured on the hand-labelled window 3000-3700 of flight 3, labelling
+identities this way costs 45 clicks for 852 boxes at 30 groups, with 98.2 % of the boxes in a group
+whose majority is their own person; the confusions were between two people who look alike from 40 m.
+That is the risk of the method, and it is a biased one: the groups come from the same appearance
+network the identity layer uses, so what the network confuses is what a hurried labeller would
+copy. A group that shows two people must be split, and a click on a crop opens the whole frame with
+the box drawn, to decide from context rather than from the crop.
+
     python scripts/etiquetar_grupos.py \\
         --cajas  ../drone-geolocation/entrenamiento/valida_ident_cajas_vuelo2a.csv \\
         --embs   ../drone-geolocation/entrenamiento/valida_ident_embs_vuelo2a.npy \\
@@ -62,7 +71,8 @@ def agrupar(emb, k):
 class Sesion:
     """The boxes, their groups and the labels given so far, with every change written to disk."""
 
-    def __init__(self, cajas, emb, frames, salida, k, desde=None, hasta=None):
+    def __init__(self, cajas, emb, frames, salida, k, desde=None, hasta=None, identidad=False):
+        self.identidad = identidad
         filas = list(csv.DictReader(open(cajas, encoding="utf-8")))
         if len(filas) != len(emb):
             raise ValueError("%d cajas pero %d embeddings" % (len(filas), len(emb)))
@@ -98,12 +108,27 @@ class Sesion:
             out.append({"g": g, "n": len(miembros), "etiqueta": etiqueta,
                         "muestra": miembros[::paso][:MUESTRA]})
         # Unlabelled first, then the largest: the next click is always the one that labels most.
-        out.sort(key=lambda d: (d["etiqueta"] in ETIQUETAS, -d["n"]))
-        return {"grupos": out, "cajas": len(self.filas), "etiquetadas": len(self.etiquetas)}
+        out.sort(key=lambda d: (d["etiqueta"] not in (None, "parcial"), -d["n"]))
+        return {"grupos": out, "cajas": len(self.filas), "etiquetadas": len(self.etiquetas),
+                "identidad": self.identidad, "letras": sorted(set(self.etiquetas.values()))}
+
+    def validar(self, v):
+        """The label as stored, or ValueError. In identity mode a lower-case x is the same X."""
+        if not isinstance(v, str):
+            raise ValueError("etiqueta invalida")
+        if self.identidad:
+            v = v.strip().upper()
+            if len(v) != 1 or not ("A" <= v <= "Z" or v == "?"):
+                raise ValueError("una letra por persona (A-Z), X no es persona, ? no se distingue")
+            return v
+        if v not in ETIQUETAS:
+            raise ValueError("etiqueta invalida")
+        return v
 
     def marcar(self, g, v):
-        if v not in ETIQUETAS or g not in self.grupos:
-            raise ValueError("grupo o etiqueta invalidos")
+        v = self.validar(v)
+        if g not in self.grupos:
+            raise ValueError("grupo invalido")
         for i in self.grupos[g]:
             self.etiquetas[i] = v
         self._guardar()
@@ -149,6 +174,19 @@ class Sesion:
         self.recortes[i] = buf.tobytes()
         return self.recortes[i]
 
+    def frame(self, i):
+        """The whole frame a box came from, with that box drawn: the context a crop cuts away."""
+        import cv2
+        r = self.filas[i]
+        img = cv2.imread(os.path.join(self.frames, "frame_%04d.jpg" % int(r["frame"])))
+        if img is None:
+            raise FileNotFoundError(r["frame"])
+        x1, y1, x2, y2 = (int(float(r[c])) for c in ("x1", "y1", "x2", "y2"))
+        cv2.rectangle(img, (x1 - 6, y1 - 6), (x2 + 6, y2 + 6), (0, 230, 255), 3)
+        esc = min(1.0, 1280.0 / img.shape[1])
+        img = cv2.resize(img, (int(img.shape[1] * esc), int(img.shape[0] * esc)))
+        return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+
 
 PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</title>
 <style>
@@ -163,24 +201,33 @@ PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</t
 </style>
 <h2>Etiquetar por grupos</h2>
 <p id="cuenta"></p>
-<p>Un clic etiqueta TODO el grupo. Si en la rejilla hay de las dos cosas, "mezcla" lo parte en dos.</p>
+<p id="ayuda">Un clic etiqueta TODO el grupo. Si en la rejilla hay de las dos cosas, "mezcla" lo parte en dos.</p>
 <div id="grupos"></div>
 <script>
 async function cargar() {
   const e = await (await fetch('/estado')).json();
   document.getElementById('cuenta').textContent =
     `${e.etiquetadas} de ${e.cajas} cajas etiquetadas, ${e.grupos.length} grupos`;
+  if (e.identidad) document.getElementById('ayuda').innerHTML =
+    'Una <b>letra por persona real</b> para todo el grupo y <b>Enter</b> (o clic en una letra ya usada). ' +
+    '<b>X</b> = no es persona, <b>?</b> = no se distingue. Si el grupo tiene a dos personas: <b>mezcla: partir</b>. ' +
+    '<b>Clic en un recorte</b>: abre el frame entero con la caja marcada.';
+  const botones = g => e.identidad
+    ? `<input size="3" maxlength="1" placeholder="letra" onkeydown="if(event.key==='Enter'){enviar('/marcar', {g: ${g.g}, v: this.value})}">
+       ${e.letras.map(l => `<button onclick="enviar('/marcar', {g: ${g.g}, v: '${l}'})">${l}</button>`).join('')}`
+    : `<button onclick="enviar('/marcar', {g: ${g.g}, v: 'persona'})">persona</button>
+       <button onclick="enviar('/marcar', {g: ${g.g}, v: 'no'})">no es persona</button>`;
   document.getElementById('grupos').innerHTML = e.grupos.map(g => `
-    <div class="grupo ${g.etiqueta || ''}">
+    <div class="grupo ${g.etiqueta === 'persona' || g.etiqueta === 'no' || g.etiqueta === 'parcial' ? g.etiqueta : (g.etiqueta ? 'persona' : '')}">
       <b>grupo ${g.g}</b> · ${g.n} cajas · ${g.etiqueta || 'sin etiquetar'}
-      <div class="rejilla">${g.muestra.map(i => `<img loading="lazy" src="/recorte/${i}">`).join('')}</div>
-      <button onclick="enviar('/marcar', {g: ${g.g}, v: 'persona'})">persona</button>
-      <button onclick="enviar('/marcar', {g: ${g.g}, v: 'no'})">no es persona</button>
+      <div class="rejilla">${g.muestra.map(i => `<a href="/frame/${i}" target="_blank"><img loading="lazy" src="/recorte/${i}"></a>`).join('')}</div>
+      ${botones(g)}
       ${g.n > 1 ? `<button onclick="enviar('/partir', {g: ${g.g}})">mezcla: partir</button>` : ''}
     </div>`).join('');
 }
 async function enviar(ruta, cuerpo) {
-  await fetch(ruta, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cuerpo)});
+  const r = await fetch(ruta, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cuerpo)});
+  if (!r.ok) alert((await r.json()).error);
   cargar();
 }
 cargar();
@@ -211,6 +258,11 @@ def servir(sesion, puerto):
                     self._responder(sesion.recorte(int(self.path.rsplit("/", 1)[1])), "image/jpeg")
                 except Exception:
                     self._responder(b'{"error": "recorte"}', codigo=404)
+            elif self.path.startswith("/frame/"):
+                try:
+                    self._responder(sesion.frame(int(self.path.rsplit("/", 1)[1])), "image/jpeg")
+                except Exception:
+                    self._responder(b'{"error": "frame"}', codigo=404)
             else:
                 self._responder(b'{"error": "ruta"}', codigo=404)
 
@@ -243,6 +295,8 @@ def main():
     ap.add_argument("--desde", type=int, default=None)
     ap.add_argument("--hasta", type=int, default=None)
     ap.add_argument("--puerto", type=int, default=8412)
+    ap.add_argument("--identidad", action="store_true",
+                    help="una letra por persona real (X no es persona, ? no se distingue) en vez de persona/no")
     args = ap.parse_args()
     if args.vuelo:
         raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -252,7 +306,8 @@ def main():
     faltan = [c for c in ("cajas", "embs", "frames", "salida") if getattr(args, c) is None]
     if faltan:
         ap.error("faltan %s (o usa --vuelo %s)" % (", ".join("--" + c for c in faltan), "/".join(sorted(VUELOS))))
-    s = Sesion(args.cajas, np.load(args.embs), args.frames, args.salida, args.grupos, args.desde, args.hasta)
+    s = Sesion(args.cajas, np.load(args.embs), args.frames, args.salida, args.grupos, args.desde, args.hasta,
+               identidad=args.identidad)
     print("%d cajas en %d grupos, %d ya etiquetadas -> http://127.0.0.1:%d/"
           % (len(s.filas), len(s.grupos), len(s.etiquetas), args.puerto), flush=True)
     servir(s, args.puerto)
