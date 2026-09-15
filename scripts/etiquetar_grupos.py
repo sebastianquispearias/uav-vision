@@ -34,6 +34,16 @@ The recorded flights have a shortcut, so the command fits on one line:
     python scripts/etiquetar_grupos.py --vuelo 2a
 
 The output keys are row indices of the --cajas CSV, so each label points back at a frame and a box.
+
+Every thumbnail and every frame view draws the box being labelled with a thick border, and the other
+boxes of the same frame that fall inside the picture with a thin one. With --contexto those include
+the boxes of another CSV, typically the flight's own detections, each with its label (a column
+"etiqueta", or a JSON given with --contexto-etiquetas keyed by row of that CSV) or its confidence. That
+is what makes a lost person decidable: a person the flight already boxed was not lost.
+
+    python scripts/etiquetar_grupos.py ... \\
+        --contexto ../drone-geolocation/entrenamiento/identidad_cajas_02ago.csv \\
+        --contexto-etiquetas ../drone-geolocation/entrenamiento/identidad_gt_02ago.json
 """
 import argparse
 import csv
@@ -56,7 +66,28 @@ VUELOS = {
            os.path.join(_DATOS, "20260801_185326", "frames"), os.path.join(_ENT, "grupos_vuelo2b.json")),
 }
 MUESTRA = 24          # crops shown per group: enough to see what it is, few enough to load fast
-LADO = 96             # crop side, px
+LADO = 128            # crop side, px: at 96 the text of a context box is a smudge of a few pixels
+GRUESA = (0, 230, 255)    # BGR yellow: the box being labelled
+CONTEXTO = (255, 0, 255)  # BGR magenta: boxes of --contexto, the flight's detections
+VECINA = (255, 255, 0)    # BGR cyan: other boxes of the CSV being labelled, in the same frame
+
+
+def leer_contexto(ruta, etiquetas=None):
+    """The boxes of a context CSV grouped by frame, as (x1, y1, x2, y2, text).
+
+    The text is the row's "etiqueta" column if the CSV has one, else the label of that row in the
+    JSON of --contexto-etiquetas (a dict under "etiquetas", keyed by row index), else its confidence.
+    """
+    letras = {}
+    if etiquetas:
+        d = json.load(open(etiquetas, encoding="utf-8"))
+        letras = {int(k): str(v) for k, v in d.get("etiquetas", d).items()}
+    por_frame = {}
+    for j, r in enumerate(csv.DictReader(open(ruta, encoding="utf-8"))):
+        texto = (r.get("etiqueta") or letras.get(j) or "%.2f" % float(r.get("conf") or 0)).upper()
+        por_frame.setdefault(int(r["frame"]), []).append(
+            tuple(float(r[c]) for c in ("x1", "y1", "x2", "y2")) + (texto,))
+    return por_frame
 
 
 def agrupar(emb, k):
@@ -71,8 +102,10 @@ def agrupar(emb, k):
 class Sesion:
     """The boxes, their groups and the labels given so far, with every change written to disk."""
 
-    def __init__(self, cajas, emb, frames, salida, k, desde=None, hasta=None, identidad=False):
+    def __init__(self, cajas, emb, frames, salida, k, desde=None, hasta=None, identidad=False,
+                 contexto=None, contexto_etiquetas=None):
         self.identidad = identidad
+        self.contexto = leer_contexto(contexto, contexto_etiquetas) if contexto else {}
         filas = list(csv.DictReader(open(cajas, encoding="utf-8")))
         if len(filas) != len(emb):
             raise ValueError("%d cajas pero %d embeddings" % (len(filas), len(emb)))
@@ -83,6 +116,9 @@ class Sesion:
         e = np.asarray(emb, dtype=np.float64)[self.orig]
         self.emb = e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-9)
         self.cajas, self.frames, self.salida = cajas, frames, salida
+        self.por_frame = {}
+        for i, r in enumerate(self.filas):
+            self.por_frame.setdefault(int(r["frame"]), []).append(i)
         self.lock = threading.Lock()
         self.recortes = {}
         self.etiquetas = {}                                   # local index -> label
@@ -151,6 +187,33 @@ class Sesion:
             json.dump(datos, f, indent=1)
         os.replace(tmp, self.salida)
 
+    def _caja(self, i):
+        return tuple(float(self.filas[i][c]) for c in ("x1", "y1", "x2", "y2"))
+
+    def _dibujar(self, img, i, ox, oy, esc, gruesa, fina, letra):
+        """Draws the boxes of row i's frame on an image that is that frame shifted by (ox, oy) and
+        scaled by esc: row i with a thick border, every other box that falls inside with a thin one
+        and its text."""
+        import cv2
+        h, w = img.shape[:2]
+
+        def punto(x, y):
+            return int(round((x - ox) * esc)), int(round((y - oy) * esc))
+
+        f = int(self.filas[i]["frame"])
+        otras = [self._caja(j) + (None, VECINA) for j in self.por_frame.get(f, []) if j != i]
+        otras += [c[:4] + (c[4], CONTEXTO) for c in self.contexto.get(f, [])]
+        for x1, y1, x2, y2, texto, color in otras:
+            p1, p2 = punto(x1, y1), punto(x2, y2)
+            if p2[0] < 0 or p2[1] < 0 or p1[0] >= w or p1[1] >= h:
+                continue
+            cv2.rectangle(img, p1, p2, color, fina)
+            if texto:
+                cv2.putText(img, texto, (max(1, p1[0]), max(int(24 * letra), p1[1] - 2)),
+                            cv2.FONT_HERSHEY_SIMPLEX, letra, color, fina)
+        x1, y1, x2, y2 = self._caja(i)
+        cv2.rectangle(img, punto(x1, y1), punto(x2, y2), GRUESA, gruesa)
+
     def recorte(self, i):
         if i in self.recortes:
             return self.recortes[i]
@@ -159,14 +222,17 @@ class Sesion:
         img = cv2.imread(os.path.join(self.frames, "frame_%04d.jpg" % int(r["frame"])))
         if img is None:
             raise FileNotFoundError(r["frame"])
-        x1, y1, x2, y2 = (float(r[c]) for c in ("x1", "y1", "x2", "y2"))
+        x1, y1, x2, y2 = self._caja(i)
         # A margin, because a box drawn tight at altitude cuts off the context that tells a
         # person from a post.
         mx, my = 0.25 * (x2 - x1), 0.25 * (y2 - y1)
         h, w = img.shape[:2]
-        c = img[max(0, int(y1 - my)):min(h, int(y2 + my)), max(0, int(x1 - mx)):min(w, int(x2 + mx))]
+        ox, oy = max(0, int(x1 - mx)), max(0, int(y1 - my))
+        c = img[oy:min(h, int(y2 + my)), ox:min(w, int(x2 + mx))]
         esc = LADO / float(max(c.shape[:2]))
         c = cv2.resize(c, (max(1, int(c.shape[1] * esc)), max(1, int(c.shape[0] * esc))))
+        # Drawn after resizing, so border widths are thumbnail pixels whatever the size of the box.
+        self._dibujar(c, i, ox, oy, esc, gruesa=3, fina=1, letra=0.35)
         lienzo = np.full((LADO, LADO, 3), 24, np.uint8)
         y0, x0 = (LADO - c.shape[0]) // 2, (LADO - c.shape[1]) // 2
         lienzo[y0:y0 + c.shape[0], x0:x0 + c.shape[1]] = c
@@ -175,16 +241,16 @@ class Sesion:
         return self.recortes[i]
 
     def frame(self, i):
-        """The whole frame a box came from, with that box drawn: the context a crop cuts away."""
+        """The whole frame a box came from, with that box thick and the other boxes thin: the
+        context a crop cuts away."""
         import cv2
         r = self.filas[i]
         img = cv2.imread(os.path.join(self.frames, "frame_%04d.jpg" % int(r["frame"])))
         if img is None:
             raise FileNotFoundError(r["frame"])
-        x1, y1, x2, y2 = (int(float(r[c])) for c in ("x1", "y1", "x2", "y2"))
-        cv2.rectangle(img, (x1 - 6, y1 - 6), (x2 + 6, y2 + 6), (0, 230, 255), 3)
         esc = min(1.0, 1280.0 / img.shape[1])
         img = cv2.resize(img, (int(img.shape[1] * esc), int(img.shape[0] * esc)))
+        self._dibujar(img, i, 0, 0, esc, gruesa=3, fina=1, letra=0.5)
         return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
 
 
@@ -195,13 +261,18 @@ PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</t
   .grupo.persona { border-left:5px solid #4ade80; } .grupo.no { border-left:5px solid #f87171; }
   .grupo.parcial { border-left:5px solid #fbbf24; }
   .rejilla { display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }
-  .rejilla img { width:96px; height:96px; border-radius:4px; }
+  .rejilla img { width:128px; height:128px; border-radius:4px; }
   button { font:600 13px system-ui; padding:5px 14px; margin-right:6px; border-radius:99px;
            border:1px solid #3a3f4b; background:#1c1f27; color:#e6e9ef; cursor:pointer; }
 </style>
 <h2>Etiquetar por grupos</h2>
 <p id="cuenta"></p>
 <p id="ayuda">Un clic etiqueta TODO el grupo. Si en la rejilla hay de las dos cosas, "mezcla" lo parte en dos.</p>
+<p id="cajas">Borde <b style="color:#ffe600">amarillo grueso</b> = esta caja, la que se etiqueta.
+Borde <b style="color:#ff00ff">magenta fino</b> = las detecciones del vuelo (--contexto), con su letra o su confianza:
+si la persona ya tiene una caja fina del vuelo, el vuelo no la perdio y esta caja es <b>no</b>.
+Borde <b style="color:#00ffff">cian fino</b> = otras cajas de esta misma lista en el mismo frame.
+<b>Clic en un recorte</b>: el frame entero con las mismas cajas.</p>
 <div id="grupos"></div>
 <script>
 async function cargar() {
@@ -295,6 +366,8 @@ def main():
     ap.add_argument("--desde", type=int, default=None)
     ap.add_argument("--hasta", type=int, default=None)
     ap.add_argument("--puerto", type=int, default=8412)
+    ap.add_argument("--contexto", help="CSV frame,conf,x1,y1,x2,y2[,etiqueta] dibujado en fino (p. ej. las detecciones del vuelo)")
+    ap.add_argument("--contexto-etiquetas", help="JSON {etiquetas: {fila del CSV de contexto: letra}}")
     ap.add_argument("--identidad", action="store_true",
                     help="una letra por persona real (X no es persona, ? no se distingue) en vez de persona/no")
     args = ap.parse_args()
@@ -307,7 +380,7 @@ def main():
     if faltan:
         ap.error("faltan %s (o usa --vuelo %s)" % (", ".join("--" + c for c in faltan), "/".join(sorted(VUELOS))))
     s = Sesion(args.cajas, np.load(args.embs), args.frames, args.salida, args.grupos, args.desde, args.hasta,
-               identidad=args.identidad)
+               identidad=args.identidad, contexto=args.contexto, contexto_etiquetas=args.contexto_etiquetas)
     print("%d cajas en %d grupos, %d ya etiquetadas -> http://127.0.0.1:%d/"
           % (len(s.filas), len(s.grupos), len(s.etiquetas), args.puerto), flush=True)
     servir(s, args.puerto)
