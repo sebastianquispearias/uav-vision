@@ -255,6 +255,18 @@ class IncrementalIdentity:
             3 s gives 2.30/14.40, 2.82/13.44, 6.69/17.09 m; 2 s gives 2.56/15.90, 1.89/11.29,
             6.69/17.91 m. No value wins at every speed; 3 s has the smallest worst case, and that is
             the choice -- a decision about which failure to tolerate, not an optimum.
+        crop_choice: which crop a candidate carries. "confidence", the default, keeps the most
+            confident sighting of each track and the most confident of its tracks. "appearance"
+            keeps, per track, the sighting whose vector is closest to the track's mean appearance,
+            and per candidate the track crop closest to the candidate's, so the photograph shows
+            what the evidence mostly is. The difference is the case of a box that caught two people
+            or a person next to clutter: the detector is surest there and the appearance filter on
+            the ground agrees with the detector. On flight 3, with the stand-in tracker, the only
+            confirmed candidate that is mostly not a person carried such a box under "confidence"
+            and passed the filter; under "appearance" it carries one of its non-person boxes and is
+            filtered out. Opt-in because the same measurement also shows the cost: the crops chosen
+            are less confident (median 0.41 against 0.77), and one more preliminary non-person
+            passes the filter.
     """
 
     def __init__(
@@ -277,9 +289,13 @@ class IncrementalIdentity:
         motion_window_s: float = 5.0,
         mobile_speed_mps: float = 0.5,
         extrapolation_max_s: float = 3.0,
+        crop_choice: str = "confidence",
     ) -> None:
         if maturity not in ("span", "looks"):
             raise ValueError("maturity must be 'span' or 'looks', got %r" % (maturity,))
+        if crop_choice not in ("confidence", "appearance"):
+            raise ValueError("crop_choice must be 'confidence' or 'appearance', got %r" % (crop_choice,))
+        self.crop_choice = crop_choice
         self.fusion_radius_m = fusion_radius_m
         self.reinforce_with_fragments = reinforce_with_fragments
         self.maturity = maturity
@@ -367,9 +383,10 @@ class IncrementalIdentity:
         """
         Records one tracked detection, already projected to the ground.
 
-        The crop is optional and only one is kept per track: the one from the most confident
-        sighting. A preliminary candidate is a request for verification, and what a verifier
-        needs is the clearest look the drone ever got, not the latest -- the latest is often
+        The crop is optional and only one is kept per track: under crop_choice="confidence" the
+        one from the most confident sighting, under "appearance" the one that looks most like the
+        rest of the track. A preliminary candidate is a request for verification, and what a
+        verifier needs is a look that shows the target, not the latest -- the latest is often
         the target leaving the frame. Keeping one bounded the message at roughly 3 KB per
         candidate, which is what the whole architecture was sized around.
 
@@ -406,12 +423,44 @@ class IncrementalIdentity:
             t["t1"] = ts if t["t1"] is None else max(t["t1"], ts)
         if cls is not None:
             t["cls_votos"][cls] = t["cls_votos"].get(cls, 0) + 1
-        if crop and float(conf) > t["recorte_conf"]:
-            t["crop"], t["recorte_conf"] = crop, float(conf)
         if emb is not None:
             v = np.asarray(emb, dtype=np.float32)
             t["emb_sum"] = v.copy() if t["emb_sum"] is None else t["emb_sum"] + v
             t["n_emb"] += 1
+        if crop:
+            if self.crop_choice == "appearance":
+                self._keep_representative_crop(t, crop, float(conf), emb)
+            elif float(conf) > t["recorte_conf"]:
+                t["crop"], t["recorte_conf"] = crop, float(conf)
+
+    @staticmethod
+    def _keep_representative_crop(t: dict, crop: bytes, conf: float, emb) -> None:
+        """
+        Keeps, of the kept crop and a new one, the one whose appearance is closer to the track's.
+
+        The track's appearance is the running mean of every vector it has received, this sighting
+        included, so the comparison is always against the current mean and a crop kept early on is
+        displaced as soon as the mean moves away from it. Memory stays one crop and one vector per
+        track. A crop with a vector beats one without, since only one of them can be judged;
+        between two without, confidence decides, which is the "confidence" rule. An exact tie in
+        distance also goes to confidence.
+        """
+        u = None
+        if emb is not None:
+            u = np.asarray(emb, dtype=np.float32)
+            u = u / (np.linalg.norm(u) + 1e-9)
+        guardada = t.get("recorte_emb")
+        if t["crop"] is None:
+            tomar = True
+        elif u is None or guardada is None:
+            tomar = (u is not None) or (guardada is None and conf > t["recorte_conf"])
+        else:
+            media = t["emb_sum"] / (np.linalg.norm(t["emb_sum"]) + 1e-9)
+            d_nueva = float(np.linalg.norm(u - media))
+            d_guardada = float(np.linalg.norm(guardada - media))
+            tomar = d_nueva < d_guardada or (d_nueva == d_guardada and conf > t["recorte_conf"])
+        if tomar:
+            t["crop"], t["recorte_conf"], t["recorte_emb"] = crop, conf, u
 
     # -- association -------------------------------------------------------
 
@@ -435,6 +484,7 @@ class IncrementalIdentity:
             "frames": t["frames"],
             "crop": t.get("crop"),
             "recorte_conf": t.get("recorte_conf", -1.0),
+            "recorte_emb": t.get("recorte_emb"),
             "t0": t.get("t0"),
             "t1": t.get("t1"),
             "cls_votos": dict(t.get("cls_votos") or {}),
@@ -596,10 +646,32 @@ class IncrementalIdentity:
         # of the two, which is the one the verifier would have chosen.
         if tk["crop"] and tk["recorte_conf"] > c["recorte_conf"]:
             c["crop"], c["recorte_conf"] = tk["crop"], tk["recorte_conf"]
+        # Under crop_choice="appearance" every track's crop stays eligible until the report, when
+        # the candidate's appearance has taken in all of them; see _crop_for.
+        c["recortes"].append((tk["crop"], tk["recorte_emb"], tk["recorte_conf"]))
         # Two tracks of one target: the evidence spans the union of their intervals.
         if tk["t0"] is not None:
             c["t0"] = tk["t0"] if c["t0"] is None else min(c["t0"], tk["t0"])
             c["t1"] = tk["t1"] if c["t1"] is None else max(c["t1"], tk["t1"])
+
+    def _crop_for(self, c: dict) -> Optional[bytes]:
+        """
+        The crop a candidate carries: under "appearance", the one of its tracks' crops whose vector
+        is closest to the candidate's appearance.
+
+        The candidate's appearance is the mean of its tracks' weighted by their sightings, so a
+        track that is most of the evidence pulls the choice towards its own crop, and a short track
+        of something else -- a box that caught two people, a patch of ground -- does not speak for
+        the candidate however confident the detector was about it. Confidence breaks ties. With no
+        vectors to compare the most confident crop is kept, as under "confidence".
+        """
+        if self.crop_choice != "appearance" or c.get("emb") is None:
+            return c.get("crop")
+        comparables = [r for r in c["recortes"] if r[0] and r[1] is not None]
+        if not comparables:
+            return c.get("crop")
+        return min(comparables,
+                   key=lambda r: (float(np.linalg.norm(r[1] - c["emb"])), -r[2]))[0]
 
     def _en(self, c: dict, now: Optional[float]) -> np.ndarray:
         """
@@ -684,6 +756,7 @@ class IncrementalIdentity:
                               "n": tk["n"], "frames": set(tk["frames"]),
                               "crop": tk["crop"],
                               "recorte_conf": tk["recorte_conf"],
+                              "recortes": [(tk["crop"], tk["recorte_emb"], tk["recorte_conf"])],
                               "t0": tk["t0"], "t1": tk["t1"],
                               "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]],
                               "bins": set(tk["bins"])})
@@ -695,6 +768,7 @@ class IncrementalIdentity:
                               "n": tk["n"], "frames": set(tk["frames"]),
                               "crop": tk["crop"],
                               "recorte_conf": tk["recorte_conf"],
+                              "recortes": [(tk["crop"], tk["recorte_emb"], tk["recorte_conf"])],
                               "t0": tk["t0"], "t1": tk["t1"],
                               "cls_votos": dict(tk["cls_votos"]), "tids": [tk["tid"]],
                               "bins": set(tk["bins"])})
@@ -730,7 +804,7 @@ class IncrementalIdentity:
             "mature": mature(c),
             # Raw JPEG bytes, or None. Serialising it is the transport's problem, not this
             # layer's; the protocol base64-encodes it on the way out.
-            "crop": c.get("crop"),
+            "crop": self._crop_for(c),
             # The appearance vector, same convention as the crop: raw here, encoded by the
             # transport. It leaves the drone because deciding that two drones are looking at
             # one target is a comparison neither of them can make alone, and position is not
