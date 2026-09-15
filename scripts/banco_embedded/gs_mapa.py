@@ -933,20 +933,42 @@ function pintarFiltro(pois) {
 // them -- so this is not a convenience, it is the step that makes a report actionable.
 //
 // Kept by position, never by list index: the list is rebuilt on every report, reorders as
-// evidence grows, and a POI carries no id that survives it. A later report of the same thing
-// lands within its own margin of where the verdict was given.
+// evidence grows, and a POI carries no id that survives it. Neither the crop nor the appearance
+// vector is one either: both are replaced as evidence arrives.
+//
+// A verdict belongs to one POI. In each report it goes to the POI nearest to where it was given,
+// of the same class, and only if that POI is within VEREDICTO_ALCANCE_M. The reach is the chain's
+// report-to-report jitter, never a POI's 95 % radius: that radius says how far off a point may
+// be, not how far apart two things are, and a mobile POI carries one of hundreds of metres. On
+// the flight-3 replay a static POI moved at most 1.12 m between consecutive reports and a mobile
+// one 3.44 m, while two distinct static POIs came as close as 0.98 m -- which is why the nearest
+// one wins and a neighbour inside the reach does not inherit the verdict.
+const VEREDICTO_ALCANCE_M = 3;
 const veredictos = [];
 
+function mismaClase(a, b) {
+  return a.cls == null || b.cls == null || a.cls === b.cls;
+}
+
+// Whether verdict v belongs to POI p in the current report.
+function veredictoAplica(v, p) {
+  if (!mismaClase(v, p)) return false;
+  const d = Math.hypot(p.x - v.x, p.y - v.y);
+  if (d > Math.min(v.r || VEREDICTO_ALCANCE_M, VEREDICTO_ALCANCE_M)) return false;
+  return !estado.pois.some(q => q !== p && mismaClase(v, q)
+                               && Math.hypot(q.x - v.x, q.y - v.y) < d);
+}
+
 function veredictoDe(p) {
-  for (const v of veredictos) {
-    const r = Math.max(v.r || 0, p.radius_m || 0, 3);
-    if (Math.hypot(p.x - v.x, p.y - v.y) <= r) return v.v;
+  // The latest verdict wins, so an operator who changes their mind is obeyed.
+  for (let i = veredictos.length - 1; i >= 0; i--) {
+    if (veredictoAplica(veredictos[i], p)) return veredictos[i].v;
   }
   return null;
 }
 
 function marcar(p, v) {
-  veredictos.push({ x: p.x, y: p.y, r: p.radius_m || 0, v });
+  veredictos.push({ x: p.x, y: p.y, r: p.radius_m || 0, cls: p.cls, v });
   pintar();
   // Kept on the station's disk too, with the crop: the page forgets on reload, the data must not.
   fetch('/veredicto', {method: 'POST', headers: {'Content-Type': 'application/json'},
