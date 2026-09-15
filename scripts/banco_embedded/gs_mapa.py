@@ -288,6 +288,9 @@ def registrar(mensaje, fuente):
             # matures by looks. Absent from older reports, and then simply not drawn.
             'looks': p.get('looks'),
             'radius_m': p.get('radius_m'),
+            # Seconds between the drone's last sighting of the target and this report. The page
+            # adds the time elapsed since the report ('t') and fades live contacts by it.
+            'age_s': p.get('age_s'),
             # Kept so the station can decide whether two drones are looking at one target.
             # Never drawn: it is evidence, not something an operator reads.
             'emb': p.get('emb'),
@@ -507,10 +510,13 @@ PAGINA = r"""<!doctype html>
   .chip.mobile { background:rgba(96,165,250,.15); color:var(--mobile); }
   .chip.clase { background:rgba(230,233,239,.10); color:var(--texto); }
   .chip.noper { background:rgba(248,113,113,.15); color:#f87171; }
-  #btn-fondo { font:600 11px system-ui; padding:3px 10px; border-radius:99px;
+  #btn-fondo, #btn-limpiar, #btn-historial {
+               font:600 11px system-ui; padding:3px 10px; border-radius:99px;
                cursor:pointer; border:1px solid var(--linea); background:#171b23;
                color:var(--tenue); }
-  #btn-fondo.on { background:var(--texto); border-color:var(--texto); color:#0b0e14; }
+  #btn-fondo.on, #btn-historial.on { background:var(--texto); border-color:var(--texto);
+                                     color:#0b0e14; }
+  .chip.viejo { background:rgba(139,147,165,.15); color:var(--tenue); }
   #filtro { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
   #filtro button { font:600 11px system-ui; padding:3px 9px; border-radius:99px;
                    cursor:pointer; border:1px solid var(--linea); background:#171b23;
@@ -559,6 +565,9 @@ PAGINA = r"""<!doctype html>
     <span id="cuenta">0 POI</span>
     <span id="ritmo"></span>
     <span id="reportes">0 reportes</span>
+    <button id="btn-limpiar"
+            title="ocultar los contactos no confirmados hasta que se vuelvan a ver">limpiar</button>
+    <button id="btn-historial" title="mostrar, atenuado, lo que las capas ocultaron">historial</button>
     <button id="btn-fondo" hidden>satelite</button>
   </div>
 </header>
@@ -580,7 +589,11 @@ PAGINA = r"""<!doctype html>
       La rueda del raton aleja y acerca el mapa.<br>
       <b>BUSCANDO</b> cambia lo que el dron detecta, en caliente y sin recargar el modelo.
       Los botones de debajo solo <b>ocultan</b>: el POI sigue llegando y vuelve con un clic.
-      Uno manda sobre el sensor; el otro, sobre el dibujo.
+      Uno manda sobre el sensor; el otro, sobre el dibujo.<br>
+      Lo no confirmado se apaga mientras pasa tiempo sin verse y desaparece al rato;
+      CONFIRMADO y VERIFICADO quedan en su ultima posicion y dicen hace cuanto se vieron.
+      <b>limpiar</b> oculta lo no confirmado hasta un avistamiento nuevo; <b>historial</b>
+      muestra lo oculto.
     </div>
   </aside>
 </main>
@@ -605,6 +618,109 @@ let zoom = 1;
 let visibles = [];
 
 function claseDe(p) { return p.cls || 'sin clase'; }
+
+// -- the two layers ------------------------------------------------------------
+// A POI is a claim about where something was when the drone last saw it, and that claim loses
+// value by the second. Tactical displays treat an unrefreshed track the same way: it fades, then
+// leaves the screen. Two layers follow from that.
+//
+// LIVE contacts are the unconfirmed, unverified ones. They are drawn at full opacity for
+// FRESCO_S, fade linearly to ALFA_MIN at TOPE_VIVO_S, and are not drawn at all past it -- neither
+// the pin, nor its 95 % circle, nor its card.
+//
+// PERSISTENT ones are those the identity layer confirmed (mature) or the operator marked "es lo
+// que busco". They stay at their last position regardless of age, and say how long ago that was.
+//
+// FRESCO_S is the identity layer's extrapolation cap (identity.py, extrapolation_max_s): up to it
+// the reported point has been carried forward to the report instant, past it the position is
+// frozen while the target keeps moving. That is where the claim starts to degrade.
+//
+// TOPE_VIVO_S is chosen from data. Reports arrive every 2 s and a person in view is detected in
+// ~28 % of frames, in bursts, so a target in view goes unseen for several seconds at a time; a cap
+// shorter than those gaps makes a real contact blink on and off. Measured on the flight-3 replay
+// (preliminaries on), the gaps after which a POI was sighted again were, in seconds:
+// median 3.7, and the longest ones 9.4, 10.0, 10.0, 11.4, 11.5, 12.7 -- then nothing until 16.0,
+// 17.4, 22.5, 29.5 and 49-55, which are targets that left the view and came back. 15 s is 7.5 report
+// periods and sits in that gap: it covers every in-view dropout measured and hides what has
+// really gone. A contact that returns after longer simply reappears, which is the honest display.
+const FRESCO_S = 3;
+const TOPE_VIVO_S = 15;
+const ALFA_MIN = 0.25;
+// How what the layers hid is drawn when the operator asks for the history.
+const ALFA_HISTORIAL = 0.3;
+// Cards never go fainter than this: the card is where the crop is judged, and a crop drawn at a
+// quarter opacity cannot be.
+const ALFA_TARJETA_MIN = 0.45;
+let verHistorial = false;
+// What "limpiar" hid: where each live contact was and how old it was at that moment. Kept by
+// position, like the verdicts, because a POI carries no id that survives a report.
+let limpiados = [];
+
+// Seconds since the last sighting, on the station's clock: the age the drone reported plus the
+// time since that report arrived, so a contact keeps ageing while its drone is silent. None for a
+// POI the drone did not age (older firmware): there is nothing to fade it by.
+function edadDe(p) {
+  if (p.age_s == null) return null;
+  const desde = (estado && estado.ahora != null && p.t != null) ? Math.max(0, estado.ahora - p.t) : 0;
+  return p.age_s + desde;
+}
+
+function persistente(p) { return !!p.mature || veredictoDe(p) === 'si'; }
+
+function cercaDe(p, v) {
+  return Math.hypot(p.x - v.x, p.y - v.y) <= Math.max(v.r || 0, p.radius_m || 0, 3);
+}
+
+// A cleared contact comes back with a newer sighting: an age smaller than the one it had when it
+// was cleared. The record is then dropped, so ageing again inside the cap does not re-hide it. A
+// record whose place no POI occupies any more is dropped too, or it would hide whatever arrives
+// there next.
+function podarLimpiados(pois) {
+  limpiados = limpiados.filter(v =>
+    pois.some(p => cercaDe(p, v))
+    && !pois.some(p => cercaDe(p, v) && edadDe(p) != null && edadDe(p) < v.edad));
+}
+
+function ocultoPorCapas(p) {
+  if (persistente(p)) return false;
+  const e = edadDe(p);
+  if (e != null && e >= TOPE_VIVO_S) return true;
+  return limpiados.some(v => cercaDe(p, v));
+}
+
+// The opacity a POI is drawn with, pin, circle and card alike. 0 means not drawn.
+function alfaDe(p) {
+  if (persistente(p)) return 1;
+  if (ocultoPorCapas(p)) return verHistorial ? ALFA_HISTORIAL : 0;
+  const e = edadDe(p);
+  if (e == null || e <= FRESCO_S) return 1;
+  return 1 - (1 - ALFA_MIN) * (e - FRESCO_S) / (TOPE_VIVO_S - FRESCO_S);
+}
+
+// "visto hace N s", only once the age has passed the cap: before it the fading already says so.
+function vistoHace(p) {
+  const e = edadDe(p);
+  return (e != null && e > TOPE_VIVO_S) ? `visto hace ${Math.round(e)} s` : '';
+}
+
+// Hides every live contact on screen until it is seen again. A POI without an age is left alone:
+// nothing would ever say it had been seen again, so it would be hidden for good.
+function limpiar() {
+  if (!estado) return;
+  for (const p of estado.pois) {
+    const e = edadDe(p);
+    if (e == null || ocultas.has(claseDe(p)) || persistente(p) || ocultoPorCapas(p)) continue;
+    limpiados.push({ x: p.x, y: p.y, r: p.radius_m || 0, edad: e });
+  }
+  pintar();
+}
+
+function alternarHistorial() {
+  verHistorial = !verHistorial;
+  const b = document.getElementById('btn-historial');
+  b.className = verHistorial ? 'on' : '';
+  if (estado) pintar();
+}
 
 // The area drawn, in metres around the mission origin. Redrawn to fit whatever arrives, so a
 // POI never lands outside the view.
@@ -719,6 +835,9 @@ function dibujar() {
   for (const p of visibles) {
     const [x, y] = aPantalla(p.x, p.y);
     const col = p.mature ? '#4ade80' : '#fbbf24';
+    // Everything this POI draws, its 95 % circle included, shares one opacity: a faded pin under
+    // a full-strength circle would still claim the area.
+    ctx.globalAlpha = alfaDe(p);
     // A halo sized by nothing but legibility: this is not an uncertainty ellipse and must not
     // be read as one. The real uncertainty is a few metres and would swallow the pin.
     ctx.beginPath(); ctx.arc(x, y, 22, 0, 6.2832);
@@ -746,6 +865,11 @@ function dibujar() {
       ctx.fillStyle = 'rgba(230,233,239,.65)'; ctx.font = '12px system-ui';
       ctx.fillText(p.cls, x + 16, y + 3);
     }
+    if (vistoHace(p)) {
+      ctx.fillStyle = 'rgba(230,233,239,.65)'; ctx.font = 'italic 12px system-ui';
+      ctx.fillText(vistoHace(p), x + 16, y + 18);
+    }
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -753,8 +877,10 @@ function pintarLista(pois) {
   const cont = document.getElementById('lista');
   if (!pois.length) { cont.innerHTML = '<div class="vacio">Nada todavia.</div>'; return; }
   cont.innerHTML = pois.map((p, i) => `
-    <div class="poi ${p.mature ? 'ok' : 'duda'}">
+    <div class="poi ${p.mature ? 'ok' : 'duda'}"
+         style="opacity:${Math.max(alfaDe(p), ALFA_TARJETA_MIN).toFixed(2)}">
       <div class="tit">#${i+1}
+        ${vistoHace(p) ? `<span class="chip viejo">${vistoHace(p)}</span>` : ''}
         <span class="chip ${p.mature ? 'ok' : 'duda'}">${p.mature ? 'CONFIRMADO' : 'POR VERIFICAR'}</span>
         ${p.mobile ? '<span class="chip mobile">MOVIL</span>' : ''}
         ${p.cls ? `<span class="chip clase">${p.cls}</span>` : ''}
@@ -830,16 +956,22 @@ function marcar(p, v) {
 }
 
 function pintar() {
+  podarLimpiados(estado.pois);
   const recibidos = estado.pois.filter(p => !ocultas.has(claseDe(p)));
+  const vigentes = recibidos.filter(p => veredictoDe(p) !== 'no');
+  const descartados = recibidos.length - vigentes.length;
+  // The layers hide by age and by "limpiar"; a "no es" is a verdict, not staleness, and the
+  // history does not bring it back.
+  const tapados = vigentes.filter(ocultoPorCapas).length;
   // What CLIP doubts is shown last, never hidden. The station already sends them in that order;
   // sorting here too keeps the page honest with a station that does not. Array sort is stable.
-  visibles = recibidos.filter(p => veredictoDe(p) !== 'no')
+  visibles = vigentes.filter(p => verHistorial || !ocultoPorCapas(p))
     .sort((a, b) => !!a.clip_no_persona - !!b.clip_no_persona);
-  const descartados = recibidos.length - visibles.length;
   pintarFiltro(estado.pois);
   document.getElementById('cuenta').textContent = visibles.length + ' POI'
     + (visibles.length === estado.pois.length ? '' : ` de ${estado.pois.length}`)
-    + (descartados ? ` \u00b7 ${descartados} descartados` : '');
+    + (descartados ? ` \u00b7 ${descartados} descartados` : '')
+    + (tapados ? ` \u00b7 ${tapados} ${verHistorial ? 'en historial' : 'ocultos'}` : '');
   ajustarVista(visibles);
   pintarLista(visibles);
   dibujar();
@@ -962,6 +1094,9 @@ lienzo.addEventListener('wheel', ev => {
   // pintar() is the one that reframes; dibujar() would redraw the old window.
   if (estado) pintar(); else dibujar();
 }, {passive: false});
+
+document.getElementById('btn-limpiar').onclick = limpiar;
+document.getElementById('btn-historial').onclick = alternarHistorial;
 
 document.getElementById('btn-fondo').onclick = () => {
   verFondo = !verFondo;

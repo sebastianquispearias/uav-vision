@@ -121,6 +121,16 @@ def fundir(por_dron):
                 ya['y'] = round((ya['y'] * na + poi['y'] * nb) / (na + nb), 2)
                 ya['n_obs'] = na + nb
                 ya['mature'] = bool(ya.get('mature') or poi.get('mature'))
+                # A target is as fresh as the drone that saw it last. Keeping the first drone's
+                # age would fade out, on the station's map, a target another drone has in view.
+                # The sighting instants are compared on the station's clock (report time minus
+                # age); a drone that sends no age leaves the fused pin without one, which the
+                # page reads as "cannot be aged" rather than as old.
+                ea, eb = ya.get('age_s'), poi.get('age_s')
+                if ea is None or eb is None:
+                    ya['age_s'] = None
+                elif (poi.get('t') or 0.0) - eb > (ya.get('t') or 0.0) - ea:
+                    ya['age_s'], ya['t'] = eb, poi.get('t', ya.get('t'))
                 ya['drones'].append(str(dron))
                 ya['dron'] = '+'.join(ya['drones'])
                 break

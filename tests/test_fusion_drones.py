@@ -97,6 +97,25 @@ try:
     e = pedir('/estado')
     assert len(e['pois']) == 2, 'la estacion deshizo lo que decidio el dron: %r' % e['pois']
     print('  dos POI del mismo dron, identicos -> se respetan los 2')
+
+    # 6. The age of the last sighting reaches the page, and a fused pin is as fresh as the
+    # drone that saw it last: drone 1 lost the person 40 s ago, drone 2 is looking at it now.
+    # Keeping the first drone's age would fade out a target that is in view.
+    viejo = dict(poi(0.0, 6.0, 'person', vector(1), n=200), age_s=40.0)
+    fresco = dict(poi(1.0, 6.4, 'person', vector(1, ruido=0.05), n=50), age_s=0.5)
+    reportar(1, [viejo])
+    reportar(2, [fresco])
+    e = pedir('/estado')
+    assert len(e['pois']) == 1, e['pois']
+    p = e['pois'][0]
+    print('  dron 1 lo vio hace 40 s, dron 2 hace 0.5 s -> age_s del pin fundido: %s' % p.get('age_s'))
+    assert p.get('age_s') is not None, 'la estacion se come age_s'
+    assert p['age_s'] < 2.0, 'el pin fundido tomo la edad del dron que lo perdio: %s' % p['age_s']
+    reportar(2, [dict(fresco, age_s=0.5)])
+    reportar(1, [viejo])
+    e = pedir('/estado')
+    print('  mismo caso, reportes en el otro orden -> age_s: %s' % e['pois'][0].get('age_s'))
+    assert e['pois'][0]['age_s'] < 2.0, e['pois'][0]['age_s']
     print('test_fusion_drones OK')
 finally:
     est.terminate()
