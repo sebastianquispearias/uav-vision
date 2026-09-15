@@ -720,7 +720,11 @@ class IncrementalIdentity:
 
         Args:
             now: the time the report is for, on the observation clock. A moving candidate is
-                given where it is then, not where it was last seen; see _en.
+                given where it is then, not where it was last seen; see _en. In "looks" mode each
+                candidate also carries age_s, the seconds since its last sighting: a candidate is never
+                forgotten, so a target lost a minute ago is still reported, and measured in an escort
+                simulation a drone that could not tell old news from a fresh sighting chased points
+                67-97 m away from the target.
             with_tracks: also return, under "tracks", the ids of the tracks merged into each
                 candidate. Off by default because the candidates are what the drone reports
                 over the radio, and the list is only needed to score identity against ground
@@ -814,5 +818,9 @@ class IncrementalIdentity:
             # mode, so the validated chain's report is unchanged byte for byte.
             **({"looks": len(c["bins"]), "radius_m": round(self._radio_ahora(c, now), 2)}
                if self.maturity == "looks" else {}),
+            # Seconds since the candidate was last seen. The position of a lost target keeps being reported, and
+            # without this a consumer cannot tell a fresh sighting from old news.
+            **({"age_s": round(float(now) - float(c["t1"]), 2)}
+               if self.maturity == "looks" and now is not None and c.get("t1") is not None else {}),
             **({"tracks": sorted(c["tids"])} if with_tracks else {}),
         } for c in out]

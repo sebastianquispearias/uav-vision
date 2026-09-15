@@ -429,4 +429,27 @@ assert len(quieto_cortos) == 1 and not quieto_cortos[0]["mobile"], "una persona 
 assert camina[0]["mobile"], "el contraste: quien camina de verdad sigue siendo movil"
 
 print()
+print("=" * 64)
+print("14. EDAD: el reporte dice hace cuanto se vio el candidato por ultima vez")
+print("=" * 64)
+# Measured in the escort simulation: a lost candidate keeps being reported at the same point every two seconds, and
+# nothing in the report tells a consumer that it is old news -- the escorting drone chased points 67-97 m away. The
+# same candidate, reported 0.5 s and 20 s after its last sighting, must say so; span mode keeps its report unchanged.
+ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
+e = emb_de(97)
+for k in range(50):                                              # seen from t=0 to t=9.8 s
+    ident.observe(k, 500, np.array([1.0, 1.0]) + RNG.normal(0, 0.5, size=2), 0.7, e + 0.03 * RNG.normal(size=512), t=0.2 * k)
+reciente = ident.candidates(preliminary=True, now=10.3)[0]
+viejo = ident.candidates(preliminary=True, now=29.8)[0]
+sin_reloj = ident.candidates(preliminary=True)[0]
+span = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity="span")
+for k in range(50):
+    span.observe(k, 500, np.array([1.0, 1.0]), 0.7, e, t=0.2 * k)
+print(f"  0.5 s despues: age_s={reciente.get('age_s')} | 20 s despues: age_s={viejo.get('age_s')} | "
+      f"sin 'now': {'age_s' in sin_reloj} | modo span: {'age_s' in span.candidates(preliminary=True, now=29.8)[0]}")
+assert abs(reciente["age_s"] - 0.5) < 0.01 and abs(viejo["age_s"] - 20.0) < 0.01, "la edad es now menos el ultimo avistamiento"
+assert "age_s" not in sin_reloj, "sin el instante del reporte no hay edad que dar"
+assert "age_s" not in span.candidates(preliminary=True, now=29.8)[0], "el modo span no cambia su reporte"
+
+print()
 print("TODO OK")
