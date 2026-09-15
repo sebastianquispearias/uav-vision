@@ -19,7 +19,7 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 HERRAMIENTA = os.path.join(AQUI, '..', 'scripts', 'etiquetar_grupos.py')
 P = 8394
 sys.path.insert(0, os.path.join(AQUI, '..', 'scripts'))
-from etiquetar_grupos import LADO
+from etiquetar_grupos import LADO, REVISION
 BASE = 'http://127.0.0.1:%d' % P
 
 
@@ -170,6 +170,113 @@ try:
     print('  frame con contexto   : %d px de caja propia, %d px de contexto' % (n_fr_g, n_fr_c))
     assert 'grueso' in pedir('/', crudo=True).decode('utf-8'), 'la ayuda tiene que explicar grueso / fino'
     print('  ayuda                : explica grueso = esta caja, fino = las del vuelo')
+finally:
+    proc.terminate(); proc.wait(timeout=5)
+
+
+def rechaza(ruta, cuerpo, que):
+    try:
+        pedir(ruta, cuerpo)
+    except urllib.error.HTTPError as err:
+        assert err.code == 400, '%s: codigo %d' % (que, err.code)
+        return
+    raise AssertionError('%s tenia que dar 400' % que)
+
+
+# Frame review, the unit a detector trains on. Every CSV box starts at x 50+i, 40 px wide, so the boxes
+# of one frame overlap: once two of them are persona they must be flagged as a possible double. Frame 9
+# has no candidate: it must be listed only because --lista-frames names it, since that is where a
+# person every detector missed would have to be drawn.
+cv2.imwrite(os.path.join(dirt, 'frame_0009.jpg'), np.full((300, 400, 3), 128, np.uint8))
+open(os.path.join(dirt, 'lista.txt'), 'w').write('1\n2\n9\n')
+grupos_antes = json.load(open(os.path.join(dirt, 'etiquetas.json'), encoding='utf-8'))['etiquetas']
+extra = ('--lista-frames', os.path.join(dirt, 'lista.txt'), '--nombre', 'vuelo_prueba')
+proc = arrancar(dirt, grupos=2, extra=extra)
+try:
+    e = pedir('/frames/estado')
+    assert [x['f'] for x in e['frames']] == [1, 2, 3, 4, 9] and e['nombre'] == 'vuelo_prueba', e
+    assert [x['doble'] for x in e['frames']] == [True, True, True, True, False], e['frames']
+    print('  estado por frame     : doble en los 4 frames con 5 personas encimadas, no en el 9 vacio')
+    print('  lista de frames      : %s (el 9 sin candidatas, por --lista-frames), nombre %s'
+          % ([x['f'] for x in e['frames']], e['nombre']))
+
+    d = pedir('/frames/1')
+    per = [b for b in d['cajas'] if b['etiqueta'] == 'persona']
+    assert len(d['cajas']) == 10 and len(per) == 5, d['cajas']
+    dobles = sum(b['doble'] for b in d['cajas'])
+    assert dobles == 5 and not any(b['doble'] for b in d['cajas'] if b['etiqueta'] != 'persona'), d['cajas']
+    for b in per[1:]:
+        pedir('/frames/caja', {'i': b['i'], 'v': 'duplicado'})
+    d = pedir('/frames/1')
+    assert sum(b['doble'] for b in d['cajas']) == 0 and sum(b['corregida'] for b in d['cajas']) == 4
+    print('  doble                : 5 personas que se pisan -> 5 marcadas; 4 pasadas a duplicado -> 0')
+
+    k0 = pedir('/frames/nueva', {'f': 9, 'caja': [100, 100, 140, 180]})['k']
+    assert not pedir('/frames/9')['nuevas'][0]['doble']
+    pedir('/frames/nueva', {'f': 9, 'caja': [104, 104, 140, 180]})
+    assert all(b['doble'] for b in pedir('/frames/9')['nuevas'])
+    pedir('/frames/borrar', {'f': 9, 'k': 1})
+    d9 = pedir('/frames/9')
+    assert len(d9['nuevas']) == 1 and not d9['nuevas'][0]['doble'] and k0 == 0
+    print('  dibujar              : 1 caja sola no es doble; 2 encimadas si; borrar la 2a -> vuelve a 1')
+
+    rechaza('/frames/nueva', {'f': 9, 'caja': [10, 10, 12, 30]}, 'una caja de 2 px')
+    rechaza('/frames/nueva', {'f': 7, 'caja': [10, 10, 60, 90]}, 'un frame fuera de la lista')
+    rechaza('/frames/caja', {'i': 0, 'v': 'quizas'}, 'una etiqueta inventada')
+    rechaza('/frames/borrar', {'f': 9, 'k': 5}, 'borrar una caja que no existe')
+    print('  invalidos            : caja de 2 px, frame 7, "quizas", borrar k=5 -> 400')
+
+    pedir('/frames/caja', {'i': per[0]['i'], 'v': 'ignorar'})
+    ign = [b for b in pedir('/frames/1')['cajas'] if b['i'] == per[0]['i']][0]
+    assert ign['etiqueta'] == 'ignorar' and 'ignorar' in REVISION and not ign['doble'], ign
+    print('  ignorar              : la caja queda "ignorar" y deja de contar como persona para los dobles')
+finally:
+    proc.terminate(); proc.wait(timeout=5)
+
+# A frame with a box nobody labelled cannot be reviewed: rows 40-41 are new boxes in frame 2, beyond the
+# 40 the groups labelled, so they have no label until the review gives them one.
+with open(os.path.join(dirt, 'cajas.csv'), 'a', newline='') as f:
+    w = csv.writer(f)
+    w.writerow([2, 0.5, 300, 60, 340, 140]); w.writerow([2, 0.5, 300, 160, 340, 240])
+np.save(os.path.join(dirt, 'embs.npy'), np.vstack([emb, rng.normal(size=(2, 512))]))
+proc = arrancar(dirt, grupos=2, extra=extra)
+try:
+    d = pedir('/frames/1')
+    assert pedir('/frames/estado')['revisados'] == 0
+    assert sum(b['corregida'] for b in d['cajas']) == 5 and len(pedir('/frames/9')['nuevas']) == 1
+    print('  reabrir              : 5 correcciones y 1 caja dibujada siguen ahi')
+    rechaza('/frames/revisado', {'f': 2, 'v': True}, 'revisar un frame con 2 cajas sin etiquetar')
+    sin = [b['i'] for b in pedir('/frames/2')['cajas'] if b['etiqueta'] is None]
+    assert len(sin) == 2, sin
+    for i in sin:
+        pedir('/frames/caja', {'i': i, 'v': 'no'})
+    pedir('/frames/revisado', {'f': 2, 'v': True}); pedir('/frames/revisado', {'f': 9, 'v': True})
+    assert pedir('/frames/estado')['revisados'] == 2
+    print('  revisado             : con 2 sin etiquetar -> 400; etiquetadas -> 2 frames revisados')
+    rev = json.load(open(os.path.join(dirt, 'etiquetas_frames.json'), encoding='utf-8'))
+    assert rev['revisados'] == [2, 9] and rev['nuevas'] == {'9': [[100.0, 100.0, 140.0, 180.0]]}, rev
+    e = {x['f']: x for x in pedir('/frames/estado')['frames']}
+    assert not e[1]['doble'] and e[3]['doble'] and e[9]['personas'] == 1, e
+    # The mosaic's button: frame 3 and 4 have every box labelled and are accepted; frame 7 is not in the
+    # list and comes back with its reason, without stopping the others.
+    lote = pedir('/frames/revisados_lote', {'frames': [3, 7, 4]})
+    assert lote['hechos'] == [3, 4] and [x['f'] for x in lote['rechazados']] == [7], lote
+    assert pedir('/frames/estado')['revisados'] == 4
+    print('  lote del mosaico     : [3, 7, 4] -> hechos [3, 4], rechazado 7; 4 frames revisados')
+    mini = pedir('/miniatura/9', crudo=True)
+    im = cv2.imdecode(np.frombuffer(mini, np.uint8), 1)
+    assert mini[:2] == b'\xff\xd8' and im.shape[1] == 480 and contar(mini, 'contexto') == 0
+    verde = int(((im[..., 1] > 170) & (im[..., 0] < 130) & (im[..., 2] < 130)).sum())
+    assert verde > 50, 'la caja dibujada del frame 9 tiene que verse verde en la miniatura: %d px' % verde
+    assert 'mosaico' in pedir('/mosaico', crudo=True).decode('utf-8')
+    print('  miniatura            : JPEG 480 px de ancho con %d px verdes de la caja dibujada; /mosaico sirve' % verde)
+    grupos_despues = json.load(open(os.path.join(dirt, 'etiquetas.json'), encoding='utf-8'))['etiquetas']
+    assert grupos_despues == grupos_antes, 'la revision no puede reescribir las etiquetas de grupos'
+    print('  archivos             : revision en etiquetas_frames.json; etiquetas.json de grupos intacto')
+    assert pedir('/imagen/9', crudo=True) == open(os.path.join(dirt, 'frame_0009.jpg'), 'rb').read()
+    pagina = pedir('/frames', crudo=True).decode('utf-8')
+    assert 'duplicado' in pagina and 'ignorar' in pagina and 'lupa' in pagina
+    print('  pagina               : /imagen es el archivo tal cual; /frames explica duplicado e ignorar')
 finally:
     proc.terminate(); proc.wait(timeout=5)
     shutil.rmtree(dirt, ignore_errors=True)
