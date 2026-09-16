@@ -87,7 +87,9 @@ for _nombre, _frames in (("26jul", os.path.join(_RAIZ_DATOS, "20260726_195524", 
                          ("01ago_2a", os.path.join(_DATOS, "20260801_184259", "frames")),
                          ("01ago_2b", os.path.join(_DATOS, "20260801_185326", "frames")),
                          # The test flight, converted by scripts/convertir_02ago.py so it can be reviewed too.
-                         ("02ago", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames"))):
+                         ("02ago", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames")),
+                         # The airborne stretch of 14jun: the only material with a second person in it.
+                         ("14jun", os.path.join(_RAIZ_DATOS, "flight_14jun", "20260614_225918", "frames"))):
     VUELOS[_nombre] = (os.path.join(_ENT, "candidatas_%s.csv" % _nombre), os.path.join(_ENT, "candidatas_%s_embs.npy" % _nombre),
                        _frames, os.path.join(_ENT, "etiquetas_detector_%s.json" % _nombre),
                        os.path.join(_ENT, "candidatas_%s_frames.txt" % _nombre))
