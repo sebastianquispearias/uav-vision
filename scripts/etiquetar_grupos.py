@@ -85,7 +85,9 @@ VUELOS = {
 _RAIZ_DATOS = os.path.join("..", "drone-geolocation", "data")
 for _nombre, _frames in (("26jul", os.path.join(_RAIZ_DATOS, "20260726_195524", "frames")),
                          ("01ago_2a", os.path.join(_DATOS, "20260801_184259", "frames")),
-                         ("01ago_2b", os.path.join(_DATOS, "20260801_185326", "frames"))):
+                         ("01ago_2b", os.path.join(_DATOS, "20260801_185326", "frames")),
+                         # The test flight, converted by scripts/convertir_02ago.py so it can be reviewed too.
+                         ("02ago", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames"))):
     VUELOS[_nombre] = (os.path.join(_ENT, "candidatas_%s.csv" % _nombre), os.path.join(_ENT, "candidatas_%s_embs.npy" % _nombre),
                        _frames, os.path.join(_ENT, "etiquetas_detector_%s.json" % _nombre),
                        os.path.join(_ENT, "candidatas_%s_frames.txt" % _nombre))
@@ -193,7 +195,7 @@ class Sesion:
         dentro = lambda f: (desde is None or f >= desde) and (hasta is None or f <= hasta)
         self.lista = sorted({int(f) for f in list(lista_frames or []) + list(self.por_frame) if dentro(int(f))})
         self.ruta_revision = os.path.splitext(salida)[0] + "_frames.json"
-        self.revisados, self.correcciones, self.nuevas, self.repaso = set(), {}, {}, {}
+        self.revisados, self.correcciones, self.nuevas, self.repaso, self.ajustes = set(), {}, {}, {}, {}
         if os.path.exists(self.ruta_revision):
             r = json.load(open(self.ruta_revision, encoding="utf-8"))
             local = {o: j for j, o in enumerate(self.orig)}
@@ -202,6 +204,10 @@ class Sesion:
             # A drawn box is [x1, y1, x2, y2] (a person) or [x1, y1, x2, y2, "ignorar"].
             self.nuevas = {int(f): [[float(x) for x in c[:4]] + list(c[4:5]) for c in v] for f, v in r.get("nuevas", {}).items()}
             self.repaso = {int(f): int(n) for f, n in r.get("repaso", {}).items()}
+            # A box of the CSV whose corners were dragged: the label is of the box, so the box has to be
+            # fixable too, or a detection that covers only the legs stays wrong for ever.
+            self.ajustes = {local[int(i)]: [float(x) for x in c] for i, c in r.get("ajustes", {}).items()
+                            if int(i) in local}
 
     def estado(self):
         out = []
@@ -264,7 +270,20 @@ class Sesion:
         os.replace(tmp, self.salida)
 
     def _caja(self, i):
+        """The box of row i as it stands: the adjusted one if its corners were dragged, else the CSV's."""
+        if i in self.ajustes:
+            return tuple(self.ajustes[i])
         return tuple(float(self.filas[i][c]) for c in ("x1", "y1", "x2", "y2"))
+
+    def ajustar(self, i, caja):
+        """Moves the corners of a box of the CSV; caja = None leaves it as it came, which is what undo needs."""
+        if not 0 <= i < len(self.filas):
+            raise ValueError("caja invalida")
+        if caja is None:
+            self.ajustes.pop(i, None)
+        else:
+            self.ajustes[i] = self._caja_valida(caja)
+        self._guardar_revision()
 
     def final(self, i):
         """The label of box i: the frame review's correction if there is one, else the group's."""
@@ -296,6 +315,7 @@ class Sesion:
             return sum(solape_menor(b, p) >= 0.5 for p in personas) > 1   # the box itself counts once
 
         cajas = [{"i": i, "caja": self._caja(i), "etiqueta": self.final(i), "corregida": i in self.correcciones,
+                  "ajustada": i in self.ajustes,
                   "conf": float(self.filas[i].get("conf") or 0), "fuentes": self.filas[i].get("fuentes") or "",
                   "doble": self.final(i) == "persona" and doble(self._caja(i))} for i in idx]
         nuevas = [{"k": k, "caja": c[:4], "etiqueta": etiqueta_nueva(c),
@@ -377,7 +397,8 @@ class Sesion:
                  "revisados": sorted(self.revisados),
                  "correcciones": {str(self.orig[i]): v for i, v in sorted(self.correcciones.items())},
                  "nuevas": {str(f): v for f, v in sorted(self.nuevas.items())},
-                 "repaso": {str(f): n for f, n in sorted(self.repaso.items())}}
+                 "repaso": {str(f): n for f, n in sorted(self.repaso.items())},
+                 "ajustes": {str(self.orig[i]): c for i, c in sorted(self.ajustes.items())}}
         tmp = self.ruta_revision + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(datos, fh, indent=1)
@@ -717,6 +738,7 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
   <button onclick="ir(pos - 1)"><span class="k">&larr;</span></button>
   <button onclick="ir(pos + 1)"><span class="k">&rarr;</span></button>
   <button onclick="irSinRevisar()">sin revisar <span class="k">U</span></button>
+  <button onclick="reproducir()" id="bplay">reproducir <span class="k">V</span></button>
   <label><input type="checkbox" id="ocultarNo" onchange="pintar()"> ocultar las "no"</label>
   <p>ir al frame <input id="saltar" size="6" placeholder="numero"
        onkeydown="if (event.key === 'Enter') saltar(this.value)"> <span class="k">G</span></p>
@@ -728,7 +750,8 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     Con el raton encima: <span class="k">P</span> persona <span class="k">N</span> no <span class="k">D</span> duplicado
     <span class="k">I</span> ignorar.<br>
     <b>Arrastrar</b>: dibuja la caja de una persona que ninguna caja cubre.<br>
-    <b>Arrastrar una esquina</b> de una caja dibujada: la agranda o la achica.<br>
+    <b>Arrastrar una esquina</b> de cualquier caja (dibujada o del detector): la corrige, por ejemplo cuando
+    cubre solo las piernas. <span class="k">V</span> reproduce los frames como video y vuelve a parar.<br>
     <b>Clic derecho</b> en una caja dibujada: la borra. Con el raton encima de una dibujada,
     <span class="k">I</span> la pasa a ignorar y <span class="k">P</span> la devuelve a persona.
     <span class="k">R</span> desmarca revisado. <span class="k">Z</span> deshace lo ultimo.</p>
@@ -793,9 +816,17 @@ function dibujar(g, ox, oy, s, w, h) {
   datos.cajas.forEach(b => {
     const e = b.etiqueta;
     if (ocultarNo() && e === 'no') return;
-    if (b.doble) return rect(b.caja, '#fb923c', 3, null, '¿doble?');
-    rect(b.caja, e ? COLOR[e] : '#facc15', e === 'persona' || !e ? 2 : 1,
-         e && e !== 'persona' ? [4, 3] : null, {duplicado: 'dup', ignorar: 'ign'}[e] || null);
+    if (b.doble) rect(b.caja, '#fb923c', 3, null, '¿doble?');
+    else rect(b.caja, e ? COLOR[e] : '#facc15', e === 'persona' || !e ? 2 : 1,
+              e && e !== 'persona' ? [4, 3] : null,
+              (b.ajustada ? 'ajustada ' : '') + ({duplicado: 'dup', ignorar: 'ign'}[e] || '') || null);
+    if (e === 'persona' || !e) {                    // handles: a wrong box is dragged, not redrawn
+      const [x1, y1, x2, y2] = b.caja;
+      [[x1, y1], [x2, y1], [x1, y2], [x2, y2]].forEach(([x, y]) => {
+        g.fillStyle = e ? COLOR[e] : '#facc15';
+        g.fillRect((x - ox) * s - 2, (y - oy) * s - 2, 4, 4);
+      });
+    }
   });
   datos.nuevas.forEach(b => {
     const ign = b.etiqueta === 'ignorar';
@@ -882,14 +913,26 @@ function irSinRevisar() {
   for (let k = 1; k <= lista.length; k++) { const q = (pos + k) % lista.length; if (!lista[q].revisado) return ir(q); }
   aviso('todos los frames estan revisados');
 }
+// Playing the frames here, and not in another page, is what lets a box be fixed the moment it is seen wrong.
+let cine = null;
+function reproducir() {
+  const b = document.getElementById('bplay');
+  if (cine) { clearInterval(cine); cine = null; b.innerHTML = 'reproducir <span class="k">V</span>'; return; }
+  b.innerHTML = 'pausa <span class="k">V</span>';
+  cine = setInterval(() => { if (pos + 1 >= lista.length) return reproducir(); ir(pos + 1); }, 400);
+}
 
 function esquinaDe(p) {
   const cerca = 12 * img.naturalWidth / cv.width;   // 12 screen px, in pixels of the frame
-  for (const b of datos.nuevas) {
+  // Any box can be resized by a corner, drawn or proposed: a detection that covers only the legs is
+  // fixed by dragging it, not by deleting and drawing it again.
+  const todas = datos.nuevas.map(b => ({tipo: 'nueva', k: b.k, caja: b.caja}))
+    .concat(datos.cajas.filter(b => !(ocultarNo() && b.etiqueta === 'no')).map(b => ({tipo: 'caja', i: b.i, caja: b.caja})));
+  for (const b of todas) {
     const [x1, y1, x2, y2] = b.caja;
     for (const [x, y, fx, fy] of [[x1, y1, x2, y2], [x2, y1, x1, y2], [x1, y2, x2, y1], [x2, y2, x1, y1]])
       if (Math.abs(p.x - x) < cerca && Math.abs(p.y - y) < cerca)
-        return {k: b.k, caja: b.caja, fija: {x: fx, y: fy}};
+        return Object.assign({fija: {x: fx, y: fy}}, b);
   }
   return null;
 }
@@ -911,10 +954,17 @@ window.addEventListener('mouseup', async ev => {
   if (a.arrastrando) {
     const f = datos.f;
     if (a.redim) {
-      const {k, caja, fija} = a.redim;
+      const {tipo, k, i, caja, fija} = a.redim;
+      const nueva = [Math.min(fija.x, p.x), Math.min(fija.y, p.y), Math.max(fija.x, p.x), Math.max(fija.y, p.y)];
       try {
-        await pedir('/frames/mover', {f, k, caja: [Math.min(fija.x, p.x), Math.min(fija.y, p.y), Math.max(fija.x, p.x), Math.max(fija.y, p.y)]});
-        deshacer.push(() => pedir('/frames/mover', {f, k, caja}));
+        if (tipo === 'nueva') {
+          await pedir('/frames/mover', {f, k, caja: nueva});
+          deshacer.push(() => pedir('/frames/mover', {f, k, caja}));
+        } else {
+          const antes = datos.cajas.find(b => b.i === i);
+          await pedir('/frames/ajustar', {i, caja: nueva});
+          deshacer.push(() => pedir('/frames/ajustar', {i, caja: antes.ajustada ? caja : null}));
+        }
       } catch (e) {}
       return recargar();
     }
@@ -945,6 +995,7 @@ document.addEventListener('keydown', async ev => {
   else if (k === 'arrowleft') ir(pos - 1);
   else if (k === 'u') irSinRevisar();
   else if (k === 'z') deshacerUltimo();
+  else if (k === 'v') reproducir();
   else if (k === 'g') { ev.preventDefault(); document.getElementById('saltar').focus(); }
   else if (k === 'r') { await pedir('/frames/revisado', {f: datos.f, v: false}); lista[pos].revisado = false; recargar(); }
   else if (raton && TECLA[k]) {
@@ -1330,6 +1381,9 @@ def servir(sesion, puerto):
                         r = {"status": "ok"}
                     elif self.path == "/frames/nueva":
                         r = {"k": sesion.nueva(int(d["f"]), d["caja"])}
+                    elif self.path == "/frames/ajustar":
+                        sesion.ajustar(int(d["i"]), d.get("caja"))
+                        r = {"status": "ok"}
                     elif self.path == "/frames/nueva_etiqueta":
                         sesion.nueva_etiqueta(int(d["f"]), int(d["k"]), d.get("v"))
                         r = {"status": "ok"}

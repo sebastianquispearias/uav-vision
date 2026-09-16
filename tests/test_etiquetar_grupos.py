@@ -311,6 +311,20 @@ try:
     pedir('/repaso', {'f': f, 'n': tenia})
     e = pedir('/repaso/estado')
     assert e['contestadas'] == 1 and e['acuerdo'] == 1 and e['pendiente'] is None, e
+    # A box of the CSV can be resized too, which is how a detection that covers only the legs is fixed.
+    # The label stays where it was; what moves is the box, and the checks see the new one.
+    fila = pedir('/frames/1')['cajas'][0]
+    pedir('/frames/ajustar', {'i': fila['i'], 'caja': [10, 20, 60, 140]})
+    despues = [b for b in pedir('/frames/1')['cajas'] if b['i'] == fila['i']][0]
+    assert despues['caja'] == [10.0, 20.0, 60.0, 140.0] and despues['ajustada'] and despues['etiqueta'] == fila['etiqueta'], despues
+    guardado = json.load(open(os.path.join(dirt, 'etiquetas_frames.json'), encoding='utf-8'))['ajustes']
+    assert list(guardado.values()) == [[10.0, 20.0, 60.0, 140.0]], guardado
+    rechaza('/frames/ajustar', {'i': fila['i'], 'caja': [10, 20, 12, 22]}, 'ajustar a 2 px')
+    pedir('/frames/ajustar', {'i': fila['i'], 'caja': None})
+    vuelta = [b for b in pedir('/frames/1')['cajas'] if b['i'] == fila['i']][0]
+    assert vuelta['caja'] == fila['caja'] and not vuelta['ajustada'], vuelta
+    print('  ajustar una caja     : %s -> [10, 20, 60, 140] y con caja nula vuelve a la del CSV' % (fila['caja'],))
+
     # A drawn box is a person unless it is marked to be ignored, and then it stops counting as one.
     pedir('/frames/nueva_etiqueta', {'f': 9, 'k': 0, 'v': 'ignorar'})
     d9 = pedir('/frames/9')
