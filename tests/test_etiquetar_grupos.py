@@ -328,6 +328,19 @@ try:
     for j, v in r['antes']:
         pedir('/frames/caja', {'i': j, 'v': v})
 
+    # A resolves every pair of the frame at once. Frame 4 has five person boxes on top of each other, so
+    # one call has to leave exactly one person standing, and Z has to put the five back.
+    antes4 = {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']}
+    r4 = pedir('/frames/resolver_todo', {'f': 4, 'propagar': False})
+    tras4 = {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']}
+    assert r4['pares'] == 4 and sum(v == 'persona' for v in tras4.values()) == 1, (r4, tras4)
+    print('  resolver todo (A)    : %d pares resueltos en un frame -> queda 1 persona de %d'
+          % (r4['pares'], sum(v == 'persona' for v in antes4.values())))
+    for j, v in r4['antes']:
+        pedir('/frames/caja', {'i': j, 'v': v})
+    assert {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']} == antes4, 'Z tenia que devolver el frame'
+    print('  deshacer el lote     : el frame 4 vuelve a sus %d personas' % sum(v == 'persona' for v in antes4.values()))
+
     i0 = per[0]['i']
     pedir('/frames/caja', {'i': i0, 'v': 'duplicado'})
     prop = pedir('/frames/propagar', {'i': i0})

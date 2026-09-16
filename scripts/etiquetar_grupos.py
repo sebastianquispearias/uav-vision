@@ -417,6 +417,33 @@ class Sesion:
         return {"duplicado": self.orig[chica], "persona": self.orig[grande], "antes": antes,
                 "locales": [chica, grande]}
 
+    def resolver_frame(self, f, propagar=True):
+        """Settles every pair of person boxes on the same person in frame f, and by default carries each
+        decision to the neighbouring frames, where the same pair repeats almost identical.
+
+        Reviewing flight 3 means 139 frames with a doubled box; one at a time that is 139 decisions, and
+        the decision is always the same one.
+        """
+        antes, pares, propagadas = [], 0, 0
+        while True:
+            personas = [i for i in self.por_frame.get(f, []) if self.final(i) == "persona"]
+            par = next(((i, j) for i in personas for j in personas
+                        if i != j and solape_menor(self._caja(i), self._caja(j)) >= 0.5), None)
+            if par is None:
+                break
+            r = self.resolver_doble(par[0])
+            antes += r["antes"]
+            pares += 1
+            if propagar:
+                chica = r["locales"][0]
+                try:
+                    p = self.propagar(chica)
+                    antes += p["antes"]
+                    propagadas += p["cambiadas"]
+                except ValueError:
+                    pass
+        return {"pares": pares, "propagadas": propagadas, "antes": antes}
+
     def nueva_etiqueta(self, f, k, v):
         """A drawn box is a person by default; "ignorar" is for what cannot be decided (a lone foot,
         a blur), so the export blanks it instead of teaching it as background."""
@@ -796,6 +823,8 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
   <button onclick="irSinRevisar()">sin revisar <span class="k">U</span></button>
   <button onclick="reproducir()" id="bplay">reproducir <span class="k">V</span></button>
   <label><input type="checkbox" id="ocultarNo" onchange="pintar()"> ocultar las "no"</label>
+  <label><input type="checkbox" id="soloPersonas" onchange="pintar()"> solo personas</label>
+  <label><input type="checkbox" id="propagarAuto" checked> al resolver, copiar a los vecinos</label>
   <p>ir al frame <input id="saltar" size="6" placeholder="numero"
        onkeydown="if (event.key === 'Enter') saltar(this.value)"> <span class="k">G</span></p>
   <p class="ley"><span style="background:#22c55e"></span>persona<span style="background:#ef4444"></span>no
@@ -814,6 +843,7 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     <span class="k">R</span> desmarca revisado. <span class="k">Z</span> deshace lo ultimo.</p>
   <p><b>Para ir mas rapido</b>, con el raton sobre una caja:<br>
     <span class="k">X</span> resuelve las dos encimadas: la chica pasa a duplicado y la grande queda persona.<br>
+    <span class="k">A</span> resuelve TODAS las encimadas del frame de una vez (y las copia a los vecinos si la casilla esta marcada).<br>
     <span class="k">C</span> copia la etiqueta de esa caja a las cajas iguales de los frames vecinos.<br>
     <span class="k">F</span> salta al proximo frame con cajas encimadas o sin etiquetar. Todo se deshace con <span class="k">Z</span>.</p>
   <p>Un frame esta <b>revisado</b> cuando cada persona tiene UNA caja verde y nada mas es verde.
@@ -839,6 +869,9 @@ async function pedir(ruta, cuerpo) {
 }
 function aviso(t) { document.getElementById('aviso').textContent = t || ''; }
 const ocultarNo = () => document.getElementById('ocultarNo').checked;
+const soloPersonas = () => document.getElementById('soloPersonas').checked;
+// What is drawn and what can be clicked: with "solo personas" everything that is not a person gets out of the way.
+const visible = b => !(soloPersonas() && b.etiqueta && b.etiqueta !== 'persona') && !(ocultarNo() && b.etiqueta === 'no');
 
 async function iniciar() {
   const e = await pedir('/frames/estado');
@@ -876,7 +909,7 @@ function dibujar(g, ox, oy, s, w, h) {
   datos.contexto.forEach(b => rect(b, '#ff00ff', 1, [2, 3], b[4]));
   datos.cajas.forEach(b => {
     const e = b.etiqueta;
-    if (ocultarNo() && e === 'no') return;
+    if (!visible(b)) return;
     if (b.doble) rect(b.caja, '#fb923c', 3, null, '¿doble?');
     else rect(b.caja, e ? COLOR[e] : '#facc15', e === 'persona' || !e ? 2 : 1,
               e && e !== 'persona' ? [4, 3] : null,
@@ -942,7 +975,7 @@ function bajo(p) {
   let mejor = null;   // the smallest box under the cursor: a person inside a larger box stays clickable
   datos.nuevas.forEach(b => { if (dentro(b.caja) && (!mejor || area(b.caja) < area(mejor.caja))) mejor = {tipo: 'nueva', k: b.k, caja: b.caja}; });
   datos.cajas.forEach(b => {
-    if (ocultarNo() && b.etiqueta === 'no') return;
+    if (!visible(b)) return;
     if (dentro(b.caja) && (!mejor || area(b.caja) < area(mejor.caja))) mejor = {tipo: 'caja', i: b.i, caja: b.caja, etiqueta: b.etiqueta};
   });
   return mejor;
@@ -977,9 +1010,10 @@ function irSinRevisar() {
 async function irAlProblema() {
   const e = await pedir('/frames/estado');     // asked again: what is a problem changes as you fix them
   lista = lista.map((x, k) => e.frames[k] || x);
+  const quedan = lista.filter(x => x.doble || x.sin).length;
   for (let k = 1; k <= lista.length; k++) {
     const q = (pos + k) % lista.length;
-    if (lista[q].doble || lista[q].sin) return ir(q);
+    if (lista[q].doble || lista[q].sin) { await ir(q); return aviso('quedan ' + quedan + ' frames con algo que resolver'); }
   }
   aviso('no quedan frames con cajas encimadas ni sin etiquetar');
 }
@@ -996,8 +1030,11 @@ function esquinaDe(p) {
   const cerca = 12 * img.naturalWidth / cv.width;   // 12 screen px, in pixels of the frame
   // Any box can be resized by a corner, drawn or proposed: a detection that covers only the legs is
   // fixed by dragging it, not by deleting and drawing it again.
-  const todas = datos.nuevas.map(b => ({tipo: 'nueva', k: b.k, caja: b.caja}))
-    .concat(datos.cajas.filter(b => !(ocultarNo() && b.etiqueta === 'no')).map(b => ({tipo: 'caja', i: b.i, caja: b.caja})));
+  // Only the boxes that count as a person can be grabbed: a duplicate lying on top of one used to steal
+  // the corner and get moved instead of the box being fixed.
+  const todas = datos.nuevas.filter(b => b.etiqueta !== 'ignorar').map(b => ({tipo: 'nueva', k: b.k, caja: b.caja}))
+    .concat(datos.cajas.filter(b => visible(b) && (b.etiqueta === 'persona' || !b.etiqueta))
+                       .map(b => ({tipo: 'caja', i: b.i, caja: b.caja})));
   for (const b of todas) {
     const [x1, y1, x2, y2] = b.caja;
     for (const [x, y, fx, fy] of [[x1, y1, x2, y2], [x2, y1, x1, y2], [x1, y2, x2, y1], [x2, y2, x1, y1]])
@@ -1075,6 +1112,17 @@ document.addEventListener('keydown', async ev => {
   else if (k === 'z') deshacerUltimo();
   else if (k === 'v') reproducir();
   else if (k === 'f') irAlProblema();
+  else if (k === 'a') {                  // settle every doubled box of the frame at once
+    try {
+      const r = await pedir('/frames/resolver_todo', {f: datos.f, propagar: document.getElementById('propagarAuto').checked});
+      if (!r.pares) aviso('en este frame no hay cajas de persona encimadas');
+      else {
+        deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
+        aviso(r.pares + ' pares resueltos aqui y ' + r.propagadas + ' cajas iguales de los frames vecinos');
+      }
+    } catch (e) {}
+    recargar();
+  }
   else if (k === 'x' && raton) {          // settle a pair on the same person in one key
     const b = bajo(raton);
     if (!b || b.tipo !== 'caja') return aviso('X: poné el raton sobre una de las dos cajas encimadas');
@@ -1484,6 +1532,8 @@ def servir(sesion, puerto):
                         r = sesion.propagar(int(d["i"]))
                     elif self.path == "/frames/resolver":
                         r = sesion.resolver_doble(int(d["i"]))
+                    elif self.path == "/frames/resolver_todo":
+                        r = sesion.resolver_frame(int(d["f"]), bool(d.get("propagar", True)))
                     elif self.path == "/frames/ajustar":
                         sesion.ajustar(int(d["i"]), d.get("caja"))
                         r = {"status": "ok"}
