@@ -311,6 +311,40 @@ try:
     pedir('/repaso', {'f': f, 'n': tenia})
     e = pedir('/repaso/estado')
     assert e['contestadas'] == 1 and e['acuerdo'] == 1 and e['pendiente'] is None, e
+    # Two person boxes on the same person: X settles them, the smaller one becomes the duplicate. And C
+    # copies a decision to the same box in the neighbouring frames, which is where it repeats.
+    d1 = pedir('/frames/3')          # frame 3 is untouched: frame 1 was already cleaned up above
+    per = [b for b in d1['cajas'] if b['etiqueta'] == 'persona']
+    assert len(per) >= 2, per
+    r = pedir('/frames/resolver', {'i': per[0]['i']})
+    tras = {b['i']: b['etiqueta'] for b in pedir('/frames/3')['cajas']}
+    # The synthetic boxes are all 40x80, so which one is "the smaller" is a tie: what has to hold is that
+    # of the two the endpoint touched, one ended as the duplicate and the other stayed a person.
+    assert r['duplicado'] != r['persona'], r
+    assert tras[r['duplicado']] == 'duplicado' and tras[r['persona']] == 'persona', (r, tras)
+    assert sum(v == 'persona' for v in tras.values()) == len(per) - 1, tras
+    print('  resolver (X)         : de %d personas encimadas, la fila %d queda duplicado y la %d persona'
+          % (len(per), r['duplicado'], r['persona']))
+    for j, v in r['antes']:
+        pedir('/frames/caja', {'i': j, 'v': v})
+
+    i0 = per[0]['i']
+    pedir('/frames/caja', {'i': i0, 'v': 'duplicado'})
+    prop = pedir('/frames/propagar', {'i': i0})
+    assert prop['etiqueta'] == 'duplicado' and prop['cambiadas'] >= 1, prop
+    # propagar reaches every neighbouring frame of the list, so the check has to look at all of them, and
+    # at the local rows the endpoint reports, not at the rows of the output file.
+    iguales = {b['i']: b['etiqueta'] for f in (1, 2, 3, 4, 9) for b in pedir('/frames/%d' % f)['cajas']}
+    assert all(iguales[j] == 'duplicado' for j in prop['locales']), (prop, iguales)
+    print('  propagar (C)         : la misma decision se copio a %d cajas iguales de los frames vecinos' % prop['cambiadas'])
+    for j, v in prop['antes']:
+        pedir('/frames/caja', {'i': j, 'v': v})
+    pedir('/frames/caja', {'i': i0, 'v': 'persona'})
+    # Row 40 already carries a label by now, so to check the refusal its label is taken away first.
+    pedir('/frames/caja', {'i': 40, 'v': None})
+    rechaza('/frames/propagar', {'i': 40}, 'propagar una caja sin etiqueta')
+    pedir('/frames/caja', {'i': 40, 'v': 'no'})
+
     # A box of the CSV can be resized too, which is how a detection that covers only the legs is fixed.
     # The label stays where it was; what moves is the box, and the checks see the new one.
     fila = pedir('/frames/1')['cajas'][0]

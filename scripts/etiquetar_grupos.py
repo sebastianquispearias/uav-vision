@@ -139,6 +139,15 @@ def etiqueta_nueva(c):
     return c[4] if len(c) > 4 else "persona"
 
 
+def iou_caja(a, b):
+    """Intersection over union of two boxes: how much two boxes are the same box."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
 def contenida(a, b):
     """Fraction of box a that lies inside box b: 1 when a is entirely inside b."""
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
@@ -360,6 +369,53 @@ class Sesion:
             raise ValueError("no hay caja dibujada %d en el frame %d" % (k, f))
         self.nuevas[f][k] = self._caja_valida(caja) + list(self.nuevas[f][k][4:5])
         self._guardar_revision()
+
+    def propagar(self, i, ventana=12, umbral=0.7):
+        """Gives the label of box i to the boxes that are the same box in the neighbouring frames.
+
+        The camera moves little between two frames, so a wrong box repeats almost identical for a dozen
+        frames: deciding it once and applying it to the ones that overlap by `umbral` is the difference
+        between one click and twenty. Returns what changed, so the page can undo all of it at once.
+        """
+        v = self.final(i)
+        if v is None:
+            raise ValueError("esa caja todavia no tiene etiqueta")
+        b = self._caja(i)
+        f0 = int(self.filas[i]["frame"])
+        if f0 not in self.lista:
+            raise ValueError("frame fuera de la lista")
+        k = self.lista.index(f0)
+        cambiadas = []
+        for f in self.lista[max(0, k - ventana):k + ventana + 1]:
+            if f == f0:
+                continue
+            for j in self.por_frame.get(f, []):
+                if self.final(j) == v or iou_caja(b, self._caja(j)) < umbral:
+                    continue
+                cambiadas.append([j, self.final(j)])
+                self.correcciones[j] = v
+        self._guardar_revision()
+        return {"etiqueta": v, "cambiadas": len(cambiadas),
+                "antes": [[self.orig[j], a] for j, a in cambiadas], "locales": [j for j, _ in cambiadas]}
+
+    def resolver_doble(self, i):
+        """Settles a pair of person boxes on the same person: the bigger one stays, the smaller becomes a
+        duplicate. It is the decision that repeats most while reviewing, and it has one obvious answer."""
+        b = self._caja(i)
+        f = int(self.filas[i]["frame"])
+        area = lambda c: (c[2] - c[0]) * (c[3] - c[1])
+        pareja = [j for j in self.por_frame.get(f, [])
+                  if j != i and self.final(j) == "persona" and solape_menor(b, self._caja(j)) >= 0.5]
+        if self.final(i) != "persona" or not pareja:
+            raise ValueError("esa caja no es una persona encimada con otra")
+        otra = max(pareja, key=lambda j: area(self._caja(j)))
+        chica, grande = (i, otra) if area(b) <= area(self._caja(otra)) else (otra, i)
+        antes = [[self.orig[chica], self.final(chica)], [self.orig[grande], self.final(grande)]]
+        self.correcciones[chica] = "duplicado"
+        self.correcciones[grande] = "persona"
+        self._guardar_revision()
+        return {"duplicado": self.orig[chica], "persona": self.orig[grande], "antes": antes,
+                "locales": [chica, grande]}
 
     def nueva_etiqueta(self, f, k, v):
         """A drawn box is a person by default; "ignorar" is for what cannot be decided (a lone foot,
@@ -752,9 +808,14 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     <b>Arrastrar</b>: dibuja la caja de una persona que ninguna caja cubre.<br>
     <b>Arrastrar una esquina</b> de cualquier caja (dibujada o del detector): la corrige, por ejemplo cuando
     cubre solo las piernas. <span class="k">V</span> reproduce los frames como video y vuelve a parar.<br>
-    <b>Clic derecho</b> en una caja dibujada: la borra. Con el raton encima de una dibujada,
+    <b>Clic derecho</b>: en una caja dibujada la borra; en una del detector la pasa a <b>duplicado</b>
+    (las del detector no se borran, se marcan). Con el raton encima de una dibujada,
     <span class="k">I</span> la pasa a ignorar y <span class="k">P</span> la devuelve a persona.
     <span class="k">R</span> desmarca revisado. <span class="k">Z</span> deshace lo ultimo.</p>
+  <p><b>Para ir mas rapido</b>, con el raton sobre una caja:<br>
+    <span class="k">X</span> resuelve las dos encimadas: la chica pasa a duplicado y la grande queda persona.<br>
+    <span class="k">C</span> copia la etiqueta de esa caja a las cajas iguales de los frames vecinos.<br>
+    <span class="k">F</span> salta al proximo frame con cajas encimadas o sin etiquetar. Todo se deshace con <span class="k">Z</span>.</p>
   <p>Un frame esta <b>revisado</b> cuando cada persona tiene UNA caja verde y nada mas es verde.
     Una caja corrida (piernas, sombra, media persona) de alguien que ya tiene la suya es <b>duplicado</b>.</p>
   <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a>
@@ -913,6 +974,15 @@ function irSinRevisar() {
   for (let k = 1; k <= lista.length; k++) { const q = (pos + k) % lista.length; if (!lista[q].revisado) return ir(q); }
   aviso('todos los frames estan revisados');
 }
+async function irAlProblema() {
+  const e = await pedir('/frames/estado');     // asked again: what is a problem changes as you fix them
+  lista = lista.map((x, k) => e.frames[k] || x);
+  for (let k = 1; k <= lista.length; k++) {
+    const q = (pos + k) % lista.length;
+    if (lista[q].doble || lista[q].sin) return ir(q);
+  }
+  aviso('no quedan frames con cajas encimadas ni sin etiquetar');
+}
 // Playing the frames here, and not in another page, is what lets a box be fixed the moment it is seen wrong.
 let cine = null;
 function reproducir() {
@@ -936,14 +1006,18 @@ function esquinaDe(p) {
   }
   return null;
 }
+const MOVER_MIN = 10;   // screen px before a press counts as a drag: below that it is a click, not a move
 cv.addEventListener('mousedown', ev => {
   if (ev.button !== 0 || !datos) return;
-  const p = punto(ev), e = esquinaDe(p);
-  abajo = {x: p.x, y: p.y, arrastrando: !!e, redim: e};
+  const p = punto(ev);
+  // The corner is only remembered; the drag starts when the mouse actually moves, so a click near an
+  // edge changes the label instead of resizing the box by accident.
+  abajo = {x: p.x, y: p.y, arrastrando: false, redim: esquinaDe(p)};
 });
 cv.addEventListener('mousemove', ev => {
   raton = punto(ev);
-  if (abajo && Math.hypot(raton.x - abajo.x, raton.y - abajo.y) * cv.width / img.naturalWidth > 5) abajo.arrastrando = true;
+  if (abajo && Math.hypot(raton.x - abajo.x, raton.y - abajo.y) * cv.width / img.naturalWidth > MOVER_MIN) abajo.arrastrando = true;
+  if (!abajo) cv.style.cursor = esquinaDe(raton) ? 'nwse-resize' : 'crosshair';   // the cursor says what a drag would do
   if (abajo && abajo.arrastrando) pintar(); else pintarLupa();
 });
 cv.addEventListener('mouseleave', () => { raton = null; pintarLupa(); });
@@ -980,12 +1054,16 @@ window.addEventListener('mouseup', async ev => {
 cv.addEventListener('contextmenu', async ev => {
   ev.preventDefault();
   const b = bajo(punto(ev));
-  if (b && b.tipo === 'nueva') {
+  if (!b) return aviso('clic derecho sobre una caja: la dibujada se borra, la del detector pasa a duplicado');
+  if (b.tipo === 'nueva') {
     const f = datos.f, caja = b.caja;
     await pedir('/frames/borrar', {f, k: b.k});
     deshacer.push(() => pedir('/frames/nueva', {f, caja}));
-    recargar();
+    return recargar();
   }
+  // A box of the CSV cannot be deleted: its row stays. Right-click marks it "duplicado", which is what
+  // takes it out of the truth without pretending the detector never proposed it.
+  poner(b.i, 'duplicado');
 });
 document.addEventListener('keydown', async ev => {
   if (ev.target.tagName === 'INPUT' || !datos) return;
@@ -996,6 +1074,27 @@ document.addEventListener('keydown', async ev => {
   else if (k === 'u') irSinRevisar();
   else if (k === 'z') deshacerUltimo();
   else if (k === 'v') reproducir();
+  else if (k === 'f') irAlProblema();
+  else if (k === 'x' && raton) {          // settle a pair on the same person in one key
+    const b = bajo(raton);
+    if (!b || b.tipo !== 'caja') return aviso('X: poné el raton sobre una de las dos cajas encimadas');
+    try {
+      const r = await pedir('/frames/resolver', {i: b.i});
+      deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
+      aviso('la chica quedo duplicado y la grande persona');
+    } catch (e) {}
+    recargar();
+  }
+  else if (k === 'c' && raton) {          // the same decision, on the same box, in the neighbouring frames
+    const b = bajo(raton);
+    if (!b || b.tipo !== 'caja') return aviso('C: poné el raton sobre la caja que querés propagar');
+    try {
+      const r = await pedir('/frames/propagar', {i: b.i});
+      deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
+      aviso('"' + r.etiqueta + '" aplicado a ' + r.cambiadas + ' cajas iguales de los frames vecinos');
+    } catch (e) {}
+    recargar();
+  }
   else if (k === 'g') { ev.preventDefault(); document.getElementById('saltar').focus(); }
   else if (k === 'r') { await pedir('/frames/revisado', {f: datos.f, v: false}); lista[pos].revisado = false; recargar(); }
   else if (raton && TECLA[k]) {
@@ -1381,6 +1480,10 @@ def servir(sesion, puerto):
                         r = {"status": "ok"}
                     elif self.path == "/frames/nueva":
                         r = {"k": sesion.nueva(int(d["f"]), d["caja"])}
+                    elif self.path == "/frames/propagar":
+                        r = sesion.propagar(int(d["i"]))
+                    elif self.path == "/frames/resolver":
+                        r = sesion.resolver_doble(int(d["i"]))
                     elif self.path == "/frames/ajustar":
                         sesion.ajustar(int(d["i"]), d.get("caja"))
                         r = {"status": "ok"}
