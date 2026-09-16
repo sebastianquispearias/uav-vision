@@ -440,21 +440,76 @@ class Sesion:
         while True:
             personas = [i for i in self.por_frame.get(f, []) if self.final(i) == "persona"]
             par = next(((i, j) for i in personas for j in personas
-                        if i != j and solape_menor(self._caja(i), self._caja(j)) >= 0.5), None)
+                        if i != j and solape_menor(self._caja(i), self._caja(j)) >= 0.5
+                        and tuple(sorted((i, j))) not in self.pares_ok), None)
             if par is None:
                 break
-            r = self.resolver_doble(par[0])
+            r = self.resolver_grupo(par[0])      # the whole pile at once: three boxes are still one person
             antes += r["antes"]
             pares += 1
             if propagar:
-                chica = r["locales"][0]
-                try:
-                    p = self.propagar(chica)
-                    antes += p["antes"]
-                    propagadas += p["cambiadas"]
-                except ValueError:
-                    pass
+                for chica in r["locales"]:
+                    try:
+                        p = self.propagar(chica)
+                        antes += p["antes"]
+                        propagadas += p["cambiadas"]
+                    except ValueError:
+                        pass
         return {"pares": pares, "propagadas": propagadas, "antes": antes}
+
+    def etiquetar_encimadas(self, f=None, umbral=0.5):
+        """Labels the boxes nobody labelled that lie on top of a box already decided.
+
+        A box that covers half of a person already boxed is the same detection proposed twice, so it is a
+        duplicate; one lying on something already ruled out is not a person either. Measured on flight 3,
+        15 of the 30 boxes left without a label were of this kind: deciding them one by one is work that
+        the overlap already answers. The ones that sit alone are left untouched: those need eyes.
+        """
+        frames = [f] if f is not None else list(self.lista)
+        antes, cuenta = [], {"duplicado": 0, "no": 0}
+        for fr in frames:
+            decididas = [(self._caja(j), self.final(j)) for j in self.por_frame.get(fr, []) if self.final(j)]
+            for i in self.por_frame.get(fr, []):
+                if self.final(i) is not None:
+                    continue
+                b = self._caja(i)
+                encima = [(solape_menor(b, c), e) for c, e in decididas if solape_menor(b, c) >= umbral]
+                if not encima:
+                    continue
+                etiqueta = "duplicado" if max(encima)[1] == "persona" else "no"
+                antes.append([self.orig[i], None])
+                self.correcciones[i] = etiqueta
+                cuenta[etiqueta] += 1
+        self._guardar_revision()
+        return {"duplicado": cuenta["duplicado"], "no": cuenta["no"], "antes": antes}
+
+    def resolver_grupo(self, i):
+        """Leaves one person standing in a pile of overlapping person boxes, however many there are.
+
+        With three boxes on one person, settling them in pairs needs two decisions and can leave two
+        standing; the group is what has one answer.
+        """
+        f = int(self.filas[i]["frame"])
+        personas = [j for j in self.por_frame.get(f, []) if self.final(j) == "persona"]
+        area = lambda j: (self._caja(j)[2] - self._caja(j)[0]) * (self._caja(j)[3] - self._caja(j)[1])
+        grupo, pendientes = [i], [i]
+        while pendientes:
+            a = pendientes.pop()
+            for j in personas:
+                if j not in grupo and solape_menor(self._caja(a), self._caja(j)) >= 0.5:
+                    grupo.append(j)
+                    pendientes.append(j)
+        if len(grupo) < 2:
+            raise ValueError("esa caja no esta encimada con otra persona")
+        queda = max(grupo, key=area)
+        antes = [[self.orig[j], self.final(j)] for j in grupo]
+        for j in grupo:
+            if j != queda:
+                self.correcciones[j] = "duplicado"
+        self.correcciones[queda] = "persona"
+        self._guardar_revision()
+        return {"grupo": len(grupo), "persona": self.orig[queda], "antes": antes,
+                "locales": [j for j in grupo if j != queda]}
 
     def dos_personas(self, f):
         """Says that every pair of overlapping person boxes of frame f is two people standing together.
@@ -860,6 +915,7 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
   <button onclick="ir(pos + 1)"><span class="k">&rarr;</span></button>
   <button onclick="irSinRevisar()">sin revisar <span class="k">U</span></button>
   <button onclick="reproducir()" id="bplay">reproducir <span class="k">V</span></button>
+  <button onclick="encimadasTodo()">resolver en TODO el vuelo las sin etiquetar encimadas</button>
   <label><input type="checkbox" id="ocultarNo" onchange="pintar()"> ocultar las "no"</label>
   <label><input type="checkbox" id="soloPersonas" onchange="pintar()"> solo personas</label>
   <label><input type="checkbox" id="propagarAuto" checked> al resolver, copiar a los vecinos</label>
@@ -883,6 +939,12 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     <span class="k">1</span> <b>es la misma persona</b>: la caja chica pasa a duplicado, aqui y en los frames vecinos.<br>
     <span class="k">2</span> <b>son dos personas distintas</b>: las dos quedan y el frame deja de marcarse en naranja.<br>
     Funcionan sin poner el raton encima. <span class="k">A</span> hace lo mismo que <span class="k">1</span>.</p>
+  <p><b>Cuando hay varias cajas encimadas y querés elegir una</b>: <span class="k">Tab</span> pasa de una a la
+    siguiente del monton (queda con borde blanco "elegida") y <span class="k">P</span> <span class="k">N</span>
+    <span class="k">D</span> <span class="k">I</span> actuan sobre esa, sin depender del raton. Al abrir un frame
+    queda elegida sola la primera caja sin etiquetar.<br>
+    <span class="k">3</span> etiqueta las que estan <b>encimadas con una ya decidida</b>: si pisa a una persona es
+    duplicado, si pisa a una "no" es no. El boton de la barra lo hace en todo el vuelo.</p>
   <p><b>Para ir mas rapido</b>, con el raton sobre una caja:<br>
     <span class="k">X</span> resuelve el par de ESA caja (sin raton encima, resuelve todo el frame).<br>
     <span class="k">C</span> copia la etiqueta de esa caja a las cajas iguales de los frames vecinos.<br>
@@ -900,6 +962,7 @@ const COLOR = {persona: '#22c55e', no: '#ef4444', duplicado: '#9ca3af', ignorar:
 const SIGUIENTE = {persona: 'no', no: 'persona', duplicado: 'persona', ignorar: 'persona'};
 const TECLA = {p: 'persona', n: 'no', d: 'duplicado', i: 'ignorar'};
 let lista = [], pos = 0, datos = null, img = new Image(), abajo = null, raton = null, nombre = '', deshacer = [];
+let elegida = null;   // the box the keys act on when Tab was used to pick it out of a pile
 
 async function pedir(ruta, cuerpo) {
   const r = await fetch(ruta, cuerpo === undefined ? {} :
@@ -933,7 +996,10 @@ async function ir(p) {
   const carga = new Promise(r => { img.onload = r; img.onerror = r; });
   img.src = '/imagen/' + f;
   const [d] = await Promise.all([pedir('/frames/' + f), carga]);
-  datos = d; aviso(''); pintar();
+  datos = d; aviso('');
+  const sin = d.cajas.find(b => b.etiqueta === null);      // the first unlabelled box comes picked already
+  elegida = sin ? sin.i : null;
+  pintar();
   if (pos + 1 < lista.length) new Image().src = '/imagen/' + lista[pos + 1].f;   // the next one loads ahead
 }
 async function recargar() { datos = await pedir('/frames/' + datos.f); pintar(); }
@@ -963,6 +1029,10 @@ function dibujar(g, ox, oy, s, w, h) {
       });
     }
   });
+  if (elegida !== null) {                        // the picked box, so the keys are not a guess
+    const b = datos.cajas.find(x => x.i === elegida);
+    if (b) rect(b.caja, '#ffffff', 4, [6, 4], 'elegida');
+  }
   datos.nuevas.forEach(b => {
     const ign = b.etiqueta === 'ignorar';
     rect(b.caja, b.doble ? '#fb923c' : (ign ? '#60a5fa' : '#22c55e'), b.doble ? 3 : 2, ign ? [4, 3] : null, ign ? 'ign' : '+');
@@ -1047,6 +1117,12 @@ function saltar(v) {
 function irSinRevisar() {
   for (let k = 1; k <= lista.length; k++) { const q = (pos + k) % lista.length; if (!lista[q].revisado) return ir(q); }
   aviso('todos los frames estan revisados');
+}
+async function encimadasTodo() {
+  const r = await pedir('/frames/encimadas', {f: null});
+  deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
+  aviso('en todo el vuelo: ' + r.duplicado + ' pasaron a duplicado y ' + r.no + ' a no; las que estaban solas siguen sin etiquetar');
+  recargar();
 }
 // Two overlapping person boxes have two possible answers, and only two: one key for each.
 async function esLaMisma() {
@@ -1176,6 +1252,17 @@ document.addEventListener('keydown', async ev => {
   else if (k === 'f') irAlProblema();
   else if (k === 'a' || k === '1') await esLaMisma();
   else if (k === '2') await sonDos();
+  else if (k === '3') {                   // the boxes the overlap already answers, in one go
+    try {
+      const r = await pedir('/frames/encimadas', {f: datos.f});
+      if (!r.duplicado && !r.no) aviso('en este frame no hay cajas sin etiquetar encimadas con otra');
+      else {
+        deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
+        aviso('resueltas por encima: ' + r.duplicado + ' a duplicado y ' + r.no + ' a no');
+      }
+    } catch (e) {}
+    recargar();
+  }
   else if (k === 'c' && raton) {          // the same decision, on the same box, in the neighbouring frames
     const b = bajo(raton);
     if (!b || b.tipo !== 'caja') return aviso('C: poné el raton sobre la caja que querés propagar');
@@ -1199,6 +1286,19 @@ document.addEventListener('keydown', async ev => {
       recargar();
     } else await esLaMisma();              // no box under the cursor: do the whole frame instead of nothing
   }
+  else if (ev.key === 'Tab') {            // cycle through the boxes piled under the cursor, or all of them
+    ev.preventDefault();
+    const monton = (raton ? datos.cajas.filter(b => visible(b) && raton.x >= b.caja[0] && raton.x <= b.caja[2]
+                                                    && raton.y >= b.caja[1] && raton.y <= b.caja[3])
+                          : datos.cajas.filter(visible));
+    if (!monton.length) return aviso('no hay cajas donde elegir');
+    const k0 = monton.findIndex(b => b.i === elegida);
+    elegida = monton[(k0 + 1) % monton.length].i;
+    const b = monton[(k0 + 1) % monton.length];
+    aviso('elegida la caja ' + b.i + ' (' + (b.etiqueta || 'sin etiquetar') + '), ' + monton.length + ' encimadas: Tab pasa a la siguiente');
+    pintar();
+  }
+  else if (TECLA[k] && elegida !== null && (!raton || !bajo(raton))) poner(elegida, TECLA[k]);
   else if (raton && TECLA[k]) {
     const b = bajo(raton);
     if (b && b.tipo === 'caja') poner(b.i, TECLA[k]);
@@ -1589,6 +1689,8 @@ def servir(sesion, puerto):
                         r = sesion.resolver_doble(int(d["i"]))
                     elif self.path == "/frames/resolver_todo":
                         r = sesion.resolver_frame(int(d["f"]), bool(d.get("propagar", True)))
+                    elif self.path == "/frames/encimadas":
+                        r = sesion.etiquetar_encimadas(int(d["f"]) if d.get("f") is not None else None)
                     elif self.path == "/frames/dos_personas":
                         r = sesion.dos_personas(int(d["f"]))
                     elif self.path == "/frames/deshacer_dos_personas":

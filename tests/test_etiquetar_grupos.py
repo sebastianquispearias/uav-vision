@@ -333,13 +333,29 @@ try:
     antes4 = {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']}
     r4 = pedir('/frames/resolver_todo', {'f': 4, 'propagar': False})
     tras4 = {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']}
-    assert r4['pares'] == 4 and sum(v == 'persona' for v in tras4.values()) == 1, (r4, tras4)
-    print('  resolver todo (A)    : %d pares resueltos en un frame -> queda 1 persona de %d'
-          % (r4['pares'], sum(v == 'persona' for v in antes4.values())))
+    # The pile is settled as a group, not in pairs: five boxes on one person are one decision, not four.
+    assert r4['pares'] == 1 and sum(v == 'persona' for v in tras4.values()) == 1, (r4, tras4)
+    assert sum(v == 'duplicado' for v in tras4.values()) == sum(v == 'persona' for v in antes4.values()) - 1, tras4
+    print('  resolver todo (A)    : el monton de %d personas se resuelve en %d decision -> queda 1'
+          % (sum(v == 'persona' for v in antes4.values()), r4['pares']))
     for j, v in r4['antes']:
         pedir('/frames/caja', {'i': j, 'v': v})
     assert {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']} == antes4, 'Z tenia que devolver el frame'
     print('  deshacer el lote     : el frame 4 vuelve a sus %d personas' % sum(v == 'persona' for v in antes4.values()))
+
+    # The boxes nobody labelled that lie on top of a decided one: the overlap already answers them. Rows
+    # 40 and 41 sit in frame 2, far from the others, so they are the ones left alone and must not change.
+    pedir('/frames/caja', {'i': 40, 'v': None})
+    pedir('/frames/caja', {'i': 41, 'v': None})
+    enc = pedir('/frames/encimadas', {'f': None})
+    sin_ahora = {b['i'] for f in (1, 2, 3, 4, 9) for b in pedir('/frames/%d' % f)['cajas'] if b['etiqueta'] is None}
+    assert 40 in sin_ahora and 41 in sin_ahora, 'las cajas solas no se tocan: %s' % sin_ahora
+    print('  encimadas (3)        : %d a duplicado, %d a no; las 2 que estaban solas siguen sin etiquetar'
+          % (enc['duplicado'], enc['no']))
+    for j, v in enc['antes']:
+        pedir('/frames/caja', {'i': j, 'v': v})
+    pedir('/frames/caja', {'i': 40, 'v': 'no'})
+    pedir('/frames/caja', {'i': 41, 'v': 'no'})
 
     # The other answer to the same question: they are two people standing together. The flag has to go
     # away and stay away, and undo has to bring it back.
