@@ -706,12 +706,29 @@ class Sesion:
         return salida
 
     def celda(self, f, cx, cy, lado, tam=190):
-        """One cell of the strip: the patch of frame f with every person the review knows drawn on it."""
+        """One cell of the strip: frame f with every person the review knows drawn on it.
+
+        A side of zero means the whole frame instead of a patch of it. The patch answers whether a box
+        follows its person, because every cell then shows the same ground; it cannot answer whether
+        somebody is missing, because anyone standing outside the patch is invisible and the cell looks
+        just as calm as one where nobody was missed. Those are two different questions and the view has
+        to be told which one is being asked.
+        """
         import cv2
         img = cv2.imread(os.path.join(self.frames, "frame_%04d.jpg" % f))
         if img is None:
             raise ValueError("no hay frame %d" % f)
         alto, ancho = img.shape[:2]
+        if lado <= 0:
+            entero = img.copy()
+            for c in self._personas_del_frame(f):
+                cv2.rectangle(entero, (int(c[0]), int(c[1])), (int(c[2]), int(c[3])),
+                              (0, 235, 0), max(2, ancho // 320))
+            ok, buf = cv2.imencode(".jpg", cv2.resize(entero, (tam, max(1, int(tam * alto / ancho)))),
+                                   [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ok:
+                raise ValueError("no se pudo codificar el frame %d" % f)
+            return buf.tobytes()
         lado = int(max(60, min(lado, min(alto, ancho))))
         x0 = int(np.clip(cx - lado / 2, 0, ancho - lado))
         y0 = int(np.clip(cy - lado / 2, 0, alto - lado))
@@ -1918,8 +1935,15 @@ a{color:#93c5fd;text-decoration:none}
 <p class="s">Sirve para ver de un vistazo lo que frame por frame no se nota: una caja que se despega de la
 persona a lo largo de veinte frames se ve bien en cada uno por separado. Todas las celdas muestran el MISMO
 pedazo de suelo, centrado donde esta la gente del tramo. El numero es el frame y cuanta gente tiene;
-<b>borde rojo</b> = ese frame no tiene a nadie. Clic en una celda para abrirla frame por frame.</p>
+<b>borde rojo</b> = ese frame no tiene a nadie. Clic en una celda para abrirla frame por frame.<br>
+<b>Cual de los dos modos</b>: "frame entero" es el unico que sirve para ver si FALTA alguien, porque muestra
+todo lo que la camara vio; "acercar a la gente" muestra el mismo pedazo de suelo en todas las celdas y sirve
+para ver si una caja se despego de su persona, pero esconde a quien este fuera de ese pedazo.</p>
 <p>desde <input id="a" value="3377"> hasta <input id="b" value="3452">
+   &nbsp;<label><input type="radio" name="m" value="entero" checked onchange="pintar()"> frame entero
+   (para ver si <b>falta</b> alguien)</label>
+   &nbsp;<label><input type="radio" name="m" value="zoom" onchange="pintar()"> acercar a la gente
+   (para ver si una caja <b>se despego</b>)</label>
    &nbsp;<button onclick="pintar()">ver</button>
    &nbsp;<span id="q" style="color:#9ca3af"></span>
    &nbsp;&middot;&nbsp; <a href="/frames">frame por frame</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a></p>
@@ -1930,10 +1954,12 @@ async function pintar() {
   const d = await (await fetch(`/tira.json?desde=${a}&hasta=${b}`)).json();
   document.getElementById('q').textContent =
     `${d.frames.length} celdas de ${d.total} frames del tramo, vuelo ${d.vuelo}`;
+  const entero = document.querySelector('input[name=m]:checked').value === 'entero';
+  const lado = entero ? 0 : d.lado, tam = entero ? 320 : 190;
   document.getElementById('g').innerHTML = d.frames.map(f => {
     const n = d.personas[f], rev = d.revisados[f];
     return `<a class="c ${n ? (rev ? 'rev' : '') : 'sin'}" href="/frames#${f}">
-      <img src="/tira/celda/${f}?cx=${d.centro[0]}&cy=${d.centro[1]}&lado=${d.lado}">
+      <img src="/tira/celda/${f}?cx=${d.centro[0]}&cy=${d.centro[1]}&lado=${lado}&tam=${tam}">
       <span>${f} (${n})</span></a>`;
   }).join('');
 }
@@ -2006,7 +2032,8 @@ def servir(sesion, puerto):
                 f = int(urlparse(self.path).path.rsplit("/", 1)[1])
                 try:
                     with sesion.lock:
-                        cuerpo = sesion.celda(f, float(q["cx"][0]), float(q["cy"][0]), float(q["lado"][0]))
+                        cuerpo = sesion.celda(f, float(q["cx"][0]), float(q["cy"][0]),
+                                              float(q["lado"][0]), int(q.get("tam", [190])[0]))
                     self._responder(cuerpo, "image/jpeg")
                 except Exception as e:
                     self._responder(str(e).encode("utf-8"), "text/plain", 404)

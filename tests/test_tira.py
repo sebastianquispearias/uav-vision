@@ -62,6 +62,18 @@ try:
     vacios = [f for f in d["frames"] if d["personas"][str(f)] == 0]
     assert vacios, "los frames sin gente desaparecieron de la tira"
     print("  muestra tambien los %d frames sin nadie" % len(vacios))
+    # the whole-frame mode shows what the patch hides: somebody standing outside it
+    s3 = E.Sesion(cajas, embs, base, os.path.join(base, "lejos.json"), 2, lista_frames=frames)
+    for i in range(40):
+        s3.corregir(i, "persona")
+    s3.nueva(200, [40, 40, 80, 120])                      # a person far from the patch's centre
+    recorte = s3.celda(200, d["centro"][0], d["centro"][1], d["lado"], 190)
+    entero = s3.celda(200, 0, 0, 0, 320)
+    sin_lejos = s.celda(200, 0, 0, 0, 320)                # same frame, without that person
+    assert entero != sin_lejos, "el frame entero no muestra a quien esta fuera del recorte"
+    assert len(entero) > len(recorte) / 4, "el frame entero vino vacio"
+    print("  el modo frame entero muestra a quien el recorte deja afuera")
+
 finally:
     shutil.rmtree(base, ignore_errors=True)
 
