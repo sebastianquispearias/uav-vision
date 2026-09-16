@@ -32,9 +32,13 @@ VUELOS = {
     "01ago_2a": ("20260801_184259", os.path.join("data", "flight_01ago", "20260801_184259", "frames")),
     "01ago_2b": ("20260801_185326", os.path.join("data", "flight_01ago", "20260801_185326", "frames")),
     "02ago": ("20260802_133309", os.path.join("data", "flight_02ago", "20260802_133309", "frames")),
+    "02ago_alto": ("20260802_133309", os.path.join("data", "flight_02ago", "20260802_133309", "frames")),
 }
 # Split by day: the test is the only flight with the drone high, which is where the detector fails most.
-REPARTO = {"26jul": "train", "01ago_2a": "val", "01ago_2b": "val", "02ago": "test"}
+# 02ago_alto are frames 9315-9865 of the test flight, ten minutes after the test windows and 25 m up:
+# the only material at the height where the detector fails. Training on it makes the test score optimistic,
+# because it shares the day, the place and the people with the test; that has to be said with every number.
+REPARTO = {"26jul": "train", "02ago_alto": "train", "01ago_2a": "val", "01ago_2b": "val", "02ago": "test"}
 _RAIZ = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "drone-geolocation"))
 
 
