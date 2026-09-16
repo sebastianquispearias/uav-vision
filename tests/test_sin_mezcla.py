@@ -39,7 +39,12 @@ for modo in ([], ["--span"]):
     # walkers are classified mobile and stop merging into the operator's candidate (670 -> 519 impacts).
     # 2.25 m until a fitted motion also had to carry the target further than projection noise: short
     # tracks of the standing operator stopped being mobile and merge back into one candidate.
-    esperado = 2.39 if modo else 2.27
+    # 2.27 m until a moving track had to ask whether the person already had a candidate before opening
+    # one: the mobile branch was the only path that never consulted the matcher, so a standing operator
+    # whose duplicate boxes fake a speed became several points. Scored by identity against the hand
+    # labels of this flight, the operator went from four candidates to three with the same five people
+    # found and the same four phantoms, and the point landed closer.
+    esperado = 2.39 if modo else 1.98
     assert abs(d - esperado) < 0.005, "el resultado del vuelo cambio: %.2f m en vez de %.2f" % (d, esperado)
 
 print()

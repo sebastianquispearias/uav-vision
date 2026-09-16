@@ -752,6 +752,21 @@ class IncrementalIdentity:
             rapido = ("rapidez" in tk and tk["rapidez"] > max(self.mobile_speed_mps, 3.0 * tk["rapidez_se"])
                       and tk["desplaz_ventana"] > self._disp_movil(tk["cls"]))
             if rapido or regla_vieja:
+                # A moving track still has to be somebody. Opening a candidate without asking whether
+                # one already exists for this person is what turned a standing operator, whose
+                # duplicate boxes fake a speed, into several points on the map: the mobile branch was
+                # the only path that never consulted _match. Ask first, and only open when the answer
+                # is that nobody here matches.
+                ya = self._match(tk, cands)
+                if ya is not None:
+                    self._absorb(cands[ya], tk)
+                    cands[ya]["mobile"] = True
+                    cands[ya]["pos"] = np.asarray(
+                        tk["pos_reciente"] if "pos_reciente" in tk else tk["pos_actual"]).copy()
+                    for campo in ("vel", "t_ultimo", "var_pos"):
+                        if tk.get(campo) is not None:
+                            cands[ya][campo] = tk.get(campo)
+                    continue
                 ahora = tk["pos_reciente"] if "pos_reciente" in tk else tk["pos_actual"]
                 cands.append({"mobile": True, "pos": np.asarray(ahora).copy(),
                               "vel": tk.get("vel"), "t_ultimo": tk.get("t_ultimo"),
