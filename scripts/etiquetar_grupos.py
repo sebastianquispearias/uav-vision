@@ -66,6 +66,7 @@ import os
 import random
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
@@ -222,7 +223,7 @@ class Sesion:
             local = {o: j for j, o in enumerate(self.orig)}
             self.etiquetas = {local[int(i)]: v for i, v in previas.items() if int(i) in local}
         self.grupos = {}
-        for i, g in enumerate(agrupar(self.emb, k)):
+        for i, g in enumerate(self._agrupamiento(cajas, k)):
             self.grupos.setdefault(int(g), []).append(i)
         # Suspicions from the audit: olvidadas_<flight>.csv next to the boxes, if it was ever run.
         self.ruta_sospechas = sospechas or os.path.join(os.path.dirname(os.path.abspath(cajas)),
@@ -661,6 +662,91 @@ class Sesion:
             self.revisados.discard(f)
         self._guardar_revision()
 
+    def tira_datos(self, desde, hasta, columnas=8, filas=4):
+        """Where to cut, and what is in each cut, for a run of frames seen all at once.
+
+        Reviewing frame by frame hides the kind of mistake that only shows up as a pattern: a box that
+        drifts off a person over twenty frames looks fine in each one. The patch is centred on the
+        median of the people the review knows about in the run, and made wide enough that they can move
+        inside it, so the same ground is shown in every cell and the eye compares like with like.
+        """
+        frames = [f for f in self.lista if desde <= f <= hasta]
+        if not frames:
+            return {"frames": [], "centro": [0, 0], "lado": 400, "personas": {}}
+        cajas = [c for f in frames for c in self._personas_del_frame(f)]
+        if cajas:
+            centro = [float(np.median([(c[0] + c[2]) / 2 for c in cajas])),
+                      float(np.median([(c[1] + c[3]) / 2 for c in cajas]))]
+            lado = int(max(300, 9 * np.median([c[3] - c[1] for c in cajas])))
+        else:
+            centro, lado = [960.0, 540.0], 900
+        # Evenly spaced across the WHOLE run, not the first cells of it: a stride of one on a run
+        # slightly longer than the grid would show its beginning and hide the end, which is where a
+        # box that drifts has drifted furthest.
+        n = min(columnas * filas, len(frames))
+        elegidos = ([frames[round(i * (len(frames) - 1) / (n - 1))] for i in range(n)]
+                    if n > 1 else list(frames[:1]))
+        return {"frames": elegidos, "centro": centro, "lado": lado, "total": len(frames),
+                "personas": {str(f): len(self._personas_del_frame(f)) for f in elegidos},
+                "revisados": {str(f): (f in self.revisados) for f in elegidos}}
+
+    def _personas_del_frame(self, f):
+        """Every box the review calls a person in a frame, the drawn ones included."""
+        salida = []
+        for i in self.por_frame.get(f, []):
+            if self.final(i) == "persona":
+                salida.append(list(self._caja(i)))
+        for c in self.nuevas.get(f, []):
+            if not (len(c) > 4 and c[4] == "ignorar"):
+                salida.append([float(x) for x in c[:4]])
+        return salida
+
+    def celda(self, f, cx, cy, lado, tam=190):
+        """One cell of the strip: the patch of frame f with every person the review knows drawn on it."""
+        import cv2
+        img = cv2.imread(os.path.join(self.frames, "frame_%04d.jpg" % f))
+        if img is None:
+            raise ValueError("no hay frame %d" % f)
+        alto, ancho = img.shape[:2]
+        lado = int(max(60, min(lado, min(alto, ancho))))
+        x0 = int(np.clip(cx - lado / 2, 0, ancho - lado))
+        y0 = int(np.clip(cy - lado / 2, 0, alto - lado))
+        rec = img[y0:y0 + lado, x0:x0 + lado].copy()
+        for c in self._personas_del_frame(f):
+            x1, y1, x2, y2 = c[0] - x0, c[1] - y0, c[2] - x0, c[3] - y0
+            if x2 < 0 or y2 < 0 or x1 > lado or y1 > lado:
+                continue
+            cv2.rectangle(rec, (int(x1), int(y1)), (int(x2), int(y2)), (0, 235, 0), max(1, lado // 220))
+        ok, buf = cv2.imencode(".jpg", cv2.resize(rec, (tam, tam)), [cv2.IMWRITE_JPEG_QUALITY, 82])
+        if not ok:
+            raise ValueError("no se pudo codificar el frame %d" % f)
+        return buf.tobytes()
+
+    def _agrupamiento(self, cajas, k):
+        """The grouping of the boxes, computed once per flight and remembered on disk.
+
+        Hierarchical clustering over four thousand 512-dimensional embeddings takes sixteen seconds,
+        and it ran on every start and on every flight change even though nothing it depends on ever
+        moves: the embeddings are written once by proponer_cajas.py and never touched again. The
+        answer is kept next to them and reused while the shape of the embeddings and the number of
+        groups still match what produced it, which is what makes switching flights feel instant.
+        """
+        cache = os.path.splitext(cajas)[0] + "_grupos.npz"
+        firma = np.array([self.emb.shape[0], self.emb.shape[1], k], dtype=np.int64)
+        if os.path.exists(cache):
+            try:
+                d = np.load(cache)
+                if np.array_equal(d["firma"], firma):
+                    return d["grupos"]
+            except Exception:
+                pass
+        grupos = np.asarray(agrupar(self.emb, k))
+        try:
+            np.savez(cache, grupos=grupos, firma=firma)
+        except OSError:
+            pass
+        return grupos
+
     def _guardar_revision(self):
         datos = {"cajas": os.path.abspath(self.cajas), "clave": "fila del CSV de cajas",
                  "revisados": sorted(self.revisados),
@@ -959,7 +1045,7 @@ PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</t
 <p>Despues de los grupos, dos pasos cortos:
 <b>1.</b> <a href="/frames?solo=dobles" style="color:#93c5fd">frames donde una persona tiene dos cajas</a> (apretar D en la caja chica) &middot;
 <b>2.</b> <a href="/mosaico" style="color:#93c5fd">mosaico del resto</a> (mirar 24 a la vez; clic solo si falta o sobra algo) &middot;
-<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a> &middot; <a href="/vuelos">vuelos</a> &middot;
+<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a> &middot;
 <a href="/video" style="color:#93c5fd">video de las etiquetas</a> &middot; <a href="/sospechas" style="color:#93c5fd">sospechas del modelo</a></p>
 <p id="sueltas">Si en un grupo hay UN recorte mal, no hace falta partirlo: con el <b>raton encima de ese recorte</b>,
 <span class="k">P</span> persona <span class="k">N</span> no <span class="k">D</span> duplicado <span class="k">I</span> ignorar.
@@ -1103,7 +1189,7 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
   <p><b><a href="/frames?solo=pendientes">cola de pendientes &rarr;</a></b> (huecos, sin revisar, sin etiquetar y
     encimadas, uno tras otro)</p>
   <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a>
-    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/repaso">repaso ciego</a>
+    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/repaso">repaso ciego</a>
     &middot; <a href="/video">video</a> &middot; <a href="/sospechas">sospechas</a></p>
 </div>
 <script>
@@ -1572,7 +1658,7 @@ VIDEO = r"""<!doctype html><meta charset="utf-8"><title>Video de las etiquetas</
   <span id="estado"></span>
 </p>
 <p><a href="/">&larr; grupos</a> &middot; <a href="/frames">frames</a> &middot; <a href="/mosaico">mosaico</a>
- &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/sospechas">sospechas del modelo</a></p>
+ &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/sospechas">sospechas del modelo</a></p>
 <script>
 let lista = [], pos = 0, fps = 5, tarea = null, nombre = '';
 async function cargar() {
@@ -1630,7 +1716,7 @@ las cajas del etiquetado. La mayoria es ruido: lo que importa es si aparece una 
 <p id="cuenta"></p>
 <div class="rejilla" id="rejilla"></div>
 <p id="aviso"></p>
-<p><a href="/">&larr; grupos</a> &middot; <a href="/video">video</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/vuelos">vuelos</a></p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/video">video</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a></p>
 <script>
 async function cargar() {
   const e = await (await fetch('/sospechas/estado')).json();
@@ -1674,7 +1760,7 @@ igual la segunda vez, que es la forma honesta de decir que el etiquetado es cons
       onkeydown="if (event.key === 'Enter') responder()"> <button onclick="responder()">responder</button></p>
   <p id="veredicto"></p>
 </div>
-<p><a href="/">&larr; grupos</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/vuelos">vuelos</a></p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a></p>
 <script>
 let actual = null;
 async function cargar() {
@@ -1814,6 +1900,45 @@ def resumen_vuelo(nombre):
     return d
 
 
+PAGINA_TIRA = """<!doctype html><meta charset="utf-8"><title>tira</title>
+<style>body{background:#0b1020;color:#e5e7eb;font:14px system-ui;margin:0;padding:18px}
+h1{font-size:18px;margin:0 0 4px} p.s{color:#9ca3af;margin:0 0 14px;max-width:900px}
+input{background:#111827;color:#e5e7eb;border:1px solid #374151;border-radius:6px;padding:5px 8px;width:80px}
+button{background:#1d4ed8;color:#fff;border:0;border-radius:6px;padding:6px 14px;cursor:pointer}
+a{color:#93c5fd;text-decoration:none}
+.g{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.c{position:relative} .c img{display:block;border:2px solid #1f2937;border-radius:4px}
+.c.sin img{border-color:#b91c1c} .c.rev img{border-color:#166534}
+.c span{position:absolute;left:4px;top:3px;font:11px monospace;color:#d1fae5;text-shadow:0 0 3px #000}</style>
+<h1>Tira: muchos frames de un tiron, con las cajas puestas</h1>
+<p class="s">Sirve para ver de un vistazo lo que frame por frame no se nota: una caja que se despega de la
+persona a lo largo de veinte frames se ve bien en cada uno por separado. Todas las celdas muestran el MISMO
+pedazo de suelo, centrado donde esta la gente del tramo. El numero es el frame y cuanta gente tiene;
+<b>borde rojo</b> = ese frame no tiene a nadie. Clic en una celda para abrirla frame por frame.</p>
+<p>desde <input id="a" value="3377"> hasta <input id="b" value="3452">
+   &nbsp;<button onclick="pintar()">ver</button>
+   &nbsp;<span id="q" style="color:#9ca3af"></span>
+   &nbsp;&middot;&nbsp; <a href="/frames">frame por frame</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a></p>
+<div class="g" id="g"></div>
+<script>
+async function pintar() {
+  const a = +document.getElementById('a').value, b = +document.getElementById('b').value;
+  const d = await (await fetch(`/tira.json?desde=${a}&hasta=${b}`)).json();
+  document.getElementById('q').textContent =
+    `${d.frames.length} celdas de ${d.total} frames del tramo, vuelo ${d.vuelo}`;
+  document.getElementById('g').innerHTML = d.frames.map(f => {
+    const n = d.personas[f], rev = d.revisados[f];
+    return `<a class="c ${n ? (rev ? 'rev' : '') : 'sin'}" href="/frames#${f}">
+      <img src="/tira/celda/${f}?cx=${d.centro[0]}&cy=${d.centro[1]}&lado=${d.lado}">
+      <span>${f} (${n})</span></a>`;
+  }).join('');
+}
+const h = location.hash.slice(1).split('-');
+if (h.length === 2) { document.getElementById('a').value = h[0]; document.getElementById('b').value = h[1]; }
+pintar();
+</script>"""
+
+
 PAGINA_VUELOS = """<!doctype html><meta charset="utf-8"><title>vuelos</title>
 <style>body{background:#0b1020;color:#e5e7eb;font:15px system-ui;margin:0;padding:22px}
 h1{font-size:20px;margin:0 0 6px} p.s{color:#9ca3af;margin:0 0 18px}
@@ -1864,6 +1989,23 @@ def servir(sesion, puerto):
         def do_GET(self):
             if self.path == "/":
                 self._responder(PAGINA.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/tira" or self.path.startswith("/tira#"):
+                self._responder(PAGINA_TIRA.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path.startswith("/tira.json"):
+                q = parse_qs(urlparse(self.path).query)
+                with sesion.lock:
+                    d = sesion.tira_datos(int(q.get("desde", [0])[0]), int(q.get("hasta", [10 ** 9])[0]))
+                d["vuelo"] = sesion.nombre
+                self._responder(json.dumps(d).encode("utf-8"))
+            elif self.path.startswith("/tira/celda/"):
+                q = parse_qs(urlparse(self.path).query)
+                f = int(urlparse(self.path).path.rsplit("/", 1)[1])
+                try:
+                    with sesion.lock:
+                        cuerpo = sesion.celda(f, float(q["cx"][0]), float(q["cy"][0]), float(q["lado"][0]))
+                    self._responder(cuerpo, "image/jpeg")
+                except Exception as e:
+                    self._responder(str(e).encode("utf-8"), "text/plain", 404)
             elif self.path == "/vuelos":
                 self._responder(PAGINA_VUELOS.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path == "/vuelos.json":
