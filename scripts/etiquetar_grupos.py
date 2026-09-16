@@ -93,7 +93,11 @@ for _nombre, _frames in (("26jul", os.path.join(_RAIZ_DATOS, "20260726_195524", 
                          ("14jun", os.path.join(_RAIZ_DATOS, "flight_14jun", "20260614_225918", "frames")),
                          # Frames 9315-9865 of the test flight: 25 m up, the only unlabelled high-altitude
                          # material there is. Same day as the test, so training on it flatters the test score.
-                         ("02ago_alto", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames"))):
+                         ("02ago_alto", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames")),
+                         # The frames between the test windows, which no proposer had ever seen. They are
+                         # glued to the test, so they serve to MEASURE and never to train: without them a
+                         # candidate that lives there cannot be judged either way.
+                         ("02ago_huecos", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames"))):
     VUELOS[_nombre] = (os.path.join(_ENT, "candidatas_%s.csv" % _nombre), os.path.join(_ENT, "candidatas_%s_embs.npy" % _nombre),
                        _frames, os.path.join(_ENT, "etiquetas_detector_%s.json" % _nombre),
                        os.path.join(_ENT, "candidatas_%s_frames.txt" % _nombre))
