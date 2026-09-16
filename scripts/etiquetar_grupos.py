@@ -205,6 +205,7 @@ class Sesion:
         self.lista = sorted({int(f) for f in list(lista_frames or []) + list(self.por_frame) if dentro(int(f))})
         self.ruta_revision = os.path.splitext(salida)[0] + "_frames.json"
         self.revisados, self.correcciones, self.nuevas, self.repaso, self.ajustes = set(), {}, {}, {}, {}
+        self.pares_ok = set()
         if os.path.exists(self.ruta_revision):
             r = json.load(open(self.ruta_revision, encoding="utf-8"))
             local = {o: j for j, o in enumerate(self.orig)}
@@ -217,6 +218,10 @@ class Sesion:
             # fixable too, or a detection that covers only the legs stays wrong for ever.
             self.ajustes = {local[int(i)]: [float(x) for x in c] for i, c in r.get("ajustes", {}).items()
                             if int(i) in local}
+            # Pairs the labeller confirmed to be two people standing together, not one boxed twice: without
+            # this they stay orange for ever and the frame never stops counting as a problem.
+            self.pares_ok = {tuple(sorted((local[int(a)], local[int(b)])))
+                             for a, b in r.get("pares_ok", []) if int(a) in local and int(b) in local}
 
     def estado(self):
         out = []
@@ -317,8 +322,15 @@ class Sesion:
         that the labeller should look again.
         """
         idx = self.por_frame.get(f, [])
-        personas = [self._caja(i) for i in idx if self.final(i) == "persona"]
+        filas_persona = [i for i in idx if self.final(i) == "persona"]
+        personas = [self._caja(i) for i in filas_persona]
         personas += [tuple(c[:4]) for c in self.nuevas.get(f, []) if etiqueta_nueva(c) == "persona"]
+
+        def doble_de(i):
+            """Whether box i shares its place with another person box that was not confirmed as a second person."""
+            b = self._caja(i)
+            return any(j != i and solape_menor(b, self._caja(j)) >= 0.5
+                       and tuple(sorted((i, j))) not in self.pares_ok for j in filas_persona)
 
         def doble(b):
             return sum(solape_menor(b, p) >= 0.5 for p in personas) > 1   # the box itself counts once
@@ -326,7 +338,7 @@ class Sesion:
         cajas = [{"i": i, "caja": self._caja(i), "etiqueta": self.final(i), "corregida": i in self.correcciones,
                   "ajustada": i in self.ajustes,
                   "conf": float(self.filas[i].get("conf") or 0), "fuentes": self.filas[i].get("fuentes") or "",
-                  "doble": self.final(i) == "persona" and doble(self._caja(i))} for i in idx]
+                  "doble": self.final(i) == "persona" and doble_de(i)} for i in idx]
         nuevas = [{"k": k, "caja": c[:4], "etiqueta": etiqueta_nueva(c),
                    "doble": etiqueta_nueva(c) == "persona" and doble(tuple(c[:4]))}
                   for k, c in enumerate(self.nuevas.get(f, []))]
@@ -444,6 +456,31 @@ class Sesion:
                     pass
         return {"pares": pares, "propagadas": propagadas, "antes": antes}
 
+    def dos_personas(self, f):
+        """Says that every pair of overlapping person boxes of frame f is two people standing together.
+
+        It is the other answer to the same question the orange flag asks, and without it a real pair of
+        people keeps the frame marked as a problem for ever.
+        """
+        personas = [i for i in self.por_frame.get(f, []) if self.final(i) == "persona"]
+        nuevos = [(i, j) for k, i in enumerate(personas) for j in personas[k + 1:]
+                  if solape_menor(self._caja(i), self._caja(j)) >= 0.5 and tuple(sorted((i, j))) not in self.pares_ok]
+        if not nuevos:
+            raise ValueError("en este frame no hay dos cajas de persona encimadas")
+        for i, j in nuevos:
+            self.pares_ok.add(tuple(sorted((i, j))))
+        self._guardar_revision()
+        return {"pares": len(nuevos), "filas": [[self.orig[i], self.orig[j]] for i, j in nuevos]}
+
+    def deshacer_dos_personas(self, f):
+        """Takes back the pairs of frame f confirmed as two people, so undo can put the flag back."""
+        personas = [i for i in self.por_frame.get(f, []) if self.final(i) == "persona"]
+        quitados = [p for p in list(self.pares_ok) if p[0] in personas and p[1] in personas]
+        for p in quitados:
+            self.pares_ok.discard(p)
+        self._guardar_revision()
+        return {"pares": len(quitados)}
+
     def nueva_etiqueta(self, f, k, v):
         """A drawn box is a person by default; "ignorar" is for what cannot be decided (a lone foot,
         a blur), so the export blanks it instead of teaching it as background."""
@@ -481,7 +518,8 @@ class Sesion:
                  "correcciones": {str(self.orig[i]): v for i, v in sorted(self.correcciones.items())},
                  "nuevas": {str(f): v for f, v in sorted(self.nuevas.items())},
                  "repaso": {str(f): n for f, n in sorted(self.repaso.items())},
-                 "ajustes": {str(self.orig[i]): c for i, c in sorted(self.ajustes.items())}}
+                 "ajustes": {str(self.orig[i]): c for i, c in sorted(self.ajustes.items())},
+                 "pares_ok": sorted([self.orig[a], self.orig[b]] for a, b in self.pares_ok)}
         tmp = self.ruta_revision + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(datos, fh, indent=1)
@@ -841,9 +879,12 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     (las del detector no se borran, se marcan). Con el raton encima de una dibujada,
     <span class="k">I</span> la pasa a ignorar y <span class="k">P</span> la devuelve a persona.
     <span class="k">R</span> desmarca revisado. <span class="k">Z</span> deshace lo ultimo.</p>
+  <p><b>Cuando dos cajas verdes se pisan</b> (naranja "&iquest;doble?") hay solo dos respuestas:<br>
+    <span class="k">1</span> <b>es la misma persona</b>: la caja chica pasa a duplicado, aqui y en los frames vecinos.<br>
+    <span class="k">2</span> <b>son dos personas distintas</b>: las dos quedan y el frame deja de marcarse en naranja.<br>
+    Funcionan sin poner el raton encima. <span class="k">A</span> hace lo mismo que <span class="k">1</span>.</p>
   <p><b>Para ir mas rapido</b>, con el raton sobre una caja:<br>
-    <span class="k">X</span> resuelve las dos encimadas: la chica pasa a duplicado y la grande queda persona.<br>
-    <span class="k">A</span> resuelve TODAS las encimadas del frame de una vez (y las copia a los vecinos si la casilla esta marcada).<br>
+    <span class="k">X</span> resuelve el par de ESA caja (sin raton encima, resuelve todo el frame).<br>
     <span class="k">C</span> copia la etiqueta de esa caja a las cajas iguales de los frames vecinos.<br>
     <span class="k">F</span> salta al proximo frame con cajas encimadas o sin etiquetar. Todo se deshace con <span class="k">Z</span>.</p>
   <p>Un frame esta <b>revisado</b> cuando cada persona tiene UNA caja verde y nada mas es verde.
@@ -1007,6 +1048,27 @@ function irSinRevisar() {
   for (let k = 1; k <= lista.length; k++) { const q = (pos + k) % lista.length; if (!lista[q].revisado) return ir(q); }
   aviso('todos los frames estan revisados');
 }
+// Two overlapping person boxes have two possible answers, and only two: one key for each.
+async function esLaMisma() {
+  try {
+    const r = await pedir('/frames/resolver_todo', {f: datos.f, propagar: document.getElementById('propagarAuto').checked});
+    if (!r.pares) aviso('en este frame no hay cajas de persona encimadas');
+    else {
+      deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
+      aviso('la misma persona: ' + r.pares + ' pares resueltos aqui y ' + r.propagadas + ' en los frames vecinos');
+    }
+  } catch (e) {}
+  recargar();
+}
+async function sonDos() {
+  const f = datos.f;
+  try {
+    const r = await pedir('/frames/dos_personas', {f});
+    deshacer.push(() => pedir('/frames/deshacer_dos_personas', {f}));
+    aviso('dos personas distintas: ' + r.pares + ' pares dejan de marcarse en naranja');
+  } catch (e) {}
+  recargar();
+}
 async function irAlProblema() {
   const e = await pedir('/frames/estado');     // asked again: what is a problem changes as you fix them
   lista = lista.map((x, k) => e.frames[k] || x);
@@ -1112,27 +1174,8 @@ document.addEventListener('keydown', async ev => {
   else if (k === 'z') deshacerUltimo();
   else if (k === 'v') reproducir();
   else if (k === 'f') irAlProblema();
-  else if (k === 'a') {                  // settle every doubled box of the frame at once
-    try {
-      const r = await pedir('/frames/resolver_todo', {f: datos.f, propagar: document.getElementById('propagarAuto').checked});
-      if (!r.pares) aviso('en este frame no hay cajas de persona encimadas');
-      else {
-        deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
-        aviso(r.pares + ' pares resueltos aqui y ' + r.propagadas + ' cajas iguales de los frames vecinos');
-      }
-    } catch (e) {}
-    recargar();
-  }
-  else if (k === 'x' && raton) {          // settle a pair on the same person in one key
-    const b = bajo(raton);
-    if (!b || b.tipo !== 'caja') return aviso('X: poné el raton sobre una de las dos cajas encimadas');
-    try {
-      const r = await pedir('/frames/resolver', {i: b.i});
-      deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
-      aviso('la chica quedo duplicado y la grande persona');
-    } catch (e) {}
-    recargar();
-  }
+  else if (k === 'a' || k === '1') await esLaMisma();
+  else if (k === '2') await sonDos();
   else if (k === 'c' && raton) {          // the same decision, on the same box, in the neighbouring frames
     const b = bajo(raton);
     if (!b || b.tipo !== 'caja') return aviso('C: poné el raton sobre la caja que querés propagar');
@@ -1145,6 +1188,17 @@ document.addEventListener('keydown', async ev => {
   }
   else if (k === 'g') { ev.preventDefault(); document.getElementById('saltar').focus(); }
   else if (k === 'r') { await pedir('/frames/revisado', {f: datos.f, v: false}); lista[pos].revisado = false; recargar(); }
+  else if (k === 'x') {
+    const b = raton && bajo(raton);
+    if (b && b.tipo === 'caja') {          // a precise choice: settle the pair of THIS box
+      try {
+        const r = await pedir('/frames/resolver', {i: b.i});
+        deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
+        aviso('la chica quedo duplicado y la grande persona');
+      } catch (e) {}
+      recargar();
+    } else await esLaMisma();              // no box under the cursor: do the whole frame instead of nothing
+  }
   else if (raton && TECLA[k]) {
     const b = bajo(raton);
     if (b && b.tipo === 'caja') poner(b.i, TECLA[k]);
@@ -1158,6 +1212,7 @@ document.addEventListener('keydown', async ev => {
   }
 });
 window.addEventListener('resize', pintar);
+window.addEventListener('focus', () => { if (datos) recargar(); });   // back from another tab: redraw what changed
 iniciar();
 </script>
 """
@@ -1534,6 +1589,10 @@ def servir(sesion, puerto):
                         r = sesion.resolver_doble(int(d["i"]))
                     elif self.path == "/frames/resolver_todo":
                         r = sesion.resolver_frame(int(d["f"]), bool(d.get("propagar", True)))
+                    elif self.path == "/frames/dos_personas":
+                        r = sesion.dos_personas(int(d["f"]))
+                    elif self.path == "/frames/deshacer_dos_personas":
+                        r = sesion.deshacer_dos_personas(int(d["f"]))
                     elif self.path == "/frames/ajustar":
                         sesion.ajustar(int(d["i"]), d.get("caja"))
                         r = {"status": "ok"}

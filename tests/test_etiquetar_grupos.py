@@ -341,6 +341,20 @@ try:
     assert {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']} == antes4, 'Z tenia que devolver el frame'
     print('  deshacer el lote     : el frame 4 vuelve a sus %d personas' % sum(v == 'persona' for v in antes4.values()))
 
+    # The other answer to the same question: they are two people standing together. The flag has to go
+    # away and stay away, and undo has to bring it back.
+    assert any(b['doble'] for b in pedir('/frames/2')['cajas']), 'el frame 2 tenia que tener encimadas'
+    r2 = pedir('/frames/dos_personas', {'f': 2})
+    assert r2['pares'] >= 1 and not any(b['doble'] for b in pedir('/frames/2')['cajas']), r2
+    guardado = json.load(open(os.path.join(dirt, 'etiquetas_frames.json'), encoding='utf-8'))['pares_ok']
+    assert len(guardado) == r2['pares'], guardado
+    ch = pedir('/chequeos/estado')
+    assert 2 not in ch['dobles'], ch['dobles']
+    print('  son dos personas (2) : %d pares dejan de ser "doble" y el frame sale de los chequeos' % r2['pares'])
+    pedir('/frames/deshacer_dos_personas', {'f': 2})
+    assert any(b['doble'] for b in pedir('/frames/2')['cajas']), 'Z tenia que devolver la marca'
+    print('  deshacerlo (Z)       : la marca naranja vuelve')
+
     i0 = per[0]['i']
     pedir('/frames/caja', {'i': i0, 'v': 'duplicado'})
     prop = pedir('/frames/propagar', {'i': i0})
