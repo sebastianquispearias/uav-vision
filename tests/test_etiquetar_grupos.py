@@ -209,6 +209,7 @@ proc = arrancar(dirt, grupos=2, extra=extra)
 try:
     e = pedir('/frames/estado')
     assert [x['f'] for x in e['frames']] == [1, 2, 3, 4, 9] and e['nombre'] == 'vuelo_prueba', e
+    assert all('hueco' in x for x in e['frames']), 'cada frame tiene que decir si es un hueco'
     assert [x['doble'] for x in e['frames']] == [True, True, True, True, False], e['frames']
     print('  estado por frame     : doble en los 4 frames con 5 personas encimadas, no en el 9 vacio')
     print('  lista de frames      : %s (el 9 sin candidatas, por --lista-frames), nombre %s'
@@ -452,6 +453,12 @@ try:
     ch = pedir('/chequeos/estado')
     assert ch['huecos'] == [3] and 3 not in ch['dobles'], ch
     print('  hueco                : vaciar el frame 3 entre el 2 y el 4 lo deja como hueco %s' % ch['huecos'])
+    # The same gap has to show up in the per-frame state, which is what the pending queue is built from.
+    est = {x['f']: x for x in pedir('/frames/estado')['frames']}
+    assert est[3]['hueco'] and not est[9]['hueco'], est
+    pendientes = [f for f, x in est.items() if x['doble'] or x['sin'] or x['hueco'] or not x['revisado']]
+    assert 3 in pendientes and 1 in pendientes, pendientes
+    print('  cola de pendientes   : %d frames (huecos, sin revisar, sin etiquetar o encimadas)' % len(pendientes))
     assert 'mosaico' in pedir('/mosaico', crudo=True).decode('utf-8')
     assert 'chequeos' in pedir('/chequeos', crudo=True).decode('utf-8')
     print('  miniatura            : JPEG 480 px de ancho con %d px verdes de la caja dibujada; /mosaico sirve' % verde)

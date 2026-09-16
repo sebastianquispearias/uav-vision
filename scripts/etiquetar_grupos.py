@@ -308,9 +308,15 @@ class Sesion:
         for f in self.lista:
             d = self.frame_cajas(f)
             frames.append({"f": f, "revisado": f in self.revisados, "n": len(d["cajas"]),
-                           "personas": sum(b["etiqueta"] == "persona" for b in d["cajas"]) + len(d["nuevas"]),
+                           "personas": sum(b["etiqueta"] == "persona" for b in d["cajas"])
+                                       + sum(etiqueta_nueva(c) == "persona" for c in self.nuevas.get(f, [])),
                            "doble": any(b["doble"] for b in d["cajas"] + d["nuevas"]),
-                           "sin": sum(b["etiqueta"] is None for b in d["cajas"])})
+                           "sin": sum(b["etiqueta"] is None for b in d["cajas"]), "hueco": False})
+        # A gap is a frame with nobody between two that do have somebody: marked here as well, so the
+        # page can put every kind of pending frame in one queue.
+        for k in range(1, len(frames) - 1):
+            frames[k]["hueco"] = (frames[k]["personas"] == 0 and frames[k - 1]["personas"] > 0
+                                  and frames[k + 1]["personas"] > 0)
         return {"frames": frames,
                 "revisados": len(self.revisados & set(self.lista)), "nombre": self.nombre}
 
@@ -951,6 +957,8 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     <span class="k">F</span> salta al proximo frame con cajas encimadas o sin etiquetar. Todo se deshace con <span class="k">Z</span>.</p>
   <p>Un frame esta <b>revisado</b> cuando cada persona tiene UNA caja verde y nada mas es verde.
     Una caja corrida (piernas, sombra, media persona) de alguien que ya tiene la suya es <b>duplicado</b>.</p>
+  <p><b><a href="/frames?solo=pendientes">cola de pendientes &rarr;</a></b> (huecos, sin revisar, sin etiquetar y
+    encimadas, uno tras otro)</p>
   <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a>
     &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/repaso">repaso ciego</a>
     &middot; <a href="/video">video</a> &middot; <a href="/sospechas">sospechas</a></p>
@@ -980,10 +988,16 @@ const visible = b => !(soloPersonas() && b.etiqueta && b.etiqueta !== 'persona')
 async function iniciar() {
   const e = await pedir('/frames/estado');
   // ?solo=dobles: only the frames where a person has two boxes, the ones that need a decision.
-  const soloDobles = new URLSearchParams(location.search).get('solo') === 'dobles';
-  lista = soloDobles ? e.frames.filter(x => x.doble) : e.frames;
-  nombre = e.nombre; document.title = nombre + (soloDobles ? ' - dobles' : ' - frames');
-  if (soloDobles) document.getElementById('modo').textContent = 'solo frames con una persona en dos cajas: ' + lista.length;
+  const solo = new URLSearchParams(location.search).get('solo');
+  // "pendientes" is the queue: everything still to decide, in order, so Enter walks through all of it.
+  const pendiente = x => x.doble || x.sin || x.hueco || !x.revisado;
+  lista = solo === 'dobles' ? e.frames.filter(x => x.doble)
+        : solo === 'pendientes' ? e.frames.filter(pendiente) : e.frames;
+  if (!lista.length) { lista = e.frames; aviso('no queda nada pendiente: se muestran todos los frames'); }
+  nombre = e.nombre; document.title = nombre + (solo ? ' - ' + solo : ' - frames');
+  if (solo === 'dobles') document.getElementById('modo').textContent = 'solo frames con una persona en dos cajas: ' + lista.length;
+  if (solo === 'pendientes') document.getElementById('modo').textContent =
+    'cola de pendientes: ' + lista.length + ' frames (Enter los va cerrando uno tras otro)';
   if (!lista.length) return aviso('no hay frames');
   let p = lista.findIndex(x => x.f === parseInt(location.hash.slice(1)));
   if (p < 0) p = lista.findIndex(x => !x.revisado);
@@ -1054,7 +1068,11 @@ function pintar() {
   if (cv.width !== ancho) { cv.width = ancho; cv.height = Math.round(img.naturalHeight * ancho / img.naturalWidth); }
   dibujar(cx, 0, 0, cv.width / img.naturalWidth, cv.width, cv.height);
   document.getElementById('titulo').textContent = nombre + ' · frame ' + datos.f;
-  document.getElementById('donde').textContent = (pos + 1) + ' / ' + lista.length + (datos.revisado ? ' · revisado' : '');
+  const x = lista[pos], porque = [x.hueco ? 'HUECO: nadie aqui y si en los vecinos' : '',
+                                  x.doble ? 'cajas encimadas' : '', x.sin ? x.sin + ' sin etiquetar' : '',
+                                  x.revisado ? '' : 'sin revisar'].filter(Boolean).join(' · ');
+  document.getElementById('donde').textContent = (pos + 1) + ' / ' + lista.length +
+    (datos.revisado ? ' · revisado' : '') + (porque ? ' · ' + porque : '');
   const hechos = lista.filter(x => x.revisado).length;
   document.getElementById('progreso').style.width = (100 * hechos / lista.length) + '%';
   const c = {persona: 0, no: 0, duplicado: 0, ignorar: 0, sin: 0};
