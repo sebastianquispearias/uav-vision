@@ -96,6 +96,28 @@ for _nombre, _frames in (("26jul", os.path.join(_RAIZ_DATOS, "20260726_195524", 
     VUELOS[_nombre] = (os.path.join(_ENT, "candidatas_%s.csv" % _nombre), os.path.join(_ENT, "candidatas_%s_embs.npy" % _nombre),
                        _frames, os.path.join(_ENT, "etiquetas_detector_%s.json" % _nombre),
                        os.path.join(_ENT, "candidatas_%s_frames.txt" % _nombre))
+def _crear_seguidor(cv2):
+    """The best correlation tracker this OpenCV has, by name rather than by version.
+
+    CSRT lived in the main module, then in contrib, and OpenCV 5 dropped it from both; MIL is the one
+    that has been there throughout. Asking for whichever exists keeps the labelling tool working on
+    whatever the machine has installed instead of pinning it to one build.
+    """
+    for nombre in ("TrackerCSRT_create", "TrackerKCF_create", "TrackerMIL_create"):
+        if hasattr(cv2, nombre):
+            return getattr(cv2, nombre)()
+    raise RuntimeError("este OpenCV no trae ningun seguidor (%s)" % cv2.__version__)
+
+
+def _solapa(a, b):
+    """Intersection over union of two boxes, used to leave alone what the reviewer already decided."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
 MUESTRA = 24          # crops shown per group: enough to see what it is, few enough to load fast
 LADO = 128            # crop side, px: at 96 the text of a context box is a smudge of a few pixels
 GRUESA = (0, 230, 255)    # BGR yellow: the box being labelled
@@ -384,6 +406,67 @@ class Sesion:
         self.nuevas.setdefault(f, []).append(self._caja_valida(caja))
         self._guardar_revision()
         return len(self.nuevas[f]) - 1
+
+    def seguir(self, f, caja, adelante=True, cuantos=40):
+        """Carries a drawn box across the following frames with a visual tracker, so a person the
+        detectors never proposed does not have to be drawn frame by frame.
+
+        Somebody standing on a distant balcony is the case this exists for: the person barely moves,
+        the drone does, and the box therefore has to move with the camera rather than stay put, which
+        is why copying the same pixels to the neighbours does not work. A correlation tracker follows
+        the patch instead, and stops as soon as it loses it, so what it leaves behind is a proposal
+        the reviewer corrects rather than a claim.
+
+        Boxes are only added where the frame has nothing of its own already overlapping: a frame that
+        already carries a labelled person for that spot is left exactly as the reviewer left it.
+        """
+        import cv2
+        if f not in self.lista:
+            raise ValueError("frame fuera de la lista")
+        caja = self._caja_valida(caja)
+        pos = self.lista.index(f)
+        orden = self.lista[pos + 1:pos + 1 + cuantos] if adelante else self.lista[max(0, pos - cuantos):pos][::-1]
+        img = cv2.imread(os.path.join(self.frames, "frame_%04d.jpg" % f))
+        if img is None:
+            raise ValueError("no se pudo leer el frame %d" % f)
+        seguidor = _crear_seguidor(cv2)
+        x1, y1, x2, y2 = caja
+        # OpenCV 5 wants whole pixels here, not the floats the review stores
+        seguidor.init(img, (int(x1), int(y1), int(round(x2 - x1)), int(round(y2 - y1))))
+        puestas, ultimo = 0, f
+        for g in orden:
+            im = cv2.imread(os.path.join(self.frames, "frame_%04d.jpg" % g))
+            if im is None:
+                break
+            ok, r = seguidor.update(im)
+            if not ok:
+                break
+            nueva = [float(r[0]), float(r[1]), float(r[0] + r[2]), float(r[1] + r[3])]
+            alto, ancho = im.shape[:2]
+            if nueva[0] < 0 or nueva[1] < 0 or nueva[2] > ancho or nueva[3] > alto:
+                break
+            if any(_solapa(nueva, c) > 0.4 for c in self._cajas_de_persona(g)):
+                ultimo = g
+                continue
+            try:
+                self.nuevas.setdefault(g, []).append(self._caja_valida(nueva))
+            except ValueError:
+                break
+            puestas += 1
+            ultimo = g
+        self._guardar_revision()
+        return {"puestas": puestas, "hasta": ultimo, "frames": len(orden)}
+
+    def _cajas_de_persona(self, f):
+        """Every box the review currently calls a person in a frame, drawn ones included."""
+        salida = []
+        for i in self.por_frame.get(f, []):
+            if self.final(i) == "persona":
+                salida.append(list(self._caja(i)))
+        for c in self.nuevas.get(f, []):
+            if not (len(c) > 4 and c[4] == "ignorar"):
+                salida.append(list(c[:4]))
+        return salida
 
     def mover(self, f, k, caja):
         """Replaces a drawn box, which is what dragging one of its corners does: a box that came out
@@ -959,6 +1042,9 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
   <p><b>Para ir mas rapido</b>, con el raton sobre una caja:<br>
     <span class="k">X</span> resuelve el par de ESA caja (sin raton encima, resuelve todo el frame).<br>
     <span class="k">C</span> copia la etiqueta de esa caja a las cajas iguales de los frames vecinos.<br>
+    <span class="k">S</span> sobre una caja que <b>dibujaste vos</b>: un seguidor la arrastra por los 40 frames
+    siguientes y la dibuja en cada uno, para no dibujar a mano a alguien que ningun detector propuso
+    (con <span class="k">Shift</span> va hacia atras). Deja propuestas: revisalas y corregi las que se desviaron.<br>
     <span class="k">F</span> salta al proximo frame con cajas encimadas o sin etiquetar. Todo se deshace con <span class="k">Z</span>.</p>
   <p>Un frame esta <b>revisado</b> cuando cada persona tiene UNA caja verde y nada mas es verde.
     Una caja corrida (piernas, sombra, media persona) de alguien que ya tiene la suya es <b>duplicado</b>.</p>
@@ -1294,6 +1380,18 @@ document.addEventListener('keydown', async ev => {
       deshacer.push(async () => { for (const [j, v] of r.antes) await pedir('/frames/caja', {i: j, v}); });
       aviso('"' + r.etiqueta + '" aplicado a ' + r.cambiadas + ' cajas iguales de los frames vecinos');
     } catch (e) {}
+    recargar();
+  }
+  else if (k === 's') {
+    // S over a drawn box: a tracker carries it forward so a person nobody proposed is drawn once,
+    // not once per frame. With shift it walks backwards instead.
+    const b = raton && bajo(raton);
+    if (!b || b.tipo !== 'nueva') { aviso('pone el raton sobre una caja que dibujaste y apreta S'); return; }
+    aviso('siguiendo la caja...');
+    try {
+      const r = await pedir('/frames/seguir', {f: datos.f, caja: b.caja, adelante: !ev.shiftKey, cuantos: 40});
+      aviso('puestas ' + r.puestas + ' cajas, hasta el frame ' + r.hasta + ' (revisalas y corregi las que se desviaron)');
+    } catch (e) { aviso('el seguidor no pudo: ' + e); }
     recargar();
   }
   else if (k === 'g') { ev.preventDefault(); document.getElementById('saltar').focus(); }
@@ -1724,6 +1822,9 @@ def servir(sesion, puerto):
                     elif self.path == "/frames/nueva_etiqueta":
                         sesion.nueva_etiqueta(int(d["f"]), int(d["k"]), d.get("v"))
                         r = {"status": "ok"}
+                    elif self.path == "/frames/seguir":
+                        r = sesion.seguir(int(d["f"]), d["caja"], bool(d.get("adelante", True)),
+                                          int(d.get("cuantos", 40)))
                     elif self.path == "/frames/mover":
                         sesion.mover(int(d["f"]), int(d["k"]), d["caja"])
                         r = {"status": "ok"}
