@@ -673,6 +673,58 @@ class Sesion:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(datos, fh, indent=1)
         os.replace(tmp, self.ruta_revision)
+        self._anotar_historia(datos)
+
+    def _anotar_historia(self, datos):
+        """Appends one line per save with what the review contains, and keeps a copy of the file.
+
+        Labelling mistakes are found long after they are made, and until now the only thing on disk was
+        the current answer: there was no way to ask when a box became a duplicate or how many people the
+        truth held yesterday. A line per save answers the first question by bracketing the change
+        between two counts, and the kept copies answer the second by being openable.
+
+        Copies are thinned as they age -- every save of the last hour, then one per hour, then one per
+        day -- so a long session does not leave thousands of files and a week-old state is still there.
+        """
+        import time
+        resumen = {"t": time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "revisados": len(datos["revisados"]),
+                   "correcciones": len(datos["correcciones"]),
+                   "ajustes": len(datos["ajustes"]),
+                   "dibujadas": sum(len(v) for v in datos["nuevas"].values()),
+                   "personas": sum(1 for i in self.por_frame for j in self.por_frame[i]
+                                   if self.final(j) == "persona")
+                              + sum(1 for v in datos["nuevas"].values() for c in v
+                                    if not (len(c) > 4 and c[4] == "ignorar"))}
+        with open(self.ruta_revision.replace(".json", "_historia.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(resumen) + chr(10))
+        copias = self.ruta_revision.replace(".json", "_copias")
+        os.makedirs(copias, exist_ok=True)
+        with open(os.path.join(copias, time.strftime("%Y%m%d_%H%M%S") + ".json"), "w", encoding="utf-8") as fh:
+            json.dump(datos, fh, indent=1)
+        self._ralear_copias(copias)
+
+    @staticmethod
+    def _ralear_copias(carpeta):
+        """Keeps every copy of the last hour, one per hour of the last day, and one per day before that."""
+        import time
+        ahora = time.time()
+        vistos, borrar = set(), []
+        for nombre in sorted(os.listdir(carpeta), reverse=True):
+            ruta = os.path.join(carpeta, nombre)
+            edad = ahora - os.path.getmtime(ruta)
+            if edad < 3600:
+                continue
+            cubo = nombre[:11] if edad < 86400 else nombre[:8]      # AAAAMMDD_HH or AAAAMMDD
+            if cubo in vistos:
+                borrar.append(ruta)
+            else:
+                vistos.add(cubo)
+        for ruta in borrar:
+            try:
+                os.remove(ruta)
+            except OSError:
+                pass
 
     def revisar_lote(self, frames):
         """Marks several frames reviewed at once, the mosaic's button; a frame that cannot be (a box
@@ -907,7 +959,7 @@ PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</t
 <p>Despues de los grupos, dos pasos cortos:
 <b>1.</b> <a href="/frames?solo=dobles" style="color:#93c5fd">frames donde una persona tiene dos cajas</a> (apretar D en la caja chica) &middot;
 <b>2.</b> <a href="/mosaico" style="color:#93c5fd">mosaico del resto</a> (mirar 24 a la vez; clic solo si falta o sobra algo) &middot;
-<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a> &middot;
+<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a> &middot; <a href="/vuelos">vuelos</a> &middot;
 <a href="/video" style="color:#93c5fd">video de las etiquetas</a> &middot; <a href="/sospechas" style="color:#93c5fd">sospechas del modelo</a></p>
 <p id="sueltas">Si en un grupo hay UN recorte mal, no hace falta partirlo: con el <b>raton encima de ese recorte</b>,
 <span class="k">P</span> persona <span class="k">N</span> no <span class="k">D</span> duplicado <span class="k">I</span> ignorar.
@@ -1051,7 +1103,7 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
   <p><b><a href="/frames?solo=pendientes">cola de pendientes &rarr;</a></b> (huecos, sin revisar, sin etiquetar y
     encimadas, uno tras otro)</p>
   <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a>
-    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/repaso">repaso ciego</a>
+    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/repaso">repaso ciego</a>
     &middot; <a href="/video">video</a> &middot; <a href="/sospechas">sospechas</a></p>
 </div>
 <script>
@@ -1520,7 +1572,7 @@ VIDEO = r"""<!doctype html><meta charset="utf-8"><title>Video de las etiquetas</
   <span id="estado"></span>
 </p>
 <p><a href="/">&larr; grupos</a> &middot; <a href="/frames">frames</a> &middot; <a href="/mosaico">mosaico</a>
- &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/sospechas">sospechas del modelo</a></p>
+ &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/sospechas">sospechas del modelo</a></p>
 <script>
 let lista = [], pos = 0, fps = 5, tarea = null, nombre = '';
 async function cargar() {
@@ -1578,7 +1630,7 @@ las cajas del etiquetado. La mayoria es ruido: lo que importa es si aparece una 
 <p id="cuenta"></p>
 <div class="rejilla" id="rejilla"></div>
 <p id="aviso"></p>
-<p><a href="/">&larr; grupos</a> &middot; <a href="/video">video</a> &middot; <a href="/chequeos">chequeos</a></p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/video">video</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/vuelos">vuelos</a></p>
 <script>
 async function cargar() {
   const e = await (await fetch('/sospechas/estado')).json();
@@ -1622,7 +1674,7 @@ igual la segunda vez, que es la forma honesta de decir que el etiquetado es cons
       onkeydown="if (event.key === 'Enter') responder()"> <button onclick="responder()">responder</button></p>
   <p id="veredicto"></p>
 </div>
-<p><a href="/">&larr; grupos</a> &middot; <a href="/chequeos">chequeos</a></p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/vuelos">vuelos</a></p>
 <script>
 let actual = null;
 async function cargar() {
@@ -1704,6 +1756,99 @@ cargar();
 """
 
 
+OPCIONES = {}          # what main() was told, so a flight opened from the page gets the same treatment
+
+
+def abrir_vuelo(nombre):
+    """Builds the session of another flight with the options this run was started with.
+
+    Restarting the tool to look at a second flight is what made mistakes easy to miss: comparing how a
+    person was boxed on two days meant killing the server, and nobody does that in the middle of a
+    review. The picker swaps the session instead; each flight keeps writing to its own files, so there
+    is nothing to lose in the swap.
+    """
+    if nombre not in VUELOS or len(VUELOS[nombre]) < 5:
+        raise ValueError("no conozco el vuelo %r" % nombre)
+    cajas, embs, frames, salida, lista = VUELOS[nombre][:5]
+    if not os.path.exists(cajas):
+        raise ValueError("el vuelo %s no tiene candidatas todavia" % nombre)
+    return Sesion(cajas, np.load(embs), frames, salida, OPCIONES.get("grupos", 30),
+                  None, None, identidad=OPCIONES.get("identidad", False),
+                  contexto=OPCIONES.get("contexto"), contexto_etiquetas=OPCIONES.get("contexto_etiquetas"),
+                  lista_frames=[int(l) for l in open(lista)] if os.path.exists(lista) else None,
+                  nombre=nombre, sospechas=OPCIONES.get("sospechas"))
+
+
+def resumen_vuelo(nombre):
+    """What a flight's labelling looks like, read from disk without loading it.
+
+    The flight picker has to say what is done and what is not, and loading a whole session to answer
+    that would cost the embeddings of every flight on every page view. Only the files are read.
+    """
+    cajas, _embs, frames, salida = VUELOS[nombre][:4]
+    lista_txt = VUELOS[nombre][4] if len(VUELOS[nombre]) > 4 else None
+    d = {"vuelo": nombre, "cajas": 0, "etiquetadas": 0, "personas": 0, "dibujadas": 0,
+         "frames": 0, "revisados": 0, "existe": os.path.exists(cajas)}
+    if not d["existe"]:
+        return d
+    with open(cajas, encoding="utf-8") as fh:
+        filas = list(csv.DictReader(fh))
+    d["cajas"] = len(filas)
+    etiquetas, revision = {}, {}
+    if os.path.exists(salida):
+        etiquetas = json.load(open(salida, encoding="utf-8")).get("etiquetas", {})
+    ruta_rev = salida.replace(".json", "_frames.json")
+    if os.path.exists(ruta_rev):
+        revision = json.load(open(ruta_rev, encoding="utf-8"))
+    final = lambda i: revision.get("correcciones", {}).get(str(i), etiquetas.get(str(i)))
+    d["etiquetadas"] = sum(1 for i in range(len(filas)) if final(i) is not None)
+    d["personas"] = sum(1 for i in range(len(filas)) if final(i) == "persona")
+    d["dibujadas"] = sum(len(v) for v in revision.get("nuevas", {}).values())
+    d["personas"] += sum(1 for v in revision.get("nuevas", {}).values() for c in v
+                         if not (len(c) > 4 and c[4] == "ignorar"))
+    lista = set(int(l) for l in open(lista_txt)) if lista_txt and os.path.exists(lista_txt) else set()
+    lista |= set(int(r["frame"]) for r in filas)
+    d["frames"] = len(lista)
+    d["revisados"] = len(set(int(x) for x in revision.get("revisados", [])) & lista)
+    d["historia"] = salida.replace(".json", "_frames_historia.jsonl")
+    return d
+
+
+PAGINA_VUELOS = """<!doctype html><meta charset="utf-8"><title>vuelos</title>
+<style>body{background:#0b1020;color:#e5e7eb;font:15px system-ui;margin:0;padding:22px}
+h1{font-size:20px;margin:0 0 6px} p.s{color:#9ca3af;margin:0 0 18px}
+table{border-collapse:collapse;width:100%;max-width:1100px} th,td{padding:9px 12px;text-align:right;border-bottom:1px solid #1f2937}
+th:first-child,td:first-child{text-align:left} tr.act td{background:#132033}
+a{color:#93c5fd;text-decoration:none} .b{background:#1d4ed8;color:#fff;padding:5px 12px;border-radius:6px;border:0;cursor:pointer}
+.ok{color:#4ade80} .no{color:#fca5a5}</style>
+<h1>Vuelos etiquetados</h1>
+<p class="s">El vuelo en negrita es el que esta abierto. Abrir otro cambia la sesion sin reiniciar nada: lo que
+estabas etiquetando ya quedo guardado en su propio archivo.</p>
+<div id="t">cargando...</div>
+<script>
+async function pintar() {
+  const d = await (await fetch('/vuelos.json')).json();
+  document.getElementById('t').innerHTML = '<table><tr><th>vuelo</th><th>frames</th><th>revisados</th>' +
+    '<th>cajas</th><th>etiquetadas</th><th>personas</th><th>dibujadas</th><th></th></tr>' +
+    d.vuelos.map(v => {
+      if (!v.existe) return `<tr><td>${v.vuelo}</td><td colspan="7" class="no">sin candidatas: correr proponer_cajas.py</td></tr>`;
+      const act = v.vuelo === d.activo;
+      const pend = v.frames - v.revisados;
+      return `<tr class="${act ? 'act' : ''}"><td>${act ? '<b>' + v.vuelo + '</b>' : v.vuelo}</td>
+        <td>${v.frames}</td><td class="${pend ? 'no' : 'ok'}">${v.revisados}${pend ? ' (faltan ' + pend + ')' : ''}</td>
+        <td>${v.cajas}</td><td>${v.etiquetadas}</td><td>${v.personas}</td><td>${v.dibujadas}</td>
+        <td>${act ? '<a href="/frames">abierto &rarr;</a>' : '<button class="b" onclick="abrir('' + v.vuelo + '')">abrir</button>'}</td></tr>`;
+    }).join('') + '</table>';
+}
+async function abrir(v) {
+  document.getElementById('t').innerHTML = 'abriendo ' + v + '...';
+  const r = await fetch('/vuelos/abrir', {method: 'POST', body: JSON.stringify({vuelo: v})});
+  if (r.ok) location.href = '/frames'; else { alert(await r.text()); pintar(); }
+}
+pintar();
+</script>"""
+
+
 def servir(sesion, puerto):
     class Manejador(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -1719,6 +1864,17 @@ def servir(sesion, puerto):
         def do_GET(self):
             if self.path == "/":
                 self._responder(PAGINA.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/vuelos":
+                self._responder(PAGINA_VUELOS.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/vuelos.json":
+                self._responder(json.dumps({"activo": sesion.nombre,
+                                            "vuelos": [resumen_vuelo(v) for v in sorted(VUELOS)
+                                                       if len(VUELOS[v]) > 4]}).encode("utf-8"))
+            elif self.path == "/historia.json":
+                ruta = sesion.ruta_revision.replace(".json", "_historia.jsonl")
+                lineas = open(ruta, encoding="utf-8").read().splitlines()[-200:] if os.path.exists(ruta) else []
+                self._responder(json.dumps({"vuelo": sesion.nombre,
+                                            "historia": [json.loads(l) for l in lineas if l.strip()]}).encode("utf-8"))
             elif self.path == "/estado":
                 with sesion.lock:
                     self._responder(json.dumps(sesion.estado()).encode("utf-8"))
@@ -1791,6 +1947,7 @@ def servir(sesion, puerto):
                 self._responder(b'{"error": "ruta"}', codigo=404)
 
         def do_POST(self):
+            nonlocal sesion          # the flight picker swaps it without restarting
             try:
                 d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 with sesion.lock:
@@ -1822,6 +1979,9 @@ def servir(sesion, puerto):
                     elif self.path == "/frames/nueva_etiqueta":
                         sesion.nueva_etiqueta(int(d["f"]), int(d["k"]), d.get("v"))
                         r = {"status": "ok"}
+                    elif self.path == "/vuelos/abrir":
+                        sesion = abrir_vuelo(str(d["vuelo"]))
+                        r = {"vuelo": sesion.nombre, "frames": len(sesion.lista)}
                     elif self.path == "/frames/seguir":
                         r = sesion.seguir(int(d["f"]), d["caja"], bool(d.get("adelante", True)),
                                           int(d.get("cuantos", 40)))
@@ -1879,6 +2039,8 @@ def main():
     faltan = [c for c in ("cajas", "embs", "frames", "salida") if getattr(args, c) is None]
     if faltan:
         ap.error("faltan %s (o usa --vuelo %s)" % (", ".join("--" + c for c in faltan), "/".join(sorted(VUELOS))))
+    OPCIONES.update({"grupos": args.grupos, "identidad": args.identidad, "contexto": args.contexto,
+                     "contexto_etiquetas": args.contexto_etiquetas, "sospechas": args.sospechas})
     s = Sesion(args.cajas, np.load(args.embs), args.frames, args.salida, args.grupos, args.desde, args.hasta,
                identidad=args.identidad, contexto=args.contexto, contexto_etiquetas=args.contexto_etiquetas,
                lista_frames=[int(l) for l in open(args.lista_frames) if l.strip()] if args.lista_frames else None,
