@@ -132,6 +132,11 @@ def solape_menor(a, b):
     return ix * iy / menor if menor > 0 else 0.0
 
 
+def etiqueta_nueva(c):
+    """The label of a drawn box: person unless it was marked to be ignored."""
+    return c[4] if len(c) > 4 else "persona"
+
+
 def contenida(a, b):
     """Fraction of box a that lies inside box b: 1 when a is entirely inside b."""
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
@@ -153,7 +158,7 @@ class Sesion:
     """The boxes, their groups and the labels given so far, with every change written to disk."""
 
     def __init__(self, cajas, emb, frames, salida, k, desde=None, hasta=None, identidad=False,
-                 contexto=None, contexto_etiquetas=None, lista_frames=None, nombre=None):
+                 contexto=None, contexto_etiquetas=None, lista_frames=None, nombre=None, sospechas=None):
         self.identidad = identidad
         # Shown on both pages, so two flights open in two tabs cannot be told apart only by their frames.
         self.nombre = nombre or os.path.splitext(os.path.basename(salida))[0]
@@ -181,6 +186,9 @@ class Sesion:
         self.grupos = {}
         for i, g in enumerate(agrupar(self.emb, k)):
             self.grupos.setdefault(int(g), []).append(i)
+        # Suspicions from the audit: olvidadas_<flight>.csv next to the boxes, if it was ever run.
+        self.ruta_sospechas = sospechas or os.path.join(os.path.dirname(os.path.abspath(cajas)),
+                                                        "olvidadas_%s.csv" % self.nombre)
         # Frame review: every frame with a candidate, plus the listed ones that have none.
         dentro = lambda f: (desde is None or f >= desde) and (hasta is None or f <= hasta)
         self.lista = sorted({int(f) for f in list(lista_frames or []) + list(self.por_frame) if dentro(int(f))})
@@ -191,7 +199,8 @@ class Sesion:
             local = {o: j for j, o in enumerate(self.orig)}
             self.revisados = {int(f) for f in r.get("revisados", [])}
             self.correcciones = {local[int(i)]: v for i, v in r.get("correcciones", {}).items() if int(i) in local}
-            self.nuevas = {int(f): [[float(x) for x in c] for c in v] for f, v in r.get("nuevas", {}).items()}
+            # A drawn box is [x1, y1, x2, y2] (a person) or [x1, y1, x2, y2, "ignorar"].
+            self.nuevas = {int(f): [[float(x) for x in c[:4]] + list(c[4:5]) for c in v] for f, v in r.get("nuevas", {}).items()}
             self.repaso = {int(f): int(n) for f, n in r.get("repaso", {}).items()}
 
     def estado(self):
@@ -281,7 +290,7 @@ class Sesion:
         """
         idx = self.por_frame.get(f, [])
         personas = [self._caja(i) for i in idx if self.final(i) == "persona"]
-        personas += [tuple(c) for c in self.nuevas.get(f, [])]
+        personas += [tuple(c[:4]) for c in self.nuevas.get(f, []) if etiqueta_nueva(c) == "persona"]
 
         def doble(b):
             return sum(solape_menor(b, p) >= 0.5 for p in personas) > 1   # the box itself counts once
@@ -289,7 +298,9 @@ class Sesion:
         cajas = [{"i": i, "caja": self._caja(i), "etiqueta": self.final(i), "corregida": i in self.correcciones,
                   "conf": float(self.filas[i].get("conf") or 0), "fuentes": self.filas[i].get("fuentes") or "",
                   "doble": self.final(i) == "persona" and doble(self._caja(i))} for i in idx]
-        nuevas = [{"k": k, "caja": c, "doble": doble(tuple(c))} for k, c in enumerate(self.nuevas.get(f, []))]
+        nuevas = [{"k": k, "caja": c[:4], "etiqueta": etiqueta_nueva(c),
+                   "doble": etiqueta_nueva(c) == "persona" and doble(tuple(c[:4]))}
+                  for k, c in enumerate(self.nuevas.get(f, []))]
         return {"f": f, "cajas": cajas, "nuevas": nuevas, "revisado": f in self.revisados,
                 "contexto": [list(c) for c in self.contexto.get(f, [])]}
 
@@ -327,7 +338,17 @@ class Sesion:
         too big or too small is fixed without drawing it again."""
         if not 0 <= k < len(self.nuevas.get(f, [])):
             raise ValueError("no hay caja dibujada %d en el frame %d" % (k, f))
-        self.nuevas[f][k] = self._caja_valida(caja)
+        self.nuevas[f][k] = self._caja_valida(caja) + list(self.nuevas[f][k][4:5])
+        self._guardar_revision()
+
+    def nueva_etiqueta(self, f, k, v):
+        """A drawn box is a person by default; "ignorar" is for what cannot be decided (a lone foot,
+        a blur), so the export blanks it instead of teaching it as background."""
+        if v not in ("persona", "ignorar"):
+            raise ValueError("una caja dibujada es persona o ignorar")
+        if not 0 <= k < len(self.nuevas.get(f, [])):
+            raise ValueError("no hay caja dibujada %d en el frame %d" % (k, f))
+        self.nuevas[f][k] = self.nuevas[f][k][:4] + ([] if v == "persona" else ["ignorar"])
         self._guardar_revision()
 
     def borrar(self, f, k):
@@ -376,7 +397,45 @@ class Sesion:
 
     def personas_en(self, f):
         """How many people the labels say frame f has: the answer the blind re-check compares against."""
-        return sum(self.final(i) == "persona" for i in self.por_frame.get(f, [])) + len(self.nuevas.get(f, []))
+        return (sum(self.final(i) == "persona" for i in self.por_frame.get(f, []))
+                + sum(etiqueta_nueva(c) == "persona" for c in self.nuevas.get(f, [])))
+
+    def sospechas(self):
+        """Boxes a stronger detector found where no label of ours lies, read from the audit CSV
+        (olvidadas_<flight>.csv next to the boxes). They are the places where a person could have been
+        left without a box: the check is worth nothing if it is never looked at, so the tool shows it.
+        """
+        if not self.ruta_sospechas or not os.path.exists(self.ruta_sospechas):
+            return {"nombre": self.nombre, "archivo": self.ruta_sospechas, "hay_archivo": False, "frames": []}
+        filas = []
+        for r in csv.DictReader(open(self.ruta_sospechas, encoding="utf-8")):
+            f = int(r["frame"])
+            b = tuple(float(r[c]) for c in ("x1", "y1", "x2", "y2"))
+            etiquetadas = [self._caja(i) for i in self.por_frame.get(f, [])] + [tuple(c[:4]) for c in self.nuevas.get(f, [])]
+            if any(solape_menor(b, c) >= 0.3 for c in etiquetadas):
+                continue          # already covered by a label, most likely drawn after the audit ran
+            filas.append({"f": f, "conf": float(r["conf"]), "caja": list(b), "revisado": f in self.revisados})
+        filas.sort(key=lambda d: -d["conf"])
+        return {"nombre": self.nombre, "archivo": self.ruta_sospechas, "hay_archivo": True, "frames": filas}
+
+    def recorte_caja(self, f, caja, lado=200):
+        """A crop around an arbitrary box of frame f, with that box drawn: what the suspicions page shows."""
+        import cv2
+        img = cv2.imread(os.path.join(self.frames, "frame_%04d.jpg" % f))
+        if img is None:
+            raise FileNotFoundError(f)
+        for i in self.por_frame.get(f, []):
+            b = self._caja(i)
+            cv2.rectangle(img, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (160, 160, 160), 2)
+        for c in self.nuevas.get(f, []):
+            cv2.rectangle(img, (int(c[0]), int(c[1])), (int(c[2]), int(c[3])), (80, 220, 80), 2)
+        x1, y1, x2, y2 = caja
+        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 230, 255), 3)
+        cx, cy, L = (x1 + x2) / 2, (y1 + y2) / 2, max(x2 - x1, y2 - y1, 60) * 3
+        h, w = img.shape[:2]
+        X, Y = int(max(0, min(w - L, cx - L / 2))), int(max(0, min(h - L, cy - L / 2)))
+        c = cv2.resize(img[Y:Y + int(L), X:X + int(L)], (lado, lado))
+        return cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
 
     def repaso_estado(self):
         """The blind re-check: a fixed sample of the reviewed frames, asked about again without showing
@@ -460,9 +519,10 @@ class Sesion:
         esc = ancho / float(img.shape[1])
         img = cv2.resize(img, (ancho, int(img.shape[0] * esc)))
         d = self.frame_cajas(f)
-        cajas = [(b["caja"], b["etiqueta"]) for b in d["cajas"]] + [(tuple(n["caja"]), "persona") for n in d["nuevas"]]
+        cajas = [(b["caja"], b["etiqueta"]) for b in d["cajas"]] + [(tuple(n["caja"]), n["etiqueta"]) for n in d["nuevas"]]
         for (x1, y1, x2, y2), e in cajas:
-            color, grosor = {"persona": ((80, 220, 80), 2), None: ((0, 220, 255), 2)}.get(e, ((60, 60, 230), 1))
+            color, grosor = {"persona": ((80, 220, 80), 2), None: ((0, 220, 255), 2),
+                             "ignorar": ((250, 170, 90), 1)}.get(e, ((60, 60, 230), 1))
             cv2.rectangle(img, (int(x1 * esc), int(y1 * esc)), (int(x2 * esc), int(y2 * esc)), color, grosor)
         return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes()
 
@@ -556,7 +616,8 @@ PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</t
 <p>Despues de los grupos, dos pasos cortos:
 <b>1.</b> <a href="/frames?solo=dobles" style="color:#93c5fd">frames donde una persona tiene dos cajas</a> (apretar D en la caja chica) &middot;
 <b>2.</b> <a href="/mosaico" style="color:#93c5fd">mosaico del resto</a> (mirar 24 a la vez; clic solo si falta o sobra algo) &middot;
-<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a></p>
+<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a> &middot;
+<a href="/video" style="color:#93c5fd">video de las etiquetas</a> &middot; <a href="/sospechas" style="color:#93c5fd">sospechas del modelo</a></p>
 <p id="sueltas">Si en un grupo hay UN recorte mal, no hace falta partirlo: con el <b>raton encima de ese recorte</b>,
 <span class="k">P</span> persona <span class="k">N</span> no <span class="k">D</span> duplicado <span class="k">I</span> ignorar.
 Corrige esa caja sola, queda con el borde de su color y el grupo no se toca. <span class="k">Z</span> deshace.</p>
@@ -668,12 +729,14 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
     <span class="k">I</span> ignorar.<br>
     <b>Arrastrar</b>: dibuja la caja de una persona que ninguna caja cubre.<br>
     <b>Arrastrar una esquina</b> de una caja dibujada: la agranda o la achica.<br>
-    <b>Clic derecho</b> en una caja dibujada: la borra. <span class="k">R</span> desmarca revisado.
-    <span class="k">Z</span> deshace lo ultimo (etiqueta, caja dibujada o borrada).</p>
+    <b>Clic derecho</b> en una caja dibujada: la borra. Con el raton encima de una dibujada,
+    <span class="k">I</span> la pasa a ignorar y <span class="k">P</span> la devuelve a persona.
+    <span class="k">R</span> desmarca revisado. <span class="k">Z</span> deshace lo ultimo.</p>
   <p>Un frame esta <b>revisado</b> cuando cada persona tiene UNA caja verde y nada mas es verde.
     Una caja corrida (piernas, sombra, media persona) de alguien que ya tiene la suya es <b>duplicado</b>.</p>
   <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a>
-    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/repaso">repaso ciego</a></p>
+    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/repaso">repaso ciego</a>
+    &middot; <a href="/video">video</a> &middot; <a href="/sospechas">sospechas</a></p>
 </div>
 <script>
 const cv = document.getElementById('cv'), cx = cv.getContext('2d');
@@ -735,7 +798,8 @@ function dibujar(g, ox, oy, s, w, h) {
          e && e !== 'persona' ? [4, 3] : null, {duplicado: 'dup', ignorar: 'ign'}[e] || null);
   });
   datos.nuevas.forEach(b => {
-    rect(b.caja, b.doble ? '#fb923c' : '#22c55e', b.doble ? 3 : 2, null, '+');
+    const ign = b.etiqueta === 'ignorar';
+    rect(b.caja, b.doble ? '#fb923c' : (ign ? '#60a5fa' : '#22c55e'), b.doble ? 3 : 2, ign ? [4, 3] : null, ign ? 'ign' : '+');
     const [x1, y1, x2, y2] = b.caja;   // handles to grab: a drawn box can be resized by a corner
     [[x1, y1], [x2, y1], [x1, y2], [x2, y2]].forEach(([x, y]) => {
       g.fillStyle = '#22c55e';
@@ -886,6 +950,13 @@ document.addEventListener('keydown', async ev => {
   else if (raton && TECLA[k]) {
     const b = bajo(raton);
     if (b && b.tipo === 'caja') poner(b.i, TECLA[k]);
+    // A drawn box can only be a person or something to ignore.
+    else if (b && b.tipo === 'nueva' && (TECLA[k] === 'persona' || TECLA[k] === 'ignorar')) {
+      const f = datos.f, antes = datos.nuevas.find(n => n.k === b.k).etiqueta;
+      deshacer.push(() => pedir('/frames/nueva_etiqueta', {f, k: b.k, v: antes}));
+      try { await pedir('/frames/nueva_etiqueta', {f, k: b.k, v: TECLA[k]}); } catch (e) {}
+      recargar();
+    }
   }
 });
 window.addEventListener('resize', pintar);
@@ -943,6 +1014,114 @@ async function aceptar() {
   cargar();
 }
 window.addEventListener('focus', cargar);   // back from fixing a frame in the other tab: redraw what changed
+cargar();
+</script>
+"""
+
+
+VIDEO = r"""<!doctype html><meta charset="utf-8"><title>Video de las etiquetas</title>
+<style>
+  body { background:#12141a; color:#e6e9ef; font:14px system-ui; margin:0; padding:12px 16px; }
+  img { width:100%; max-width:1280px; border-radius:6px; display:block; background:#000; }
+  button { font:600 13px system-ui; padding:6px 12px; margin:4px 6px 4px 0; border-radius:99px;
+           border:1px solid #3a3f4b; background:#1c1f27; color:#e6e9ef; cursor:pointer; }
+  input[type=range] { width:min(1280px, 100%); }
+  a { color:#93c5fd; } .k { display:inline-block; min-width:1.3em; padding:0 4px; border:1px solid #3a3f4b;
+      border-radius:4px; text-align:center; font:12px monospace; }
+</style>
+<h2 id="titulo">Video de las etiquetas</h2>
+<p>Los frames revisados, uno tras otro, con las cajas puestas: <b style="color:#4ade80">verde</b> persona,
+<span style="color:#f87171">rojo</span> no, <span style="color:#9ca3af">gris</span> duplicado,
+<span style="color:#60a5fa">azul</span> ignorar. Si ves a alguien sin caja verde, <b>para</b> y apreta
+"corregir este frame": se abre ahi mismo para dibujarla.</p>
+<img id="foto" alt="">
+<input type="range" id="barra" min="0" value="0" oninput="pos = +this.value; pintar()">
+<p>
+  <button onclick="alternar()" id="bplay">reproducir <span class="k">espacio</span></button>
+  <button onclick="paso(-1)"><span class="k">&larr;</span></button>
+  <button onclick="paso(1)"><span class="k">&rarr;</span></button>
+  <button onclick="velocidad(-1)">mas lento</button>
+  <button onclick="velocidad(1)">mas rapido</button>
+  <button onclick="window.open('/frames#' + lista[pos].f)">corregir este frame</button>
+  <span id="estado"></span>
+</p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/frames">frames</a> &middot; <a href="/mosaico">mosaico</a>
+ &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/sospechas">sospechas del modelo</a></p>
+<script>
+let lista = [], pos = 0, fps = 5, tarea = null, nombre = '';
+async function cargar() {
+  const e = await (await fetch('/frames/estado')).json();
+  nombre = e.nombre; document.title = nombre + ' - video';
+  document.getElementById('titulo').textContent = nombre + ' - video de las etiquetas';
+  lista = e.frames.filter(x => x.revisado);
+  if (!lista.length) lista = e.frames;          // nothing reviewed yet: show them all anyway
+  document.getElementById('barra').max = lista.length - 1;
+  for (let k = 1; k < Math.min(8, lista.length); k++) new Image().src = '/miniatura/' + lista[k].f;
+  pintar();
+}
+function pintar() {
+  const x = lista[pos];
+  document.getElementById('foto').src = '/miniatura/' + x.f;
+  document.getElementById('barra').value = pos;
+  document.getElementById('estado').textContent =
+    `frame ${x.f} · ${pos + 1} de ${lista.length} · ${x.personas} persona${x.personas === 1 ? '' : 's'} · ${fps} fps`;
+  if (pos + 3 < lista.length) new Image().src = '/miniatura/' + lista[pos + 3].f;
+}
+function paso(d) { pos = Math.max(0, Math.min(lista.length - 1, pos + d)); pintar(); }
+function alternar() {
+  if (tarea) { clearInterval(tarea); tarea = null; document.getElementById('bplay').textContent = 'reproducir'; return; }
+  document.getElementById('bplay').textContent = 'pausa';
+  tarea = setInterval(() => { if (pos + 1 >= lista.length) return alternar(); paso(1); }, 1000 / fps);
+}
+function velocidad(d) {
+  fps = Math.max(1, Math.min(20, fps + d * (fps < 5 ? 1 : 2)));
+  if (tarea) { alternar(); alternar(); } else pintar();
+}
+document.addEventListener('keydown', ev => {
+  if (ev.key === ' ') { ev.preventDefault(); alternar(); }
+  else if (ev.key === 'ArrowRight') paso(1);
+  else if (ev.key === 'ArrowLeft') paso(-1);
+});
+cargar();
+</script>
+"""
+
+
+SOSPECHAS = r"""<!doctype html><meta charset="utf-8"><title>Sospechas del modelo</title>
+<style>
+  body { background:#12141a; color:#e6e9ef; font:14px system-ui; margin:0; padding:12px 16px; }
+  .rejilla { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+  .rejilla a img { width:200px; height:200px; border-radius:4px; border:2px solid #2a2e38; display:block; }
+  .rejilla a:hover img { border-color:#fb923c; }
+  .rejilla div { text-align:center; font-size:12px; color:#9ca3af; }
+  a { color:#93c5fd; } #aviso { color:#fb923c; }
+</style>
+<h2 id="titulo">Sospechas del modelo</h2>
+<p>Cajas que un detector mas fuerte (RF-DETR y COCO, con el umbral mas bajo que el del etiquetado) encontro
+<b>donde no hay ninguna caja nuestra</b>. En <b style="color:#ffe600">amarillo</b> lo que vio el modelo; en gris
+las cajas del etiquetado. La mayoria es ruido: lo que importa es si aparece una persona que quedo sin caja.
+<b>Clic</b> en una: se abre ese frame para dibujarla. Las que ya tienen caja desaparecen solas de esta lista.</p>
+<p id="cuenta"></p>
+<div class="rejilla" id="rejilla"></div>
+<p id="aviso"></p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/video">video</a> &middot; <a href="/chequeos">chequeos</a></p>
+<script>
+async function cargar() {
+  const e = await (await fetch('/sospechas/estado')).json();
+  document.title = e.nombre + ' - sospechas';
+  document.getElementById('titulo').textContent = e.nombre + ' - sospechas del modelo';
+  if (!e.hay_archivo) {
+    document.getElementById('aviso').textContent = 'todavia no hay auditoria para este vuelo (falta ' + e.archivo + ')';
+    return;
+  }
+  const top = e.frames.slice(0, 60);
+  document.getElementById('cuenta').textContent =
+    `${e.frames.length} cajas del modelo sin etiqueta nuestra` + (e.frames.length > 60 ? ', se muestran las 60 de mayor confianza' : '');
+  document.getElementById('rejilla').innerHTML = top.map(s =>
+    `<a href="/frames#${s.f}" target="_blank"><img loading="lazy" src="/sospecha/${s.f}/${s.caja.map(v => Math.round(v)).join(',')}?v=${Date.now()}">
+     <div>f${s.f} · ${s.conf.toFixed(2)}</div></a>`).join('');
+}
+window.addEventListener('focus', cargar);
 cargar();
 </script>
 """
@@ -1088,6 +1267,23 @@ def servir(sesion, puerto):
             elif self.path == "/chequeos/estado":
                 with sesion.lock:
                     self._responder(json.dumps(sesion.chequeos()).encode("utf-8"))
+            elif self.path == "/video":
+                self._responder(VIDEO.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/sospechas":
+                self._responder(SOSPECHAS.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/sospechas/estado":
+                with sesion.lock:
+                    self._responder(json.dumps(sesion.sospechas()).encode("utf-8"))
+            elif self.path.startswith("/sospecha/"):
+                try:
+                    partes = self.path.split("?")[0].split("/")
+                    f = int(partes[2])
+                    caja = [float(x) for x in partes[3].split(",")]
+                    with sesion.lock:
+                        cuerpo = sesion.recorte_caja(f, caja)
+                    self._responder(cuerpo, "image/jpeg")
+                except Exception:
+                    self._responder(b'{"error": "recorte"}', codigo=404)
             elif self.path == "/repaso":
                 self._responder(REPASO_PAGINA.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path == "/repaso/estado":
@@ -1134,6 +1330,9 @@ def servir(sesion, puerto):
                         r = {"status": "ok"}
                     elif self.path == "/frames/nueva":
                         r = {"k": sesion.nueva(int(d["f"]), d["caja"])}
+                    elif self.path == "/frames/nueva_etiqueta":
+                        sesion.nueva_etiqueta(int(d["f"]), int(d["k"]), d.get("v"))
+                        r = {"status": "ok"}
                     elif self.path == "/frames/mover":
                         sesion.mover(int(d["f"]), int(d["k"]), d["caja"])
                         r = {"status": "ok"}
@@ -1175,6 +1374,8 @@ def main():
                     help="una letra por persona real (X no es persona, ? no se distingue) en vez de persona/no")
     ap.add_argument("--lista-frames", help="frames a revisar en /frames, uno por linea (proponer_cajas.py la escribe)")
     ap.add_argument("--nombre", help="nombre del vuelo en las paginas (por defecto, el del archivo de salida)")
+    ap.add_argument("--sospechas", help="CSV frame,conf,x1,y1,x2,y2 de la auditoria con un modelo mas fuerte "
+                                       "(por defecto olvidadas_<nombre>.csv junto a --cajas)")
     args = ap.parse_args()
     if args.vuelo:
         raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1189,7 +1390,7 @@ def main():
     s = Sesion(args.cajas, np.load(args.embs), args.frames, args.salida, args.grupos, args.desde, args.hasta,
                identidad=args.identidad, contexto=args.contexto, contexto_etiquetas=args.contexto_etiquetas,
                lista_frames=[int(l) for l in open(args.lista_frames) if l.strip()] if args.lista_frames else None,
-               nombre=args.nombre)
+               nombre=args.nombre, sospechas=args.sospechas)
     print("%d cajas en %d grupos, %d ya etiquetadas -> http://127.0.0.1:%d/  (frame por frame: /frames, %d de %d revisados)"
           % (len(s.filas), len(s.grupos), len(s.etiquetas), args.puerto, len(s.revisados), len(s.lista)), flush=True)
     servir(s, args.puerto)

@@ -293,7 +293,8 @@ try:
 
     # Resizing a drawn box by a corner: the box is replaced, not added, and a box of 2 px is still refused.
     pedir('/frames/mover', {'f': 9, 'k': 0, 'caja': [100, 100, 150, 220]})
-    assert pedir('/frames/9')['nuevas'] == [{'k': 0, 'caja': [100.0, 100.0, 150.0, 220.0], 'doble': False}], pedir('/frames/9')
+    assert pedir('/frames/9')['nuevas'] == [{'k': 0, 'caja': [100.0, 100.0, 150.0, 220.0],
+                                             'etiqueta': 'persona', 'doble': False}], pedir('/frames/9')
     rechaza('/frames/mover', {'f': 9, 'k': 5, 'caja': [10, 10, 60, 90]}, 'mover una caja que no existe')
     rechaza('/frames/mover', {'f': 9, 'k': 0, 'caja': [10, 10, 12, 12]}, 'achicar a 2 px')
     print('  redimensionar        : la caja 0 del frame 9 pasa a 100,100-150,220; k=5 y 2 px dan 400')
@@ -310,6 +311,32 @@ try:
     pedir('/repaso', {'f': f, 'n': tenia})
     e = pedir('/repaso/estado')
     assert e['contestadas'] == 1 and e['acuerdo'] == 1 and e['pendiente'] is None, e
+    # A drawn box is a person unless it is marked to be ignored, and then it stops counting as one.
+    pedir('/frames/nueva_etiqueta', {'f': 9, 'k': 0, 'v': 'ignorar'})
+    d9 = pedir('/frames/9')
+    assert d9['nuevas'][0]['etiqueta'] == 'ignorar' and not d9['nuevas'][0]['doble'], d9
+    guardado = json.load(open(os.path.join(dirt, 'etiquetas_frames.json'), encoding='utf-8'))['nuevas']['9'][0]
+    assert guardado[4] == 'ignorar' and len(guardado) == 5, guardado
+    rechaza('/frames/nueva_etiqueta', {'f': 9, 'k': 0, 'v': 'duplicado'}, 'una dibujada no puede ser duplicado')
+    rechaza('/frames/nueva_etiqueta', {'f': 9, 'k': 3, 'v': 'ignorar'}, 'etiquetar una dibujada que no existe')
+    print('  dibujada a ignorar   : queda "ignorar" en la pagina y en el archivo; duplicado y k=3 dan 400')
+
+    # The suspicions panel: what a stronger detector found where no label of ours lies. One of the two
+    # rows sits on the drawn box, so it must not be listed; the other is in an empty part of the frame.
+    with open(os.path.join(dirt, 'olvidadas_vuelo_prueba.csv'), 'w', newline='') as fh:
+        w = csv.writer(fh); w.writerow(['frame', 'conf', 'x1', 'y1', 'x2', 'y2'])
+        w.writerow([9, 0.91, 105, 105, 145, 215])
+        w.writerow([9, 0.44, 300, 200, 340, 260])
+    s = pedir('/sospechas/estado')
+    assert s['hay_archivo'] and [x['caja'] for x in s['frames']] == [[300.0, 200.0, 340.0, 260.0]], s
+    print('  sospechas del modelo : la que cae sobre una caja nuestra se filtra; queda %d de 2' % len(s['frames']))
+    jpg = pedir('/sospecha/9/300,200,340,260', crudo=True)
+    assert jpg[:2] == b'\xff\xd8'
+    assert 'sospechas' in pedir('/sospechas', crudo=True).decode('utf-8')
+    assert 'video' in pedir('/video', crudo=True).decode('utf-8')
+    print('  paginas nuevas       : /sospechas con recorte JPEG y /video sirven')
+    pedir('/frames/nueva_etiqueta', {'f': 9, 'k': 0, 'v': 'persona'})
+
     rechaza('/repaso', {'f': 1, 'n': 1}, 'repasar un frame sin revisar')
     rechaza('/repaso', {'f': f, 'n': -2}, 'un numero negativo de personas')
     print('  repaso ciego         : el frame %d no revela su cuenta antes de contestar; 99 -> acuerdo 0, %d -> acuerdo 1' % (f, tenia))
