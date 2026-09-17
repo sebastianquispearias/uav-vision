@@ -32,3 +32,6 @@ docs/madurez_vuelo3.mp4
 # The operator's verdicts and crops, written by gs_mapa.py: flight data, not source.
 veredictos/
 docs/blanco_movil.mp4
+
+# Regenerado por scripts/replay_vuelo3.py --candidatos: describe la corrida, no es fuente.
+demo/data/candidatos_vuelo_02ago.json

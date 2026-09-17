@@ -586,6 +586,21 @@ pois = reportes[-1]["pois"]
 # dwell on, which is a property of the flight path, not of the detector.
 todos = protocol.identity.candidates(preliminary=True)
 maduros = sum(1 for c in todos if c.get("mature"))
+
+# --candidatos=file.json writes every candidate together with the ids of the tracks merged into
+# it. That link is what lets a candidate be traced back to the detections that fed it, and from
+# there to the label a human gave each box, which is how scripts/personas_encontradas.py scores
+# the chain by person instead of by box. It is written from the live run rather than kept as a
+# file on disk, so the score always describes the identity layer as it stands, not as it once was.
+_CANDS = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--candidatos=")), None)
+if _CANDS:
+    _guardables = ("x", "y", "n_obs", "conf", "mature", "tracks", "mobile", "cls")
+    with open(_CANDS, "w") as _f:
+        json.dump([{k: (sorted(v) if isinstance(v, (set, frozenset)) else v)
+                    for k, v in c.items() if k in _guardables}
+                   for c in protocol.identity.candidates(preliminary=True, with_tracks=True)],
+                  _f, indent=1, default=str)
+    print("candidatos con sus pistas -> %s" % _CANDS)
 print("")
 if VIVO:
     print("  la camara sirvio: %s"
