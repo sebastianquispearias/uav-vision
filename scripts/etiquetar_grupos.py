@@ -1663,6 +1663,8 @@ VIDEO = r"""<!doctype html><meta charset="utf-8"><title>Video de las etiquetas</
       border-radius:4px; text-align:center; font:12px monospace; }
 </style>
 <h2 id="titulo">Video de las etiquetas</h2>
+<p><a href="/vuelos">&larr; elegir otro vuelo</a> &middot; <a href="/tira">tira</a> &middot;
+   <a href="/frames">frame por frame</a></p>
 <p>Los frames revisados, uno tras otro, con las cajas puestas: <b style="color:#4ade80">verde</b> persona,
 <span style="color:#f87171">rojo</span> no, <span style="color:#9ca3af">gris</span> duplicado,
 <span style="color:#60a5fa">azul</span> ignorar. Si ves a alguien sin caja verde, <b>para</b> y apreta
@@ -1977,8 +1979,10 @@ th:first-child,td:first-child{text-align:left} tr.act td{background:#132033}
 a{color:#93c5fd;text-decoration:none} .b{background:#1d4ed8;color:#fff;padding:5px 12px;border-radius:6px;border:0;cursor:pointer}
 .ok{color:#4ade80} .no{color:#fca5a5}</style>
 <h1>Vuelos etiquetados</h1>
-<p class="s">El vuelo en negrita es el que esta abierto. Abrir otro cambia la sesion sin reiniciar nada: lo que
-estabas etiquetando ya quedo guardado en su propio archivo.</p>
+<p class="s">El vuelo en negrita es el que esta abierto. Cualquier boton cambia la sesion a ese vuelo sin
+reiniciar nada: lo que estabas etiquetando ya quedo guardado en su propio archivo.<br>
+<b>ver video</b> reproduce sus frames revisados con las cajas puestas, que es la forma de juzgar el etiquetado
+entero de un vuelo de corrido; <b>tira</b> muestra muchos frames a la vez; <b>etiquetar</b> abre el frame por frame.</p>
 <div id="t">cargando...</div>
 <script>
 async function pintar() {
@@ -1992,13 +1996,15 @@ async function pintar() {
       return `<tr class="${act ? 'act' : ''}"><td>${act ? '<b>' + v.vuelo + '</b>' : v.vuelo}</td>
         <td>${v.frames}</td><td class="${pend ? 'no' : 'ok'}">${v.revisados}${pend ? ' (faltan ' + pend + ')' : ''}</td>
         <td>${v.cajas}</td><td>${v.etiquetadas}</td><td>${v.personas}</td><td>${v.dibujadas}</td>
-        <td>${act ? '<a href="/frames">abierto &rarr;</a>' : '<button class="b" onclick="abrir('' + v.vuelo + '')">abrir</button>'}</td></tr>`;
+        <td><button class="b" onclick="abrir('${v.vuelo}', '/video')">ver video</button>
+            <button class="b" style="background:#334155" onclick="abrir('${v.vuelo}', '/tira')">tira</button>
+            <button class="b" style="background:#334155" onclick="abrir('${v.vuelo}', '/frames')">etiquetar</button></td></tr>`;
     }).join('') + '</table>';
 }
-async function abrir(v) {
+async function abrir(v, destino) {
   document.getElementById('t').innerHTML = 'abriendo ' + v + '...';
   const r = await fetch('/vuelos/abrir', {method: 'POST', body: JSON.stringify({vuelo: v})});
-  if (r.ok) location.href = '/frames'; else { alert(await r.text()); pintar(); }
+  if (r.ok) location.href = destino || '/frames'; else { alert(await r.text()); pintar(); }
 }
 pintar();
 </script>"""
