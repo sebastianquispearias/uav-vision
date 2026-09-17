@@ -1,7 +1,8 @@
 # Los cuatro documentos de este sistema
 
-`ESTADO_SESION.md`, en la raíz, es el **registro cronológico**: sirve para retomar el trabajo, no para
-consultar. Estos cuatro son para consultar, y cada uno contesta una pregunta distinta.
+`ESTADO_SESION.md`, en la raíz, **se lee primero y siempre**: es el punto de retomada, con lo que está
+en vuelo y los hilos abiertos. Estos cuatro documentos no lo reemplazan, lo complementan: son las
+conclusiones sacadas del orden cronológico para poder consultarlas sueltas y mostrarlas a alguien.
 
 | Documento | Contesta |
 |---|---|
