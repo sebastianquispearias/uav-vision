@@ -101,6 +101,23 @@ for _nombre, _frames in (("26jul", os.path.join(_RAIZ_DATOS, "20260726_195524", 
     VUELOS[_nombre] = (os.path.join(_ENT, "candidatas_%s.csv" % _nombre), os.path.join(_ENT, "candidatas_%s_embs.npy" % _nombre),
                        _frames, os.path.join(_ENT, "etiquetas_detector_%s.json" % _nombre),
                        os.path.join(_ENT, "candidatas_%s_frames.txt" % _nombre))
+# How tall a person came out, by altitude, MEASURED over the 2609 labelled boxes of these flights rather
+# than derived from the optics: the camera looks forward and down, so at low altitude the person is far
+# away along the ground and does not grow the way a nadir view would predict. 3-8 m: 183 px, 8-12: 168,
+# 12-18: 109, 18-30: 62, 30-99: 42. The test's failing regime is 62-65 px, which is 18-30 m.
+_PERSONA_POR_ALTURA = [(5.5, 183), (10.0, 168), (15.0, 109), (24.0, 62), (40.0, 42)]
+
+
+def persona_px(alt):
+    """Roughly how many pixels tall a person is at this altitude, read off the flights already labelled."""
+    if alt <= _PERSONA_POR_ALTURA[0][0]:
+        return _PERSONA_POR_ALTURA[0][1]
+    for (a0, p0), (a1, p1) in zip(_PERSONA_POR_ALTURA, _PERSONA_POR_ALTURA[1:]):
+        if alt <= a1:
+            return int(round(p0 + (p1 - p0) * (alt - a0) / (a1 - a0)))
+    return _PERSONA_POR_ALTURA[-1][1]
+
+
 def _crear_seguidor(cv2):
     """The best correlation tracker this OpenCV has, by name rather than by version.
 
@@ -666,6 +683,59 @@ class Sesion:
             self.revisados.discard(f)
         self._guardar_revision()
 
+    def alturas(self, cada=5):
+        """The flight's altitude against its frames, with what is already reviewed marked on it.
+
+        Choosing where to label has been a number typed into a command line by whoever happened to be
+        looking, and that is how a stretch at three metres got proposed and a stretch at twenty-five
+        did not. The flight's own shape answers it: altitude over time says where the drone was high,
+        and the marks say what has already been taken, so the choice is made on what is there instead
+        of on a memory of it.
+        """
+        ruta = os.path.join(os.path.dirname(os.path.abspath(self.frames)), "frames.csv")
+        if not os.path.exists(ruta):
+            return {"hay": False, "motivo": "este vuelo no tiene frames.csv al lado de la carpeta de frames"}
+        alt = {}
+        with open(ruta, encoding="utf-8") as fh:
+            for r in csv.DictReader(fh):
+                try:
+                    alt[int(r["frame"])] = float(r["alt_agl"])
+                except (KeyError, ValueError):
+                    pass
+        if not alt:
+            return {"hay": False, "motivo": "frames.csv no trae alt_agl"}
+        fs = sorted(alt)[::max(1, cada)]
+        enlista = set(self.lista)
+        return {"hay": True, "vuelo": self.nombre, "cada": cada,
+                "frames": fs, "alt": [round(alt[f], 1) for f in fs],
+                "en_lista": [f in enlista for f in fs],
+                "revisado": [f in self.revisados for f in fs],
+                "total": len(alt), "max": round(max(alt.values()), 1)}
+
+    def tramo(self, desde, hasta):
+        """What labelling a stretch would buy: how much of it is new, and how big a person looks there."""
+        ruta = os.path.join(os.path.dirname(os.path.abspath(self.frames)), "frames.csv")
+        alt = {}
+        if os.path.exists(ruta):
+            with open(ruta, encoding="utf-8") as fh:
+                for r in csv.DictReader(fh):
+                    try:
+                        alt[int(r["frame"])] = float(r["alt_agl"])
+                    except (KeyError, ValueError):
+                        pass
+        fs = [f for f in sorted(alt) if desde <= f <= hasta]
+        if not fs:
+            return {"frames": 0}
+        alturas = sorted(alt[f] for f in fs)
+        mediana = alturas[len(alturas) // 2]
+        aire = [f for f in fs if alt[f] > 3.0]
+        return {"frames": len(fs), "en_aire": len(aire), "alt_mediana": round(mediana, 1),
+                "alt_max": round(max(alturas), 1),
+                "ya_en_lista": len([f for f in fs if f in set(self.lista)]),
+                "ya_revisados": len([f for f in fs if f in self.revisados]),
+                "persona_px": persona_px(mediana),
+                "segundos": None}
+
     def tira_datos(self, desde, hasta, columnas=8, filas=4):
         """Where to cut, and what is in each cut, for a run of frames seen all at once.
 
@@ -1066,7 +1136,7 @@ PAGINA = r"""<!doctype html><meta charset="utf-8"><title>Etiquetar por grupos</t
 <p>Despues de los grupos, dos pasos cortos:
 <b>1.</b> <a href="/frames?solo=dobles" style="color:#93c5fd">frames donde una persona tiene dos cajas</a> (apretar D en la caja chica) &middot;
 <b>2.</b> <a href="/mosaico" style="color:#93c5fd">mosaico del resto</a> (mirar 24 a la vez; clic solo si falta o sobra algo) &middot;
-<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a> &middot;
+<a href="/frames" style="color:#93c5fd">todos, uno por uno</a> &middot; <a href="/chequeos" style="color:#93c5fd">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/plan">donde etiquetar</a> &middot; <a href="/vuelos">vuelos</a> &middot;
 <a href="/video" style="color:#93c5fd">video de las etiquetas</a> &middot; <a href="/sospechas" style="color:#93c5fd">sospechas del modelo</a></p>
 <p id="sueltas">Si en un grupo hay UN recorte mal, no hace falta partirlo: con el <b>raton encima de ese recorte</b>,
 <span class="k">P</span> persona <span class="k">N</span> no <span class="k">D</span> duplicado <span class="k">I</span> ignorar.
@@ -1210,7 +1280,7 @@ FRAMES = r"""<!doctype html><meta charset="utf-8"><title>Revisar frames</title>
   <p><b><a href="/frames?solo=pendientes">cola de pendientes &rarr;</a></b> (huecos, sin revisar, sin etiquetar y
     encimadas, uno tras otro)</p>
   <p><a href="/">&larr; grupos</a> &middot; <a href="/frames?solo=dobles">solo dobles</a> &middot; <a href="/mosaico">mosaico</a>
-    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/repaso">repaso ciego</a>
+    &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/plan">donde etiquetar</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/repaso">repaso ciego</a>
     &middot; <a href="/video">video</a> &middot; <a href="/sospechas">sospechas</a></p>
 </div>
 <script>
@@ -1681,7 +1751,7 @@ VIDEO = r"""<!doctype html><meta charset="utf-8"><title>Video de las etiquetas</
   <span id="estado"></span>
 </p>
 <p><a href="/">&larr; grupos</a> &middot; <a href="/frames">frames</a> &middot; <a href="/mosaico">mosaico</a>
- &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/sospechas">sospechas del modelo</a></p>
+ &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/plan">donde etiquetar</a> &middot; <a href="/vuelos">vuelos</a> &middot; <a href="/sospechas">sospechas del modelo</a></p>
 <script>
 let lista = [], pos = 0, fps = 5, tarea = null, nombre = '';
 async function cargar() {
@@ -1739,7 +1809,7 @@ las cajas del etiquetado. La mayoria es ruido: lo que importa es si aparece una 
 <p id="cuenta"></p>
 <div class="rejilla" id="rejilla"></div>
 <p id="aviso"></p>
-<p><a href="/">&larr; grupos</a> &middot; <a href="/video">video</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a></p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/video">video</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/plan">donde etiquetar</a> &middot; <a href="/vuelos">vuelos</a></p>
 <script>
 async function cargar() {
   const e = await (await fetch('/sospechas/estado')).json();
@@ -1783,7 +1853,7 @@ igual la segunda vez, que es la forma honesta de decir que el etiquetado es cons
       onkeydown="if (event.key === 'Enter') responder()"> <button onclick="responder()">responder</button></p>
   <p id="veredicto"></p>
 </div>
-<p><a href="/">&larr; grupos</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a></p>
+<p><a href="/">&larr; grupos</a> &middot; <a href="/chequeos">chequeos</a> &middot; <a href="/tira">tira</a> &middot; <a href="/plan">donde etiquetar</a> &middot; <a href="/vuelos">vuelos</a></p>
 <script>
 let actual = null;
 async function cargar() {
@@ -1923,6 +1993,80 @@ def resumen_vuelo(nombre):
     return d
 
 
+PAGINA_PLAN = """<!doctype html><meta charset="utf-8"><title>donde etiquetar</title>
+<style>body{background:#0b1020;color:#e5e7eb;font:14px system-ui;margin:0;padding:18px}
+h1{font-size:18px;margin:0 0 4px} p.s{color:#9ca3af;margin:0 0 12px;max-width:1000px}
+svg{background:#0f172a;border-radius:8px;cursor:crosshair;touch-action:none}
+a{color:#93c5fd;text-decoration:none} code{background:#111827;padding:3px 7px;border-radius:5px;display:inline-block}
+table{border-collapse:collapse;margin-top:10px} td{padding:3px 14px 3px 0} td:first-child{color:#9ca3af}
+.g{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px} .g img{border:2px solid #1f2937;border-radius:4px}</style>
+<h1>Donde etiquetar: el vuelo visto por su altura</h1>
+<p class="s">Cada punto es un frame. <b style="color:#4ade80">Verde</b>: ya revisado en ESTE vuelo.
+<b style="color:#60a5fa">Azul</b>: esta en su lista pero sin revisar. <b style="color:#6b7280">Gris</b>: nunca se
+propuso. La linea punteada son 12 m, por debajo de la cual la persona se ve grande y ya tenemos de sobra.
+<b>Arrastra sobre el grafico</b> para elegir un tramo: abajo te digo cuanto material nuevo trae, de que tamano
+se veria la persona ahi, y el comando exacto para proponer sus cajas.</p>
+<div id="w"></div>
+<div id="r"></div>
+<p style="margin-top:14px"><a href="/vuelos">vuelos</a> &middot; <a href="/tira">tira</a> &middot;
+   <a href="/video">video</a> &middot; <a href="/frames">frame por frame</a></p>
+<script>
+const W = 1180, H = 260, M = 34;
+let D = null, a0 = null, a1 = null;
+async function cargar() {
+  D = await (await fetch('/plan.json')).json();
+  if (!D.hay) { document.getElementById('w').textContent = D.motivo; return; }
+  const n = D.frames.length, fmin = D.frames[0], fmax = D.frames[n - 1], amax = Math.max(12, D.max) * 1.1;
+  const X = f => M + (f - fmin) / (fmax - fmin) * (W - M - 10);
+  const Y = a => H - M - a / amax * (H - M - 12);
+  let pts = '';
+  for (let i = 0; i < n; i++) {
+    const c = D.revisado[i] ? '#4ade80' : (D.en_lista[i] ? '#60a5fa' : '#6b7280');
+    pts += `<rect x="${X(D.frames[i]).toFixed(1)}" y="${Y(D.alt[i]).toFixed(1)}" width="2" height="2" fill="${c}"/>`;
+  }
+  let ejes = `<line x1="${M}" y1="${Y(12)}" x2="${W - 10}" y2="${Y(12)}" stroke="#facc15" stroke-dasharray="4 4" opacity=".6"/>
+    <text x="${W - 60}" y="${Y(12) - 4}" fill="#facc15" font-size="11">12 m</text>`;
+  for (const a of [0, 10, 20, 30, 40]) if (a <= amax) ejes += `<text x="4" y="${Y(a) + 4}" fill="#6b7280" font-size="11">${a}</text>`;
+  ejes += `<text x="${M}" y="${H - 8}" fill="#6b7280" font-size="11">frame ${fmin}</text>
+           <text x="${W - 90}" y="${H - 8}" fill="#6b7280" font-size="11">${fmax}</text>`;
+  document.getElementById('w').innerHTML =
+    `<svg id="g" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${ejes}${pts}<rect id="sel" fill="#3b82f6" opacity=".25" y="0" height="${H - M}" width="0" x="0"/></svg>
+     <p style="color:#9ca3af">vuelo <b>${D.vuelo}</b>, ${D.total} frames, altura maxima ${D.max} m
+     &nbsp;(un punto cada ${D.cada} frames)</p>`;
+  const g = document.getElementById('g');
+  const fde = ev => { const b = g.getBoundingClientRect();
+    const x = (ev.clientX - b.left) * W / b.width;
+    return Math.round(fmin + Math.max(0, Math.min(1, (x - M) / (W - M - 10))) * (fmax - fmin)); };
+  g.onpointerdown = ev => { a0 = fde(ev); a1 = null; g.setPointerCapture(ev.pointerId); };
+  g.onpointermove = ev => { if (a0 === null) return; a1 = fde(ev);
+    const x0 = X(Math.min(a0, a1)), x1 = X(Math.max(a0, a1));
+    const s = document.getElementById('sel'); s.setAttribute('x', x0); s.setAttribute('width', Math.max(1, x1 - x0)); };
+  g.onpointerup = () => { if (a0 !== null && a1 !== null) ver(Math.min(a0, a1), Math.max(a0, a1)); a0 = null; };
+}
+async function ver(d, h) {
+  const r = await (await fetch(`/plan/tramo.json?desde=${d}&hasta=${h}`)).json();
+  const nuevo = r.frames - r.ya_revisados;
+  document.getElementById('r').innerHTML = `<table>
+    <tr><td>tramo</td><td><b>${d} a ${h}</b></td></tr>
+    <tr><td>frames</td><td>${r.frames} (${r.en_aire} con el dron en el aire)</td></tr>
+    <tr><td>altura</td><td>mediana <b>${r.alt_mediana} m</b>, maxima ${r.alt_max} m</td></tr>
+    <tr><td>la persona se veria</td><td><b>${r.persona_px} px</b> de alto
+      ${r.persona_px < 90 ? '<span style="color:#4ade80">(regimen que falla: eso es lo que falta)</span>'
+                          : '<span style="color:#fca5a5">(ya tenemos de sobra a este tamano)</span>'}</td></tr>
+    <tr><td>ya revisados</td><td>${r.ya_revisados} &nbsp; <b>nuevo: ${nuevo}</b></td></tr></table>
+    <p>Para proponer sus cajas:<br><code>python scripts/proponer_cajas.py --frames &lt;carpeta&gt;
+    --salida &lt;prefijo&gt; --paso 3 --desde ${d} --hasta ${h}</code></p>
+    <div class="g" id="p"></div>`;
+  const paso = Math.max(1, Math.floor((h - d) / 8));
+  let html = '';
+  for (let f = d; f <= h && html.split('<img').length <= 8; f += paso)
+    html += `<a href="/frames#${f}"><img src="/tira/celda/${f}?cx=0&cy=0&lado=0&tam=200"></a>`;
+  document.getElementById('p').innerHTML = html;
+}
+cargar();
+</script>"""
+
+
 PAGINA_TIRA = """<!doctype html><meta charset="utf-8"><title>tira</title>
 <style>body{background:#0b1020;color:#e5e7eb;font:14px system-ui;margin:0;padding:18px}
 h1{font-size:18px;margin:0 0 4px} p.s{color:#9ca3af;margin:0 0 14px;max-width:900px}
@@ -1948,7 +2092,7 @@ para ver si una caja se despego de su persona, pero esconde a quien este fuera d
    (para ver si una caja <b>se despego</b>)</label>
    &nbsp;<button onclick="pintar()">ver</button>
    &nbsp;<span id="q" style="color:#9ca3af"></span>
-   &nbsp;&middot;&nbsp; <a href="/frames">frame por frame</a> &middot; <a href="/tira">tira</a> &middot; <a href="/vuelos">vuelos</a></p>
+   &nbsp;&middot;&nbsp; <a href="/frames">frame por frame</a> &middot; <a href="/tira">tira</a> &middot; <a href="/plan">donde etiquetar</a> &middot; <a href="/vuelos">vuelos</a></p>
 <div class="g" id="g"></div>
 <script>
 async function pintar() {
@@ -2025,6 +2169,15 @@ def servir(sesion, puerto):
         def do_GET(self):
             if self.path == "/":
                 self._responder(PAGINA.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/plan":
+                self._responder(PAGINA_PLAN.encode("utf-8"), "text/html; charset=utf-8")
+            elif self.path == "/plan.json":
+                with sesion.lock:
+                    self._responder(json.dumps(sesion.alturas()).encode("utf-8"))
+            elif self.path.startswith("/plan/tramo.json"):
+                q = parse_qs(urlparse(self.path).query)
+                with sesion.lock:
+                    self._responder(json.dumps(sesion.tramo(int(q["desde"][0]), int(q["hasta"][0]))).encode("utf-8"))
             elif self.path == "/tira" or self.path.startswith("/tira#"):
                 self._responder(PAGINA_TIRA.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path.startswith("/tira.json"):
