@@ -122,6 +122,15 @@ class SimulatedCamera:
         return [{"px": px, "py": py, "conf": conf, "cls": self.cls}]
 
 
+def _solapan(a, b, umbral: float = 0.4) -> bool:
+    """Whether two boxes are the same find, by intersection over union."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return union > 0 and inter / union >= umbral
+
+
 class OnboardCamera:
     """
     Real camera: captures a frame with picamera2 and runs a YOLO detector on it.
@@ -165,8 +174,23 @@ class OnboardCamera:
         crop_side_px: int = 128,
         crop_quality: int = 70,
         crop_margin: float = 0.25,
+        tile_every: int = 0,
+        tile_side: int = 960,
+        tile_conf: float = 0.55,
     ) -> None:
         self.model = model
+        # A second pass over tiles of the frame at native resolution, every Nth frame; 0 turns it off.
+        # The frame is downscaled to the model's input before inference, so a person 55 px tall arrives
+        # as 28 and the ones already at the limit disappear. Slicing skips that reduction. It costs six
+        # times the inference, which is why it is not run on every frame and does not need to be: the
+        # identity layer asks for eleven sightings in thirty six seconds, a tenth of the frames, so one
+        # tiled pass in five keeps the average near the budget while the cheap pass still runs always.
+        # Measured on the 02ago flight with the tile threshold chosen on the 01ago flights: recall
+        # 55.0 -> 57.3 % overall and 39.5 -> 42.4 % where the drone is high, at the same precision.
+        self.tile_every = int(tile_every)
+        self.tile_side = int(tile_side)
+        self.tile_conf = float(tile_conf)
+        self._n_frames = 0
         self.threshold = threshold
         self.low_band = low_band
         self.classes = frozenset(classes) if classes is not None else self.CLASES_PERSONA
@@ -382,6 +406,40 @@ class OnboardCamera:
 
     # -- contract ---------------------------------------------------------
 
+    def _cajas_de_fichas(self, frame, ya_vistas) -> List[tuple]:
+        """People the whole-frame pass missed, found by running the tiles of the frame at native size.
+
+        Only boxes that land where the frame found nothing are returned. Replacing the frame's own
+        detections with the tiles' costs precision, because a tile decides on a fragment of the scene
+        and calls a shadow a person more readily; adding to them does not, which is what the flight's
+        own footage showed. The tiles are also asked for more confidence than the frame is: alone they
+        are the less reliable witness, and the threshold that keeps them useful was chosen on the
+        01ago flights, never on the flight this is judged against.
+        """
+        if not self.tile_every or self._n_frames % self.tile_every:
+            return []
+        alto, ancho = frame.shape[:2]
+        lado = min(self.tile_side, alto, ancho)
+        salto = int(lado * 0.8)
+        previas = [b.xyxy[0].cpu().numpy() for b in ya_vistas]
+        salida: List[tuple] = []
+        ys = sorted({*range(0, max(1, alto - lado + 1), salto), max(0, alto - lado)})
+        xs = sorted({*range(0, max(1, ancho - lado + 1), salto), max(0, ancho - lado)})
+        for y0 in ys:
+            for x0 in xs:
+                ficha = frame[y0:y0 + lado, x0:x0 + lado]
+                for caja in self._yolo(ficha, verbose=False, conf=self.tile_conf)[0].boxes:
+                    nombre = self._yolo.names[int(caja.cls[0])]
+                    if nombre not in self.classes:
+                        continue
+                    b = caja.xyxy[0].cpu().numpy()
+                    xy = np.array([b[0] + x0, b[1] + y0, b[2] + x0, b[3] + y0], dtype=float)
+                    if any(_solapan(xy, otra) for otra in previas):
+                        continue
+                    previas.append(xy)
+                    salida.append((xy, float(caja.conf[0]), nombre))
+        return salida
+
     def detect(self, pos: Sequence[float], yaw: float) -> List[Detection]:
         # pos and yaw are unused: the real photo already contains what it contains. They are in
         # the signature so the contract matches the simulated camera.
@@ -414,6 +472,8 @@ class OnboardCamera:
         if self._tracker is not None and self.low_band is not None:
             piso = min(self.threshold, self.low_band)
         resultados = self._yolo(frame, verbose=False, conf=piso)
+        self._n_frames += 1
+        extra = self._cajas_de_fichas(frame, resultados[0].boxes)
 
         detections: List[Detection] = []
         cajas: List[np.ndarray] = []
@@ -431,6 +491,11 @@ class OnboardCamera:
                 # not actionable: the ground station cannot tell a person from a car.
                 "cls": self._yolo.names[int(caja.cls[0])],
             })
+            cajas.append(xyxy)
+        for xyxy, conf, nombre in extra:
+            x1, _y1, x2, y2 = xyxy
+            detections.append({"px": float((x1 + x2) / 2), "py": float(y2),
+                               "conf": round(float(conf), 3), "cls": nombre})
             cajas.append(xyxy)
 
         fingerprints: List[np.ndarray] = []

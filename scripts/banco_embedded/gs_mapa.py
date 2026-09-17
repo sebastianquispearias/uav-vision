@@ -232,6 +232,7 @@ def _rastro(fuente, pos):
 # A drone that has not reported for this long is not seeing anything now. Its targets stop counting
 # towards the map: a pin labelled "seen by 1+2" must not outlive one of the two going silent. It is
 # the same window the drones apply to what they hear from each other. --callado-s changes it.
+CLIP_DESCARTA = False          # --clip-descarta: sacar de la lista lo que CLIP llama no-persona
 DRON_CALLADO_S = 15.0
 
 
@@ -251,7 +252,13 @@ def pois_vigentes(ahora):
     for q in pois:
         q['lat'], q['lng'] = a_latlng(q['x'], q['y'], ESTADO['origen'])
     # What CLIP doubts goes to the end of the queue, and nothing else moves: the sort is stable
-    # and a POI without a score is never demoted. Nothing is removed either -- the operator decides.
+    # and a POI without a score is never demoted. With --clip-descarta it is dropped instead of
+    # demoted, which on the 02ago flight removed the bag and the cone and left every person standing:
+    # phantoms 2 -> 1 with 5 of 5 people kept. Off by default because hiding a point the operator never
+    # saw is their call and not the system's, and because CLIP still misses the harder clutter -- the
+    # red object on that flight scored 1.81, above the threshold, and looks like a person by size too.
+    if CLIP_DESCARTA:
+        pois = [q for q in pois if not q.get('clip_no_persona')]
     pois.sort(key=lambda q: bool(q.get('clip_no_persona')))
     return pois
 
@@ -1243,10 +1250,16 @@ if __name__ == '__main__':
     ap.add_argument('--clip', action='store_true',
                     help='puntua cada crop con CLIP: los "probable no persona" van al final de la '
                          'lista, marcados, sin ocultarse. Necesita open_clip (venv de entrenamiento)')
+    ap.add_argument('--clip-descarta', action='store_true',
+                    help='ademas de marcarlos, SACA de la lista los "probable no persona". Medido sobre '
+                         'el vuelo del 02ago: tira la bolsa y el cono, los fantasmas pasan de 2 a 1 y no '
+                         'se pierde ninguna de las 5 personas. Opcional a proposito: esconder algo que el '
+                         'operador no vio es una decision suya, no del sistema')
     ap.add_argument('--clip-umbral', type=float, default=None,
                     help='umbral del puntaje CLIP (por defecto 1.496, fijado con los vuelos del 01ago)')
     args = ap.parse_args()
     DRON_CALLADO_S = args.callado_s
+    CLIP_DESCARTA = bool(args.clip_descarta)
     if args.clip:
         # Imported only when asked for: the station stays droppable anywhere without torch.
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
