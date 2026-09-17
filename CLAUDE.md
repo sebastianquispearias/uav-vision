@@ -40,8 +40,11 @@ behaviour it claims were not true. Keep them that way: a test that cannot fail p
   explains *what the thing is*. No session notes with dates inside the source — those go to
   `ESTADO_SESION.md`. The repo is read by the LAC group, in English.
 - **Never `git add -A`.** A second Claude Code window may be working on this same tree. Stage
-  explicit paths. `uav_vision/vision_protocol.py` and `tests/test_vision_protocol.py` are the
-  other window's territory; coordinate before touching them.
+  explicit paths. Whether a second window is actually open is a fact to check, not to assume:
+  `git log -2 --format='%ad %an' --date=short -- <file>` and `git status <file>` answer it in
+  seconds. On 16sep a session refused to touch `vision_protocol.py` on the strength of this note
+  alone, when the file had been untouched for two days and the repo had a single author; the note
+  described one afternoon and was read as a standing fact.
 - **No `Co-Authored-By: Claude`** and no mention of Claude in commit messages. This repo is
   shown to the group as the author's own work.
 - **Measure, don't argue.** Before fixing a parameter or accepting a change, find data already

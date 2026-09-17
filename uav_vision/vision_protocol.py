@@ -370,6 +370,9 @@ class VisionProtocol(IProtocol):
         if m.get("type") == "vision_buscar":
             self.apply_search_order(m.get("clases"), m.get("v"), m.get("epoca"))
             return
+        if m.get("type") == "vision_mirar":
+            self.send_frame(m.get("para"))
+            return
         if m.get("type") != "vision_poi":
             return
         quien = m.get("sender")
@@ -379,6 +382,35 @@ class VisionProtocol(IProtocol):
             "t": self.provider.current_time(),
             "pois": m.get("pois") or [],
         }
+
+    def send_frame(self, para=None) -> bool:
+        """Sends one frame, once, because somebody on the ground asked to look at it.
+
+        The detector that flies is the one that fits in the power budget, and it finds fewer people
+        than one that does not have to: on the 02ago flight, at the altitude where this system is
+        meant to work, the aircraft's detector found 46 % of the people and RF-DETR on a laptop found
+        90 % of them, with better precision. That detector will never fly -- it takes a second and a
+        half per frame against thirty five milliseconds -- but there is no reason the ground cannot
+        run it on a frame the aircraft sends when an operator wants a second opinion about a spot.
+
+        One frame on request, never a stream. A frame is about 300 KB, so at three per second the
+        video alone is seven megabits and would sit on top of the telemetry on the same link; asked
+        for by hand it is one transfer, and the operator is not asking three times a second.
+        """
+        if self.camera is None:
+            return False
+        marco = getattr(self.camera, "ultimo_marco_jpeg", None)
+        datos = marco() if callable(marco) else None
+        if not datos:
+            return False
+        import base64
+        self.provider.send_communication_command(BroadcastMessageCommand(json.dumps(
+            {"type": "vision_marco", "sender": self.provider.get_id(), "para": para,
+             "t": self.provider.current_time(),
+             "jpeg": base64.b64encode(datos).decode("ascii"),
+             "pos": [round(float(v), 2) for v in self._position] if self._position is not None else None,
+             "yaw": round(float(self.yaw_source()), 2) if self.yaw_source is not None else None})))
+        return True
 
     def apply_search_order(self, clases, v, epoch=None) -> bool:
         """

@@ -191,6 +191,7 @@ class OnboardCamera:
         self.tile_side = int(tile_side)
         self.tile_conf = float(tile_conf)
         self._n_frames = 0
+        self._ultimo_frame = None
         self.threshold = threshold
         self.low_band = low_band
         self.classes = frozenset(classes) if classes is not None else self.CLASES_PERSONA
@@ -406,6 +407,20 @@ class OnboardCamera:
 
     # -- contract ---------------------------------------------------------
 
+    def ultimo_marco_jpeg(self, calidad: int = 85) -> Optional[bytes]:
+        """The last frame the detector looked at, encoded, for whoever asks to look at it themselves.
+
+        It is the frame the detector SAW and not a fresh capture, so what the ground judges is the same
+        picture the aircraft judged: a new capture seconds later would answer a different question and
+        quietly excuse a miss. Returns nothing before the first detection rather than an empty image,
+        because an empty image looks like an answer.
+        """
+        if self._ultimo_frame is None:
+            return None
+        import cv2          # kept lazy like the rest of the file: the station imports this module too
+        ok, buf = cv2.imencode(".jpg", self._ultimo_frame, [cv2.IMWRITE_JPEG_QUALITY, int(calidad)])
+        return buf.tobytes() if ok else None
+
     def _cajas_de_fichas(self, frame, ya_vistas) -> List[tuple]:
         """People the whole-frame pass missed, found by running the tiles of the frame at native size.
 
@@ -471,6 +486,7 @@ class OnboardCamera:
         piso = self.threshold
         if self._tracker is not None and self.low_band is not None:
             piso = min(self.threshold, self.low_band)
+        self._ultimo_frame = frame
         resultados = self._yolo(frame, verbose=False, conf=piso)
         self._n_frames += 1
         extra = self._cajas_de_fichas(frame, resultados[0].boxes)
