@@ -16,14 +16,20 @@ construyó el 16sep con las letras que el usuario asignó caja por caja.
 | | detector que vuela |
 |---|---|
 | personas reportadas | **5 de 7** |
-| fantasmas | **2** |
-| error del mejor POI | **1,92 m** |
-| candidatos formados | 13 |
+| fantasmas | **6** |
+| error del mejor POI | **2,29 m** |
+| candidatos formados | 15 |
+
+Esos son los números del vuelo tal como quedó grabado, que es lo que trae el repositorio y lo que
+corre quien lo clone. Hasta el 17sep este documento publicaba 2 fantasmas y 1,92 m: esa fila no salía
+del vuelo sino de una **re-detección offline** de los mismos fotogramas, con 2655 cajas en vez de las
+2637 que se grabaron. Se reproduce, y está más abajo junto a la adaptación y las fichas, pero no es
+lo que voló ni lo que sale al correr este repositorio.
 
 Las dos personas que faltan (D y E) tienen 2 y 5 cajas en todo el vuelo: no se encuentran **ni con un
 detector perfecto**, porque el umbral de evidencia las descarta a propósito.
 
-Se reproduce con `scratchpad/personas_encontradas.py`.
+Se reproduce con `scripts/personas_encontradas.py`, y `tests/test_personas_encontradas.py` lo fija.
 
 ## De quién es cada problema
 
@@ -81,7 +87,7 @@ Video: `docs/yolo26_vs_rfdetr.mp4`.
 | Mejora | Qué da | Estado |
 |---|---|---|
 | CLIP como segundo juez | fantasmas 2 → 1, sin perder personas | en la estación, opcional con `--clip-descarta` |
-| Cuadro entero + fichas cada 5 frames | recall 55,0 → 57,3 total y 39,5 → 42,4 en el balcón, misma precisión | en `camera.py`, apagado por defecto |
+| Cuadro entero + fichas cada 5 frames | recall 55,0 → 57,3 total y 39,5 → 42,4 en el balcón, misma precisión, pero **ni una persona más** en el marcador de producto | en `camera.py`, apagado por defecto |
 | Umbral bajo solo en la ventana del objetivo | recall 43,9 → 60,7 % sobre el objetivo, sin coste de cómputo | sin implementar |
 
 El umbral de las fichas (0,55) se eligió en los vuelos del 01ago, no en el test, y validación eligió
@@ -105,7 +111,39 @@ el detector ya sabía dónde estaba el borde.
 Requisito sin el cual no funciona: **conservar las 10 clases de VisDrone** en el dataset. Con una sola
 clase Ultralytics reinicializa la cabeza de clasificación y todo colapsa.
 
-Video: `docs/base_vs_adaptado.mp4`. Falta medirlo con el marcador de personas y fantasmas.
+Video: `docs/base_vs_adaptado.mp4`.
+
+## Las dos mejoras, juzgadas por personas y fantasmas
+
+Medido el 17sep. Los tres caches de detecciones se regeneraron sobre **los mismos 1659 fotogramas**,
+porque cambiar el conjunto cambiaría la cadencia que ve el seguidor y la comparación dejaría de ser
+sobre el detector. Los tres pasan por el seguidor que vuela (BoT-SORT con compensación de movimiento)
+y por la misma cadena de identidad.
+
+```
+                        base (re-deteccion)   + fichas cada 5   adaptado a la ESCENA
+  cajas conf>=0.25            2655                 2678              3629  (+37 %)
+  pistas / con id           44 / 1889            43 / 1899         75 / 2222
+  candidatos                    13                   12                22
+  personas reportadas       5 de 7               5 de 7            5 de 7
+  cuales                    A B C G H            A B C G H         A B C G H
+  FANTASMAS                      2                    2                 8
+  sin juzgar                     2                    2                 5
+  error del POI            1,92 m               2,49 m            1,12 m
+  fragmentacion            A(3) G(2)            A(2) G(2)         A(3) G(1)
+```
+
+**Las fichas no pagan.** Suman 23 cajas sobre 2655, no encuentran ni una persona más, no agregan
+fantasmas, y el punto sale 57 cm peor. Lo único que mejoran es que el operador aparece en dos puntos
+en vez de tres. Eso cuesta seis veces el cómputo en el fotograma con fichas.
+
+**La adaptación es un compromiso, no una mejora.** No encuentra ni una persona más, las mismas cinco
+y las mismas letras; **cuadruplica los fantasmas**, de 2 a 8; y **acerca el punto un 42 %**, de 1,92 a
+1,12 m. Los 12 puntos de precisión por caja que cuesta adaptar sí se convirtieron en puntos falsos que
+alguien tiene que ir a descartar. Quién gana ese compromiso depende de la misión, no de la métrica.
+
+Se reproduce con `scripts/personas_encontradas.py` sobre los tres caches, que quedaron en
+`../drone-geolocation/entrenamiento/cadena_02ago/`.
 
 ## La cadena completa
 
@@ -129,5 +167,4 @@ cola por verificar: 27,7 -> 4,0 por hora con CLIP
 
 - El costo en la Pi de todo lo nuevo (fichas, cuadro bajo demanda, adaptación).
 - Nada de lo nuevo corriendo en vuelo real.
-- La adaptación juzgada con personas y fantasmas en vez de cajas.
 - Cualquier cosa en un segundo vuelo, otro día, otro lugar.

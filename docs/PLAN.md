@@ -18,21 +18,31 @@ operador, y al menos una posición topografiada que no sea la del operador.
 **Ayuda que existe:** la página `/plan` de la herramienta de etiquetado dibuja la altura contra los
 frames y dice, del tramo que elijas, cuánto es nuevo y de qué tamaño se vería la persona ahí.
 
-### 2. Medir en la Pi todo lo que se agregó
+### 2. Medir en la Pi el cuadro bajo demanda
 
-Nada de lo nuevo corrió nunca en el aire. La Pi tarda 206 ms por cuadro y las fichas cuestan 6x en
-una máquina mucho más rápida.
+Nada de lo nuevo corrió nunca en el aire. La Pi tarda 206 ms por cuadro.
 
-**Listo cuando:** `<= 330 ms/frame` medido en la Pi con el modelo congelado, las fichas encendidas
-cada 5 cuadros y el cuadro bajo demanda respondiendo.
+**Listo cuando:** `<= 330 ms/frame` medido en la Pi con el modelo congelado y el cuadro bajo demanda
+respondiendo.
 
-### 3. Juzgar las mejoras nuevas con el marcador de producto
+**Las fichas salieron de este punto el 17sep.** Medirlas en la Pi era caro y ya no hace falta
+decidirlo ahí: por el marcador de producto no compran ni una persona, no quitan ningún fantasma y
+alejan el punto 57 cm, a cambio de seis veces el cómputo. El número está en `RESULTADOS.md`. Si
+alguna vez se encienden, se mide entonces.
 
-La adaptación paga 12 puntos de precisión y las fichas algo de precisión también. Eso **puede
-significar fantasmas nuevos**, que es lo que el operador sufre, y hoy solo está medido en cajas.
+### 3. Juzgar las mejoras nuevas con el marcador de producto — HECHO el 17sep
 
-**Listo cuando:** cada mejora tiene su fila en la tabla de personas y fantasmas.
-**Comando:** `scratchpad/personas_encontradas.py`.
+Se temía que los 12 puntos de precisión que paga la adaptación fueran fantasmas nuevos. **Lo eran:**
+de 2 a 8. Y a cambio el punto se acerca un 42 %, de 1,92 a 1,12 m, así que es un compromiso que hay
+que elegir, no una mejora que se aplica. Las fichas no compran ninguna persona.
+
+La tabla está en `RESULTADOS.md`. El marcador dejó de vivir en una carpeta temporal: es
+`scripts/personas_encontradas.py`, con `tests/test_personas_encontradas.py` fijándolo, y los
+candidatos se regeneran con `scripts/replay_vuelo3.py --candidatos=`, así que puntúa el código de hoy
+y no una corrida congelada.
+
+**Lo que queda abierto:** decidir si la adaptación se enciende, y con qué salvaguarda. Como dice el
+final de este documento, el modo de fallo es silencioso y hay que poder volver al modelo original.
 
 ### 4. RF-DETR en tierra, de punta a punta
 
