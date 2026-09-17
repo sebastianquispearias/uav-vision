@@ -110,8 +110,121 @@ ESTADO = {
     'rastros': {},
     'frame_actual': None,
     'frames_dir': None,
+
+    # The ground's second opinion, one entry per drone: what the operator asked for and what came
+    # back. Never the picture itself, which is served from disk by /segunda.jpg: a 1920x1080 frame
+    # is 300 KB, and carrying it inside a state poll that runs every second would be four megabits
+    # of the same image for as long as the operator looks at it.
+    'segunda': {},
 }
 CANDADO = threading.Lock()
+
+# Where the second opinion runs. It is a separate process on purpose: RF-DETR lives in the training
+# venv and this station has to stay droppable on a laptop with nothing installed.
+SEGUNDA = None
+PYTHON_RFDETR = os.path.join('..', 'drone-geolocation', 'entrenamiento', 'venv', 'Scripts',
+                             'python.exe')
+
+
+class SegundaOpinion:
+    """Keeps RF-DETR loaded in its own process so that a click costs a third of a second.
+
+    Measured on this laptop: loading the model takes 17.3 s, the first frame 1.5 s while CUDA warms
+    up, and every frame after that 0.29 s. Starting a process per request would therefore answer a
+    click in twenty seconds. The acceptance criterion for this feature is five, so the process is
+    started once, when the station boots, and the operator never waits for the model.
+
+    It speaks the line protocol of segunda_opinion.py --servidor. A worker that dies (no venv, no
+    GPU, no rfdetr) is reported as an error on the page rather than crashing the station: the map
+    has to keep working for an operator who has no second detector at all.
+    """
+
+    def __init__(self, python, carpeta):
+        self.python = python
+        self.carpeta = carpeta
+        self.proceso = None
+        self.listo = False
+        self.error = None
+        self.candado = threading.Lock()
+
+    def arrancar(self):
+        import subprocess
+        guion = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'segunda_opinion.py')
+        if not os.path.exists(self.python):
+            self.error = 'no existe %s' % self.python
+            print('segunda opinion NO disponible: %s' % self.error, flush=True)
+            return
+        os.makedirs(self.carpeta, exist_ok=True)
+        try:
+            self.proceso = subprocess.Popen(
+                [self.python, guion, '--servidor'], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, text=True, encoding='utf-8', bufsize=1)
+        except Exception as e:
+            self.error = str(e)
+            print('segunda opinion NO disponible: %s' % e, flush=True)
+            return
+        threading.Thread(target=self._esperar_listo, daemon=True).start()
+
+    def _esperar_listo(self):
+        linea = self.proceso.stdout.readline()
+        try:
+            d = json.loads(linea)
+        except Exception:
+            self.error = 'el detector de tierra no arranco'
+            print('segunda opinion NO disponible: %s' % (linea or '(sin salida)'), flush=True)
+            return
+        self.listo = True
+        print('segunda opinion lista: RF-DETR cargado en %.1f s' % d.get('segundos', 0), flush=True)
+
+    def disponible(self):
+        return self.proceso is not None and self.proceso.poll() is None
+
+    def mirar(self, datos, quien):
+        """Hands one frame over and waits for the answer. Called from the thread that received it."""
+        if not self.disponible():
+            return {'error': self.error or 'el detector de tierra no esta corriendo', 'n': 0}
+        destino = os.path.join(self.carpeta, 'marco_%s.jpg' % quien)
+        dibujo = os.path.join(self.carpeta, 'mirada_%s.jpg' % quien)
+        with open(destino, 'wb') as f:
+            f.write(datos)
+        with self.candado:
+            try:
+                self.proceso.stdin.write(json.dumps(
+                    {'id': str(quien), 'archivo': destino, 'dibujar': dibujo}) + '\n')
+                self.proceso.stdin.flush()
+                r = json.loads(self.proceso.stdout.readline())
+            except Exception as e:
+                return {'error': str(e), 'n': 0}
+        r['dibujo'] = dibujo if os.path.exists(dibujo) else None
+        return r
+
+
+def empujar_mensaje(nodos, mensaje):
+    """Puts one packet on every drone's data plane, without waiting for any of them.
+
+    The envelope is the one a GrADyS node uses to talk to another -- {"message", "source"} POSTed
+    to /message -- so the drone receives it in handle_packet exactly as it receives a neighbour's
+    report. Each send runs in its own thread: the operator's click must not wait on a radio link.
+    """
+    if not nodos:
+        return
+    import threading as _t
+    import urllib.request
+    cuerpo = json.dumps({'message': json.dumps(mensaje),
+                         # The embedded runtime types the source as an int, and no mission numbers a drone 0.
+                         'source': 0}).encode('utf-8')
+
+    def uno(nodo, direccion):
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                'http://%s/message' % direccion, data=cuerpo,
+                headers={'Content-Type': 'application/json'}), timeout=2).read()
+            print('  %s entregado al dron %s' % (mensaje.get('type'), nodo), flush=True)
+        except Exception as e:
+            print('  %s NO llego al dron %s (%s)' % (mensaje.get('type'), nodo, e), flush=True)
+
+    for nodo, direccion in nodos.items():
+        _t.Thread(target=uno, args=(nodo, direccion), daemon=True).start()
 
 # The optional CLIP second opinion on each crop (filtro_clip.Anotador), set by --clip. None means
 # the station never started one, and then no POI carries a score field at all.
@@ -160,28 +273,48 @@ def empujar_orden(nodos, clases, v, epoca):
     neighbour's report. Each send runs in its own thread: the operator's click must not wait on
     a radio link, and a drone out of range still gets the order on its next poll, if it polls.
     """
-    if not nodos:
+    empujar_mensaje(nodos, {'type': 'vision_buscar', 'clases': clases, 'v': v, 'epoca': epoca})
+
+
+def recibir_marco(mensaje, fuente):
+    """Takes the frame a drone sent and has the ground look at it again.
+
+    Handled in its own thread because the answer takes about a third of a second and this runs on
+    the same handler that receives the fleet's reports: blocking here would hold up the map while
+    the ground thinks. The frame is what the aircraft's own detector judged, not a fresh capture,
+    which is what makes the comparison mean anything.
+    """
+    quien = str(mensaje.get('sender', fuente))
+    try:
+        datos = base64.b64decode(mensaje.get('jpeg') or '')
+    except Exception:
+        datos = b''
+    if not datos:
+        with CANDADO:
+            ESTADO['segunda'][quien] = {'estado': 'error', 't': time.time(),
+                                        'error': 'el marco llego vacio'}
         return
-    import threading
-    import urllib.request
-    cuerpo = json.dumps({
-        'message': json.dumps({'type': 'vision_buscar', 'clases': clases, 'v': v,
-                               'epoca': epoca}),
-        # The embedded runtime types the source as an int, and no mission numbers a drone 0.
-        'source': 0,
-    }).encode('utf-8')
+    with CANDADO:
+        ESTADO['segunda'][quien] = {'estado': 'mirando', 't': time.time()}
 
-    def uno(nodo, direccion):
-        try:
-            urllib.request.urlopen(urllib.request.Request(
-                'http://%s/message' % direccion, data=cuerpo,
-                headers={'Content-Type': 'application/json'}), timeout=2).read()
-            print('  orden v%d entregada al dron %s' % (v, nodo), flush=True)
-        except Exception as e:
-            print('  orden v%d NO llego al dron %s (%s)' % (v, nodo, e), flush=True)
+    def trabajo():
+        t0 = time.time()
+        r = SEGUNDA.mirar(datos, quien) if SEGUNDA is not None else {
+            'error': 'la estacion arranco sin segunda opinion', 'n': 0}
+        fila = {'t': time.time(), 'espera': round(time.time() - t0, 2),
+                'dibujo': r.get('dibujo')}
+        if r.get('error'):
+            fila.update(estado='error', error=r['error'])
+        else:
+            fila.update(estado='listo', n=r.get('n', 0), segundos=r.get('segundos'),
+                        personas=r.get('personas', []))
+            print('[%s] segunda opinion sobre el dron %s: %d personas en %.2f s' %
+                  (datetime.now().strftime('%H:%M:%S'), quien, fila['n'], fila['espera']),
+                  flush=True)
+        with CANDADO:
+            ESTADO['segunda'][quien] = fila
 
-    for nodo, direccion in nodos.items():
-        threading.Thread(target=uno, args=(nodo, direccion), daemon=True).start()
+    threading.Thread(target=trabajo, daemon=True).start()
 
 
 def separacion_m(a, b):
@@ -375,6 +508,25 @@ class Handler(server.BaseHTTPRequestHandler):
             self._responder(json.dumps({'clases': clases, 'v': v,
                                         'epoca': epoca}).encode('utf-8'))
             return
+        if self.path.split('?')[0] == '/mirar':
+            # The operator asks the ground to look again at what one drone is seeing right now.
+            # Nothing is computed here: the request goes out, the frame comes back on the data
+            # plane like any other packet, and the answer appears when it appears. The click must
+            # not block on a radio link or on a detector that takes a second and a half.
+            try:
+                dron = str(json.loads(crudo)['dron'])
+            except Exception:
+                self._responder(b'{"error": "dron"}', codigo=400)
+                return
+            with CANDADO:
+                nodos = dict(ESTADO['nodos'])
+                ESTADO['segunda'][dron] = {'estado': 'pedido', 't': time.time()}
+            print('[%s] el operador pide segunda opinion al dron %s' %
+                  (datetime.now().strftime('%H:%M:%S'), dron), flush=True)
+            empujar_mensaje(nodos, {'type': 'vision_mirar', 'para': dron})
+            listo = SEGUNDA is not None and SEGUNDA.listo
+            self._responder(json.dumps({'dron': dron, 'detector_listo': listo}).encode('utf-8'))
+            return
         if self.path.split('?')[0] == '/veredicto':
             # The operator's verdict on a point, kept on disk with the crop it was given on. The
             # drone's own signals cannot tell a person from an object the detector keeps
@@ -418,6 +570,8 @@ class Handler(server.BaseHTTPRequestHandler):
             return
         if mensaje.get('type') == 'vision_poi':
             registrar(mensaje, payload.get('source'))
+        elif mensaje.get('type') == 'vision_marco':
+            recibir_marco(mensaje, payload.get('source'))
         else:
             print('[%s] mensaje: %s' % (datetime.now().strftime('%H:%M:%S'), mensaje),
                   flush=True)
@@ -433,6 +587,7 @@ class Handler(server.BaseHTTPRequestHandler):
                 # to refresh the map, and a silent map must not keep claiming corroboration.
                 ESTADO['pois'] = pois_vigentes(time.time())
                 d = {
+                    'segunda': ESTADO['segunda'],
                     'pois': ESTADO['pois'],
                     'drones': ESTADO['drones'],
                     'rastros': ESTADO['rastros'],
@@ -452,6 +607,18 @@ class Handler(server.BaseHTTPRequestHandler):
             with CANDADO:
                 n = ESTADO['frame_actual']
             self._responder(json.dumps({'n': n}).encode('utf-8'))
+        elif ruta == '/segunda.jpg':
+            # Served from disk instead of travelling inside /estado: the annotated frame is the
+            # size of a photograph and the state is polled once a second.
+            consulta = self.path.split('?', 1)[1] if '?' in self.path else ''
+            dron = dict(par.split('=', 1) for par in consulta.split('&') if '=' in par).get('dron', '')
+            with CANDADO:
+                ruta_jpg = (ESTADO['segunda'].get(dron) or {}).get('dibujo')
+            if not ruta_jpg or not os.path.exists(ruta_jpg):
+                self._responder(b'{"error": "sin imagen"}', codigo=404)
+                return
+            with open(ruta_jpg, 'rb') as fh:
+                self._responder(fh.read(), 'image/jpeg')
         elif ruta == '/frame':
             with CANDADO:
                 n, base = ESTADO['frame_actual'], ESTADO['frames_dir']
@@ -557,6 +724,10 @@ PAGINA = r"""<!doctype html>
   .crop { display:block; margin:10px 0 0; width:128px; max-width:100%;
              border-radius:4px; border:1px solid var(--linea); background:#0b0d12; }
   .sinrecorte { margin:8px 0 0; font-size:12px; color:var(--tenue); font-style:italic; }
+  .segunda { margin:8px 0 0; font-size:12px; color:var(--tenue); }
+  .segunda.hallazgo { color:var(--ok); font-weight:600; }
+  .segunda.fallo { color:#f87171; }
+  .mirada { display:block; margin:6px 0 0; width:100%; border-radius:6px; }
   .vacio { color:var(--tenue); font-style:italic; padding:20px 0; text-align:center; }
   .nota { color:var(--tenue); font-size:12px; margin-top:14px;
           padding-top:12px; border-top:1px solid var(--linea); }
@@ -909,13 +1080,34 @@ function pintarLista(pois) {
       ${p.crop
         ? `<img class="crop" src="data:image/jpeg;base64,${p.crop}" alt="lo que vio el dron">`
         : (p.mature ? '' : '<div class="sinrecorte">sin crop: no se puede verificar</div>')}
+      ${segundaDe(p)}
       <div class="veredicto">${veredictoDe(p) === 'si' ? '' :
         `<button data-v="si" data-i="${i}">es lo que busco</button>`
-        + `<button data-v="no" data-i="${i}">no es</button>`}</div>
+        + `<button data-v="no" data-i="${i}">no es</button>`}
+        <button data-mirar="${i}">segunda opinion</button></div>
     </div>`).join('');
   for (const b of cont.querySelectorAll('button[data-v]')) {
     b.onclick = () => marcar(pois[+b.dataset.i], b.dataset.v);
   }
+  for (const b of cont.querySelectorAll('button[data-mirar]')) {
+    b.onclick = () => pedirSegunda(pois[+b.dataset.mirar].dron);
+  }
+}
+
+// The block a card shows about its drone's second opinion. Keyed by DRONE, not by point: the
+// aircraft sends the frame it is looking at, which answers "is there anybody here", not "is this
+// particular point real". Saying otherwise would promise a link between the boxes and the POI that
+// nothing in the exchange establishes.
+function segundaDe(p) {
+  const d = estado.segunda && estado.segunda[String(p.dron)];
+  if (!d) return '';
+  const clase = d.estado === 'error' ? 'fallo' : (d.estado === 'listo' && d.n ? 'hallazgo' : '');
+  const viejo = d.estado === 'listo' && estado.ahora && (estado.ahora - d.t) > SEGUNDA_VIEJA_S
+    ? ` (hace ${Math.round(estado.ahora - d.t)} s)` : '';
+  return `<div class="segunda ${clase}">${textoSegunda(d)}${viejo}</div>`
+    + (d.estado === 'listo' && d.dibujo
+       ? `<img class="mirada" src="/segunda.jpg?dron=${encodeURIComponent(p.dron)}&t=${d.t}"
+               alt="lo que RF-DETR encontro en ese cuadro">` : '');
 }
 
 function pintarFiltro(pois) {
@@ -986,6 +1178,33 @@ function marcar(p, v) {
                           looks: p.looks, radius_m: p.radius_m, crop: p.crop})})
     .catch(() => {});
 }
+
+// -- the ground's second opinion ------------------------------------------------------------
+// What flies is what fits in the power budget, and it finds fewer people than a detector that does
+// not have to fit: on the 02ago flight, where the drone is high, the aircraft found 46 % of the
+// people and RF-DETR on the laptop found 90 %. RF-DETR takes 1.4 s per frame against 35 ms, so it
+// will never fly; this button is what lets the operator borrow it for one frame.
+function pedirSegunda(dron) {
+  fetch('/mirar', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                   body: JSON.stringify({dron: String(dron)})})
+    .then(() => refrescar()).catch(() => {});
+}
+
+function textoSegunda(d) {
+  if (!d) return '';
+  if (d.estado === 'pedido') return 'pidiendole el cuadro al dron...';
+  if (d.estado === 'mirando') return 'RF-DETR mirando el cuadro...';
+  if (d.estado === 'error') return 'sin segunda opinion: ' + (d.error || 'fallo');
+  if (d.estado === 'listo') {
+    return d.n + (d.n === 1 ? ' persona' : ' personas')
+      + ' en tierra, en ' + (d.espera != null ? d.espera.toFixed(2) : '?') + ' s';
+  }
+  return '';
+}
+
+// A drone whose frame was judged more than this long ago is showing an old answer, and an old
+// answer about a moving scene is worse than none: the card says when it was taken.
+const SEGUNDA_VIEJA_S = 60;
 
 function pintar() {
   podarLimpiados(estado.pois);
@@ -1255,6 +1474,10 @@ if __name__ == '__main__':
                          'el vuelo del 02ago: tira la bolsa y el cono, los fantasmas pasan de 2 a 1 y no '
                          'se pierde ninguna de las 5 personas. Opcional a proposito: esconder algo que el '
                          'operador no vio es una decision suya, no del sistema')
+    ap.add_argument('--segunda-opinion', action='store_true',
+                    help='arranca RF-DETR en tierra para el boton de segunda opinion')
+    ap.add_argument('--python-rfdetr', default=PYTHON_RFDETR,
+                    help='el interprete que tiene rfdetr (el venv de entrenamiento)')
     ap.add_argument('--clip-umbral', type=float, default=None,
                     help='umbral del puntaje CLIP (por defecto 1.496, fijado con los vuelos del 01ago)')
     args = ap.parse_args()
@@ -1270,6 +1493,13 @@ if __name__ == '__main__':
         if CLIP is not None:
             print('CLIP listo: umbral %.3f' % CLIP.umbral, flush=True)
     ESTADO['veredictos_dir'] = args.veredictos
+    if args.segunda_opinion:
+        # Started before the first report, never on the first click: loading RF-DETR takes 17 s and
+        # the criterion for this feature is that the operator waits less than five.
+        print('arrancando la segunda opinion (RF-DETR tarda ~17 s en cargar)...', flush=True)
+        SEGUNDA = SegundaOpinion(args.python_rfdetr,
+                                 os.path.join(args.veredictos, 'segunda_opinion'))
+        SEGUNDA.arrancar()
     if args.nodos:
         ESTADO['nodos'] = dict(par.split('=', 1) for par in args.nodos.split(','))
 

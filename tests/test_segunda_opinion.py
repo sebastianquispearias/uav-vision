@@ -67,4 +67,50 @@ for x, y in ((5, 5), (1900, 5), (5, 1070), (1900, 1070), (960, 540)):
 assert any(f == (0, 0, ancho, alto) for f in SO.FICHAS), "falta la ficha del frame entero"
 print("  las %d fichas cubren las cuatro esquinas y el centro, y una es el frame entero" % len(SO.FICHAS))
 
+# 5. the line protocol the station speaks to it, with the detector faked
+# The station runs on the plain interpreter and RF-DETR lives in the training venv, so the two talk
+# through a pipe. What has to hold is that one question gets exactly one answer line carrying the
+# same id, that a bad line does not take the worker down with it -- a worker that dies on a typo
+# leaves the operator with a button that silently stops working -- and that the answers stay
+# separable from whatever the library prints.
+import io as _io
+
+_pedidos = []
+
+
+def _falso_mirar(imagen, umbral=SO.UMBRAL):
+    _pedidos.append(umbral)
+    return {"personas": [{"caja": [1, 2, 3, 4], "conf": 0.9}], "n": 1, "fichas": 5, "segundos": 0.3}
+
+
+_real_mirar, _real_cargar, _real_dibujar = SO.mirar, SO._cargar, SO.dibujar
+SO.mirar, SO._cargar = _falso_mirar, lambda: None
+SO.dibujar = lambda imagen, personas, destino: open(destino, "wb").write(b"jpeg falso")
+_tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_marco_de_prueba.jpg")
+cv2.imwrite(_tmp, marca)
+_dibujo = _tmp.replace(".jpg", "_visto.jpg")
+
+_entrada = _io.StringIO(chr(10).join([
+    json.dumps({"id": "a", "archivo": _tmp}),
+    "esto no es json",
+    json.dumps({"id": "b", "archivo": os.path.join(os.path.dirname(_tmp), "no_existe.jpg")}),
+    json.dumps({"id": "c", "archivo": _tmp, "dibujar": _dibujo, "umbral": 0.55}),
+]) + chr(10))
+_salida = _io.StringIO()
+SO.servir(entrada=_entrada, salida=_salida)
+SO.mirar, SO._cargar, SO.dibujar = _real_mirar, _real_cargar, _real_dibujar
+_lineas = [json.loads(x) for x in _salida.getvalue().strip().splitlines()]
+os.remove(_tmp)
+
+assert _lineas[0].get("listo") is True, "no aviso que el detector estaba cargado: %s" % _lineas[0]
+assert len(_lineas) == 5, "cuatro preguntas tienen que dar cuatro respuestas: %d" % (len(_lineas) - 1)
+assert _lineas[1]["id"] == "a" and _lineas[1]["n"] == 1, "la primera respuesta no corresponde"
+assert "error" in _lineas[2] and _lineas[2]["n"] == 0, "una linea rota no dio error"
+assert "error" in _lineas[3] and _lineas[3]["id"] == "b", "un archivo que no existe no dio error con su id"
+assert _lineas[4]["id"] == "c" and _lineas[4].get("dibujado") == _dibujo, "no dibujo lo que encontro"
+assert _pedidos == [SO.UMBRAL, 0.55], "el umbral del pedido no llego al detector: %s" % _pedidos
+assert os.path.exists(_dibujo), "no escribio la imagen con las cajas"
+os.remove(_dibujo)
+print("  el servidor contesta una linea por pregunta, sobrevive a una linea rota y respeta el umbral")
+
 print("TODO OK")

@@ -105,13 +105,81 @@ def mirar_mensaje(mensaje: dict, **kw) -> dict:
     return r
 
 
+def dibujar(imagen, personas, destino) -> None:
+    """Writes a copy of the frame with a box around everyone the ground found."""
+    import cv2
+
+    for p in personas:
+        x1, y1, x2, y2 = (int(v) for v in p["caja"])
+        cv2.rectangle(imagen, (x1, y1), (x2, y2), (250, 180, 80), 3)
+        cv2.putText(imagen, "%.2f" % p["conf"], (x1, max(14, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (250, 180, 80), 1, cv2.LINE_AA)
+    cv2.imwrite(destino, imagen)
+
+
+def servir(entrada=None, salida=None, umbral: float = UMBRAL) -> None:
+    """Answers one frame per line, keeping the detector loaded between questions.
+
+    Measured on this laptop: loading RF-DETR takes 17.3 s, the first frame 3.6 s while CUDA warms
+    up, and every frame after that 0.26 s. A process started per request would therefore take
+    twenty seconds to answer a click, which is not a second opinion, it is a coffee break. Loading
+    once and staying is what makes the operator's question cheap.
+
+    The protocol is one JSON object per line in and one per line out, because the station runs on
+    the plain interpreter and this has to run on the training venv, which is the only one that has
+    rfdetr. A line in carries {"id", "archivo"} and optionally "dibujar"; the line out carries the
+    same id with the people found, or with "error". The first line out is {"listo": true} once the
+    model is in memory, so the station can say it is still loading instead of looking hung.
+    """
+    import cv2
+
+    entrada = entrada or sys.stdin
+    if salida is None:
+        # rfdetr and torch print their own progress on standard output, which would land in the
+        # middle of a protocol line and make the station read half a JSON object. The real stdout
+        # is duplicated onto a private descriptor and the number 1 is pointed at stderr, so
+        # anything anyone prints -- this module, the library, or C code underneath it -- goes to
+        # the log and only the answers go to the station.
+        salida = os.fdopen(os.dup(1), "w", encoding="utf-8")
+        os.dup2(2, 1)
+        sys.stdout = sys.stderr
+    t0 = time.time()
+    _cargar()
+    salida.write(json.dumps({"listo": True, "segundos": round(time.time() - t0, 2)}) + "\n")
+    salida.flush()
+    for linea in entrada:
+        linea = linea.strip()
+        if not linea:
+            continue
+        try:
+            pedido = json.loads(linea)
+            imagen = cv2.imread(pedido["archivo"])
+            if imagen is None:
+                raise ValueError("no se pudo leer %s" % pedido.get("archivo"))
+            r = mirar(imagen, umbral=pedido.get("umbral", umbral))
+            if pedido.get("dibujar"):
+                dibujar(imagen, r["personas"], pedido["dibujar"])
+                r["dibujado"] = pedido["dibujar"]
+            r["id"] = pedido.get("id")
+        except Exception as e:                      # noqa: BLE001 -- a bad line must not kill the worker
+            r = {"id": (pedido.get("id") if isinstance(locals().get("pedido"), dict) else None),
+                 "error": str(e), "personas": [], "n": 0}
+        salida.write(json.dumps(r) + "\n")
+        salida.flush()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--imagen", help="un jpeg en disco")
     ap.add_argument("--mensaje", help="un vision_marco guardado como json")
     ap.add_argument("--umbral", type=float, default=UMBRAL)
     ap.add_argument("--dibujar", help="escribe una copia con las cajas encima")
+    ap.add_argument("--servidor", action="store_true",
+                    help="queda vivo y contesta un cuadro por linea: lo que usa la estacion")
+    ap.add_argument("--json", action="store_true", help="imprime el resultado como JSON")
     args = ap.parse_args()
+    if args.servidor:
+        return servir(umbral=args.umbral)
     import cv2
     if args.mensaje:
         r = mirar_mensaje(json.load(open(args.mensaje, encoding="utf-8")), umbral=args.umbral)
@@ -121,14 +189,17 @@ def main():
         r = mirar(imagen, umbral=args.umbral)
     else:
         ap.error("hace falta --imagen o --mensaje")
+    if args.json:
+        if args.dibujar and imagen is not None:
+            dibujar(imagen, r["personas"], args.dibujar)
+            r["dibujado"] = args.dibujar
+        print(json.dumps(r))
+        return
     print("%d personas en %.2f s con %d fichas" % (r["n"], r.get("segundos", 0), r.get("fichas", 0)))
     for p in r["personas"]:
         print("  conf %.2f  caja %s" % (p["conf"], p["caja"]))
     if args.dibujar and imagen is not None:
-        for p in r["personas"]:
-            x1, y1, x2, y2 = (int(v) for v in p["caja"])
-            cv2.rectangle(imagen, (x1, y1), (x2, y2), (250, 180, 80), 3)
-        cv2.imwrite(args.dibujar, imagen)
+        dibujar(imagen, r["personas"], args.dibujar)
         print("escrito %s" % args.dibujar)
 
 
