@@ -750,6 +750,9 @@ PAGINA = r"""<!doctype html>
              border-radius:4px; border:1px solid var(--linea); background:#0b0d12; }
   .sinrecorte { margin:8px 0 0; font-size:12px; color:var(--tenue); font-style:italic; }
   #buscar button.mas { opacity:.55; font-style:italic; }
+  #buscar button.vista { font-size:11px; padding:1px 8px; margin-left:6px; }
+  #buscar .segunda { margin:4px 0 0; }
+  #buscar .mirada { max-width:340px; }
   .segunda { margin:8px 0 0; font-size:12px; color:var(--tenue); }
   .segunda.hallazgo { color:var(--ok); font-weight:600; }
   .segunda.fallo { color:#f87171; }
@@ -1124,16 +1127,23 @@ function pintarLista(pois) {
 // aircraft sends the frame it is looking at, which answers "is there anybody here", not "is this
 // particular point real". Saying otherwise would promise a link between the boxes and the POI that
 // nothing in the exchange establishes.
-function segundaDe(p) {
-  const d = estado.segunda && estado.segunda[String(p.dron)];
+// What the ground made of one drone's frame. Keyed by DRONE because that is what the exchange
+// answers: the aircraft sends the frame it is looking at, which says whether there is anybody
+// there, not whether one particular point is real.
+function bloqueSegunda(dron) {
+  const d = estado.segunda && estado.segunda[String(dron)];
   if (!d) return '';
   const clase = d.estado === 'error' ? 'fallo' : (d.estado === 'listo' && d.n ? 'hallazgo' : '');
   const viejo = d.estado === 'listo' && estado.ahora && (estado.ahora - d.t) > SEGUNDA_VIEJA_S
     ? ` (hace ${Math.round(estado.ahora - d.t)} s)` : '';
   return `<div class="segunda ${clase}">${textoSegunda(d)}${viejo}</div>`
     + (d.estado === 'listo' && d.dibujo
-       ? `<img class="mirada" src="/segunda.jpg?dron=${encodeURIComponent(p.dron)}&t=${d.t}"
+       ? `<img class="mirada" src="/segunda.jpg?dron=${encodeURIComponent(dron)}&t=${d.t}"
                alt="lo que RF-DETR encontro en ese cuadro">` : '');
+}
+
+function segundaDe(p) {
+  return bloqueSegunda(p.dron);
 }
 
 function pintarFiltro(pois) {
@@ -1440,10 +1450,21 @@ function pintarBuscar() {
   const extra = resto.filter(c => sel.has(c));
   const visibles = verTodas ? mision.concat(resto) : mision.concat(extra);
   const boton = c => `<button data-b="${c}" class="${sel.has(c) ? 'on' : ''}">${c}</button>`;
+  // One line per drone, each with its own button. A drone that reports no points still has a
+  // camera and can still be asked what it is looking at: putting the button only inside a point's
+  // card made the second opinion unreachable for exactly the drone an operator would wonder about.
+  const ids = Object.keys(drones).sort();
+  const lineas = estadoBusqueda(drones, orden);
   cont.innerHTML = '<span class="etq">buscando</span>' + visibles.map(boton).join('')
     + (resto.length ? `<button data-todas="1" class="mas">${verTodas
         ? 'menos' : '+ ' + resto.length + ' clases mas'}</button>` : '')
-    + estadoBusqueda(drones, orden).map(t => `<div class="acuse">${t}</div>`).join('');
+    + lineas.map((t, i) => `<div class="acuse">${t}`
+        + (ids[i] != null
+           ? ` <button class="vista" data-mirar-dron="${ids[i]}">segunda opinion</button>` : '')
+        + (ids[i] != null ? bloqueSegunda(ids[i]) : '') + '</div>').join('');
+  for (const b of cont.querySelectorAll('button[data-mirar-dron]')) {
+    b.onclick = () => pedirSegunda(b.dataset.mirarDron);
+  }
   const mas = cont.querySelectorAll('button[data-todas]')[0];
   if (mas) mas.onclick = () => { verTodas = !verTodas; pintarBuscar(); };
   for (const b of cont.querySelectorAll('button')) {

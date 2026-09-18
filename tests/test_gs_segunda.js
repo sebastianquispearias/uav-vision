@@ -40,9 +40,18 @@ function elem(id) {
   if (!elems[id]) elems[id] = {
     id, innerHTML: '', textContent: '', className: '', style: {}, dataset: {},
     querySelectorAll(sel) {
-      const attr = /\[([a-z-]+)=?/.exec(sel)[1];
+      // 'button[data-x]' busca por atributo; 'button' a secas devuelve los botones tal cual, que es
+      // lo que la barra de busqueda usa para sus clases.
+      const m0 = /\[([a-z-]+)=?/.exec(sel);
+      if (!m0) {
+        return [...this.innerHTML.matchAll(/<button([^>]*)>/g)]
+          .map(m => ({ dataset: { b: (/data-b="([^"]+)"/.exec(m[1]) || [])[1] }, onclick: null }));
+      }
+      const attr = m0[1];
+      // data-mirar-dron llega al dataset como mirarDron, como en un navegador de verdad.
+      const clave = attr.replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       return [...this.innerHTML.matchAll(new RegExp(attr + '="([^"]+)"', 'g'))]
-        .map(m => ({ dataset: { v: m[1], i: m[1], mirar: m[1] }, onclick: null }));
+        .map(m => ({ dataset: { v: m[1], i: m[1], mirar: m[1], [clave]: m[1] }, onclick: null }));
     },
     getBoundingClientRect: () => ({ width: 800, height: 600 }),
     getContext: () => nulo,
@@ -115,8 +124,27 @@ pintar();
 console.log('  cinco minutos despues  :', /\\(hace [0-9]+ s\\)/.exec(lista())[0]);
 ok(lista().indexOf('(hace 300 s)') >= 0, 'una respuesta vieja no dice que lo es');
 
-// 6. no detector installed: it says so instead of going quiet
-estado.segunda = { '1': { estado: 'error', t: AHORA + 300, error: 'no existe el venv' } };
+// 6. a drone with no points still has a button: it has a camera, and it is exactly the drone an
+// operator wonders about. With the button only inside a point's card, the second opinion was
+// unreachable for a drone that reports nothing -- which is when you most want to look.
+estado = { ahora: AHORA, pois: [], segunda: {},
+           drones: {'1': {buscando: {clases: ['person'], v: null, epoca: null}},
+                    '7': {buscando: {clases: ['person'], v: null, epoca: null}}} };
+ultimoEstado = estado;
+pintarBuscar();
+const barra = document.getElementById('buscar').innerHTML;
+console.log('  sin un solo punto en el mapa:',
+            (barra.match(/data-mirar-dron/g) || []).length, 'botones de segunda opinion');
+ok((barra.match(/data-mirar-dron/g) || []).length === 2,
+   'cada dron conectado necesita su boton, aunque no haya reportado ni un punto');
+ok(barra.indexOf('data-mirar-dron="7"') >= 0, 'falta el boton del dron 7');
+pedirSegunda('7');
+ok(pedidos[pedidos.length - 1].cuerpo.dron === '7',
+   'el boton de un dron tiene que preguntar por ESE dron');
+
+// 7. no detector installed: it says so instead of going quiet
+estado = { ahora: AHORA + 300, pois: [poi(0, 0), poi(10, 0, { dron: 2 })],
+           segunda: { '1': { estado: 'error', t: AHORA + 300, error: 'no existe el venv' } } };
 pintar();
 console.log('  sin detector en tierra :', /sin segunda opinion: [^<]*/.exec(lista())[0]);
 ok(lista().indexOf('sin segunda opinion: no existe el venv') >= 0, 'un fallo no dice por que');
