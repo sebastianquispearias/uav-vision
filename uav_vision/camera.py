@@ -398,8 +398,19 @@ class OnboardCamera:
             time.sleep(2.0)
 
     def _build_tracker(self) -> None:
-        """Builds the BoT-SORT tracker, with the buffer converted from seconds to frames."""
-        from boxmot.trackers.bbox.botsort import BotSort
+        """Builds the BoT-SORT tracker, with the buffer converted from seconds to frames.
+
+        The import is written twice on purpose. boxmot moved the tracker from
+        boxmot.trackers.bbox.botsort to boxmot.trackers.box.botsort between the version that runs on
+        the Raspberry Pi 5 (19, on Python 3.11) and the only one that exists for Python 3.13 (25),
+        which is what the Pi 4 has. Both versions export the class at the top level, so that is the
+        path used, and the old one is kept first because it is what flies today and a silent change
+        of tracker implementation is not something to discover in the air.
+        """
+        try:
+            from boxmot.trackers.bbox.botsort import BotSort
+        except ImportError:
+            from boxmot import BotSort
 
         self._tracker = BotSort(
             reid_model=None,  # embeddings are supplied externally via embs=
