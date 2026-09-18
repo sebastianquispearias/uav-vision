@@ -111,6 +111,9 @@ ESTADO = {
     'frame_actual': None,
     'frames_dir': None,
 
+    # The target the operator fixed with "es lo que busco", in metres, or None.
+    'objetivo': None,
+
     # The ground's second opinion, one entry per drone: what the operator asked for and what came
     # back. Never the picture itself, which is served from disk by /segunda.jpg: a 1920x1080 frame
     # is 300 KB, and carrying it inside a state poll that runs every second would be four megabits
@@ -508,6 +511,27 @@ class Handler(server.BaseHTTPRequestHandler):
             self._responder(json.dumps({'clases': clases, 'v': v,
                                         'epoca': epoca}).encode('utf-8'))
             return
+        if self.path.split('?')[0] == '/objetivo':
+            # "Es lo que busco" is not only a verdict kept on disk: it is the one thing the operator
+            # knows that the drone cannot work out, and it buys recall for free. Sending it back
+            # lets the camera lower its threshold over that square of the image, where the detector
+            # had already scored the boxes it was discarding.
+            try:
+                d = json.loads(crudo)
+                apagar = bool(d.get('off'))
+                x, y = (None, None) if apagar else (float(d['x']), float(d['y']))
+            except Exception:
+                self._responder(b'{"error": "objetivo"}', codigo=400)
+                return
+            with CANDADO:
+                nodos = dict(ESTADO['nodos'])
+                ESTADO['objetivo'] = None if apagar else {'x': x, 'y': y, 't': time.time()}
+            print('[%s] objetivo %s' % (datetime.now().strftime('%H:%M:%S'),
+                                        'liberado' if apagar else 'fijado en (%.1f, %.1f)' % (x, y)),
+                  flush=True)
+            empujar_mensaje(nodos, {'type': 'vision_objetivo', 'x': x, 'y': y})
+            self._responder(json.dumps({'objetivo': None if apagar else {'x': x, 'y': y}}).encode('utf-8'))
+            return
         if self.path.split('?')[0] == '/mirar':
             # The operator asks the ground to look again at what one drone is seeing right now.
             # Nothing is computed here: the request goes out, the frame comes back on the data
@@ -587,6 +611,7 @@ class Handler(server.BaseHTTPRequestHandler):
                 # to refresh the map, and a silent map must not keep claiming corroboration.
                 ESTADO['pois'] = pois_vigentes(time.time())
                 d = {
+                    'objetivo': ESTADO['objetivo'],
                     'segunda': ESTADO['segunda'],
                     'pois': ESTADO['pois'],
                     'drones': ESTADO['drones'],
@@ -1172,6 +1197,13 @@ function veredictoDe(p) {
 function marcar(p, v) {
   veredictos.push({ x: p.x, y: p.y, r: p.radius_m || 0, cls: p.cls, v });
   pintar();
+  // "Es lo que busco" also tells the drone where to look harder. The verdict is the only thing the
+  // operator knows that the aircraft cannot, and acting on it costs no computing: the detector had
+  // already scored the boxes it was throwing away under that square.
+  if (v === 'si') {
+    fetch('/objetivo', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({x: p.x, y: p.y})}).catch(() => {});
+  }
   // Kept on the station's disk too, with the crop: the page forgets on reload, the data must not.
   fetch('/veredicto', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({v, x: p.x, y: p.y, cls: p.cls, dron: p.dron, n_obs: p.n_obs,

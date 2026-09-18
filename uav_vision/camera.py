@@ -42,18 +42,35 @@ from uav_vision.pinhole_local import project_to_pixel
 Detection = Dict[str, float]
 
 
-def solo_confirmadas(detections, threshold):
+def dentro_del_foco(det, foco) -> bool:
+    """Whether a detection falls inside the window the operator's target is in."""
+    if not foco:
+        return False
+    return (abs(det["px"] - foco["cx"]) <= foco["radio"]
+            and abs(det["py"] - foco["cy"]) <= foco["radio"])
+
+
+def solo_confirmadas(detections, threshold, foco=None):
     """
-    Drops the weak boxes the tracker did not claim.
+    Drops the weak boxes the tracker did not claim, except inside the operator's window.
 
     With the BYTE band open the detector returns boxes below the reporting threshold. Those
     are worth having only as evidence that something already being followed is still there:
     a box the tracker attached to an existing track. One that arrives unattached is a guess,
     and it must not reach the fusion, which unlike the identity layer does not check
     'track_id' before using a detection.
+
+    The exception is the window around a target the operator pointed at. There the guess is
+    worth taking: somebody already said there is a person in that square, so a weak box there
+    is far more likely to be them than to be a new invention, and a false one lands where the
+    tracker will attach it to the track that is already running instead of opening a point of
+    its own. Measured over the balcony window of the 02ago flight, lowering the threshold to
+    0.10 inside it takes recall on the target from 43.9 % to 60.7 % at no computing cost at
+    all: the detector had already scored those boxes and was throwing them away.
     """
     return [d for d in detections
-            if d["conf"] >= threshold or "track_id" in d]
+            if d["conf"] >= threshold or "track_id" in d
+            or (dentro_del_foco(d, foco) and d["conf"] >= foco["umbral"])]
 
 
 class SimulatedCamera:
@@ -194,6 +211,10 @@ class OnboardCamera:
         self._ultimo_frame = None
         self.threshold = threshold
         self.low_band = low_band
+        # The window the operator's verdict opens, in pixels of the current frame, or None. It is
+        # set once per frame by whoever knows the geometry -- the protocol, which can project the
+        # target's ground position -- and never by the camera, which has no idea where anything is.
+        self.foco = None
         self.classes = frozenset(classes) if classes is not None else self.CLASES_PERSONA
         # When the camera is mounted upside-down the ISP un-flips the image at capture time
         # (hflip+vflip). That remapping moves the calibrated principal point, so the effective
@@ -486,6 +507,8 @@ class OnboardCamera:
         piso = self.threshold
         if self._tracker is not None and self.low_band is not None:
             piso = min(self.threshold, self.low_band)
+        if self.foco is not None:
+            piso = min(piso, self.foco["umbral"])
         self._ultimo_frame = frame
         resultados = self._yolo(frame, verbose=False, conf=piso)
         self._n_frames += 1
@@ -528,9 +551,23 @@ class OnboardCamera:
                 det["crop"] = self._crop(frame, caja)
 
         if piso < self.threshold:
-            detections = solo_confirmadas(detections, self.threshold)
+            detections = solo_confirmadas(detections, self.threshold, self.foco)
 
         return detections
+
+    def set_focus(self, cx=None, cy=None, radio_px=320.0, umbral=0.10) -> None:
+        """Points the low threshold at one square of the image, or clears it when cx is None.
+
+        Zooming into that square was tried first and is much worse: cropping it and enlarging it
+        took recall from 43.9 % to 11.2 %, and enlarging further to 2.3 %, because the detector was
+        trained on VisDrone and only recognises people of about 28 pixels. Making the target bigger
+        stops it looking like a person. Lowering the threshold there costs nothing and works.
+        """
+        if cx is None:
+            self.foco = None
+            return
+        self.foco = {"cx": float(cx), "cy": float(cy), "radio": float(radio_px),
+                     "umbral": float(umbral)}
 
     def _crop(self, frame, caja) -> bytes:
         """

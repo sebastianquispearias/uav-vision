@@ -36,7 +36,7 @@ from gradys_embedded.protocol.messages.telemetry import Telemetry
 from uav_vision.flota import mismo_objetivo
 
 from uav_vision.identity import dominant_class
-from uav_vision.pinhole_local import pixel_to_ray
+from uav_vision.pinhole_local import pixel_to_ray, project_to_pixel
 
 TIMER_SEE = "uav_vision:see"
 TIMER_REPORT = "uav_vision:report"
@@ -75,6 +75,14 @@ GROUND_EXTENT_M: Dict[str, float] = {
 RANSAC_ITERATIONS = 100
 RANSAC_THRESHOLD_M = 5.0
 MIN_MEASUREMENTS = 8
+
+# The window the operator's verdict opens around a fixed target, and the threshold inside it. The
+# radius is half the 640-pixel square the gain was measured over, on a 1920x1080 frame; the
+# threshold is the floor the detector was already scoring at. Neither is derivable from the optics:
+# they encode how much invented evidence is acceptable in exchange for finding the target, and that
+# changes per mission.
+FOCO_RADIO_PX = 320.0
+FOCO_UMBRAL = 0.10
 
 
 def _ground_impact(
@@ -277,6 +285,10 @@ class VisionProtocol(IProtocol):
         # RANSAC fallback can name its POI from the impacts that actually formed it.
         self._clases: List[Optional[str]] = []
         self._frames_seen = 0
+        # The target the operator pointed at, in metres, or None. Kept as ground position and
+        # projected onto every frame: where it lands in the image depends on the aircraft's pose
+        # at that instant, which is not something the ground can send.
+        self._objetivo = None
         # What the neighbours are reporting, by sender. Emptied here rather than at class
         # level so a relaunched protocol does not start out corroborating a previous flight.
         self._ajenos: Dict = {}
@@ -373,6 +385,9 @@ class VisionProtocol(IProtocol):
         if m.get("type") == "vision_mirar":
             self.send_frame(m.get("para"))
             return
+        if m.get("type") == "vision_objetivo":
+            self.fix_target(m.get("x"), m.get("y"), m.get("radio_px"), m.get("umbral"))
+            return
         if m.get("type") != "vision_poi":
             return
         quien = m.get("sender")
@@ -382,6 +397,57 @@ class VisionProtocol(IProtocol):
             "t": self.provider.current_time(),
             "pois": m.get("pois") or [],
         }
+
+    def fix_target(self, x=None, y=None, radio_px=None, umbral=None) -> bool:
+        """Fixes the target the operator pointed at, or releases it when x is None.
+
+        What this buys, measured over the balcony window of the 02ago flight: recall on the target
+        goes from 43.9 % to 60.7 % without a millisecond of extra computing, because the detector
+        had already scored those boxes and was discarding them for being under the reporting
+        threshold. The cost is precision, 71.2 % to 53.3 %, and it is paid where it hurts least: the
+        extra boxes land beside somebody the tracker is already following, so they reinforce that
+        track instead of opening points of their own.
+
+        Only the target's ground position travels. Turning it into a square of the image is this
+        drone's job and nobody else's, because the square depends on where the aircraft is and
+        where it is pointing at the instant the frame is taken, which the ground cannot know.
+        """
+        if self.camera is None:
+            return False
+        if x is None:
+            self._objetivo = None
+            fijar = getattr(self.camera, "set_focus", None)
+            if callable(fijar):
+                fijar(None)
+            return True
+        self._objetivo = {"pos": (float(x), float(y)),
+                          "radio_px": float(radio_px) if radio_px is not None else FOCO_RADIO_PX,
+                          "umbral": float(umbral) if umbral is not None else FOCO_UMBRAL}
+        return True
+
+    def _apuntar_foco(self, yaw, alabeo, cabeceo) -> None:
+        """Projects the fixed target onto this frame, so the camera knows which square to favour.
+
+        A target that falls outside the frame clears the window instead of leaving the last one in
+        place: a stale square lowers the threshold over a piece of ground nobody vouched for, which
+        is precisely how a free recall gain turns into invented points.
+        """
+        fijar = getattr(self.camera, "set_focus", None)
+        if not callable(fijar):
+            return
+        if self._objetivo is None:
+            fijar(None)
+            return
+        cam_cfg = self.camera.camera
+        px = project_to_pixel(
+            self._position, (self._objetivo["pos"][0], self._objetivo["pos"][1], self.ground_z),
+            yaw, self.pitch_deg, cam_cfg.focal_length_px, cam_cfg.image_width,
+            cam_cfg.image_height, cam_cfg.principal_point,
+            body_pitch_deg=cabeceo, body_roll_deg=alabeo)
+        if px is None:
+            fijar(None)
+            return
+        fijar(px[0], px[1], self._objetivo["radio_px"], self._objetivo["umbral"])
 
     def send_frame(self, para=None) -> bool:
         """Sends one frame, once, because somebody on the ground asked to look at it.
@@ -544,6 +610,7 @@ class VisionProtocol(IProtocol):
         cam_cfg = self.camera.camera
         actitud = self.attitude_source() if self.attitude_source is not None else None
         alabeo, cabeceo = actitud if actitud is not None else (0.0, 0.0)
+        self._apuntar_foco(yaw, alabeo, cabeceo)
         for det in self.camera.detect(self._position, yaw):
             origin, direction = pixel_to_ray(
                 self._position,
