@@ -39,9 +39,9 @@ function ok(cond, msg) {
 
 // The checks share the page's scope, so their names carry a suffix that no page global uses.
 const prueba = `
-ok(buscables({}).join(',') === BUSCABLES.join(','),
+ok(buscables({}).mision.join(',') === BUSCABLES.join(','),
    'sin drones que informen, los botones tienen que ser la lista fija');
-console.log('  sin informes      :', buscables({}).join(', '));
+console.log('  sin informes      :', buscables({}).mision.join(', '));
 
 const dronesPrueba = {
   '1': { buscando: { clases: ['car'], v: 3, epoca: 'e1', rechazo: null,
@@ -50,12 +50,29 @@ const dronesPrueba = {
                      conocidas: ['boat', 'car', 'person'] } },
   '3': { t: 0 },
 };
-const botonesPrueba = buscables(dronesPrueba);
+const botonesPrueba = buscables(dronesPrueba).mision;
 console.log('  con informes      :', botonesPrueba.join(', '));
-ok(botonesPrueba.join(',') === 'person,boat,bus,car,truck',
-   'los botones tienen que ser la union de lo que los modelos emiten, persona primero');
+ok(botonesPrueba.join(',') === 'person,car,truck,bus,boat',
+   'los botones tienen que ser las clases de la mision que los modelos emiten, en ese orden');
 ok(!botonesPrueba.includes('pedestrian') && !botonesPrueba.includes('people'),
    'los nombres de persona de un modelo no pueden salir como botones sueltos');
+
+// Un detector entrenado con un conjunto publico conoce ochenta cosas, y la mayoria no tiene nada
+// que hacer en un mapa de busqueda. Ofrecerlas todas entierra los cuatro botones que un operador
+// va a apretar. Pero quitarlas seria mentir sobre lo que el detector puede emitir, asi que quedan
+// a un clic. Esta seccion fija las dos mitades de esa decision.
+const cocoPrueba = {
+  '1': { buscando: { conocidas: ['person', 'car', 'broccoli', 'teddy bear', 'banana', 'boat'] } },
+};
+const cortadoPrueba = buscables(cocoPrueba);
+console.log('  con un modelo COCO:', cortadoPrueba.mision.join(', '),
+            '| escondidas:', cortadoPrueba.resto.join(', '));
+ok(cortadoPrueba.mision.join(',') === 'person,car,boat',
+   'solo pueden ofrecerse las clases de la mision que el detector emite');
+ok(!cortadoPrueba.mision.includes('broccoli'),
+   'el brocoli no puede estar entre los botones de una estacion de busqueda');
+ok(cortadoPrueba.resto.join(',') === 'banana,broccoli,teddy bear',
+   'las demas no se borran: quedan disponibles, porque el detector si puede emitirlas');
 
 const ordenPrueba = { v: 3, epoca: 'e1' };
 const lineasPrueba = estadoBusqueda(dronesPrueba, ordenPrueba);

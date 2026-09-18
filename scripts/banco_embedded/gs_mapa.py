@@ -749,6 +749,7 @@ PAGINA = r"""<!doctype html>
   .crop { display:block; margin:10px 0 0; width:128px; max-width:100%;
              border-radius:4px; border:1px solid var(--linea); background:#0b0d12; }
   .sinrecorte { margin:8px 0 0; font-size:12px; color:var(--tenue); font-style:italic; }
+  #buscar button.mas { opacity:.55; font-style:italic; }
   .segunda { margin:8px 0 0; font-size:12px; color:var(--tenue); }
   .segunda.hallazgo { color:var(--ok); font-weight:600; }
   .segunda.fallo { color:#f87171; }
@@ -1394,20 +1395,26 @@ document.getElementById('btn-fondo').onclick = () => {
 const BUSCABLES = ['person', 'car', 'truck', 'bus', 'boat'];
 const ALIAS_PERSONA = ['person', 'pedestrian', 'people'];
 let buscando = null;
+// Whether the operator asked to see everything the detector knows, beyond the mission's classes.
+let verTodas = false;
 let orden = {v: null, epoca: null};
 let ultimoEstado = null;
 
-// The buttons offered: the classes the drones say their detector can emit, once they say it.
-// The fixed list is only the fallback before any drone has reported. The names a model uses for
-// people ('pedestrian', 'people') collapse into the one an operator types; the drone translates
-// it back.
+// The buttons offered: the classes of THIS mission that the drones say their detector can
+// actually emit. A detector trained on a public dataset knows eighty things, most of which have no
+// business on a search map -- offering broccoli and teddy bears next to "person" reads as a demo,
+// and worse, it buries the four buttons an operator will ever press. The rest stay one click away
+// rather than removed, because the detector really can emit them and hiding that would be a lie.
+// The names a model uses for people ('pedestrian', 'people') collapse into the one an operator
+// types; the drone translates it back.
 function buscables(drones) {
   const nombres = new Set(Object.values(drones || {})
     .flatMap(d => (d.buscando && d.buscando.conocidas) || []));
-  if (!nombres.size) return BUSCABLES;
-  const lista = [...nombres].filter(c => !ALIAS_PERSONA.includes(c)).sort();
-  if (ALIAS_PERSONA.some(c => nombres.has(c))) lista.unshift('person');
-  return lista;
+  if (!nombres.size) return {mision: BUSCABLES, resto: []};
+  const tiene = c => nombres.has(c) || (c === 'person' && ALIAS_PERSONA.some(a => nombres.has(a)));
+  const mision = BUSCABLES.filter(tiene);
+  const resto = [...nombres].filter(c => !ALIAS_PERSONA.includes(c) && !BUSCABLES.includes(c)).sort();
+  return {mision: mision.length ? mision : BUSCABLES, resto};
 }
 
 // One line per drone with what its camera is really doing. The station's record of the request
@@ -1427,9 +1434,18 @@ function pintarBuscar() {
   const sel = new Set(buscando || []);
   const cont = document.getElementById('buscar');
   const drones = (ultimoEstado && ultimoEstado.drones) || {};
-  cont.innerHTML = '<span class="etq">buscando</span>' + buscables(drones).map(c =>
-    `<button data-b="${c}" class="${sel.has(c) ? 'on' : ''}">${c}</button>`).join('')
+  const {mision, resto} = buscables(drones);
+  // Anything already being searched for stays visible even if it is not a mission class: the
+  // operator must always see what they asked for.
+  const extra = resto.filter(c => sel.has(c));
+  const visibles = verTodas ? mision.concat(resto) : mision.concat(extra);
+  const boton = c => `<button data-b="${c}" class="${sel.has(c) ? 'on' : ''}">${c}</button>`;
+  cont.innerHTML = '<span class="etq">buscando</span>' + visibles.map(boton).join('')
+    + (resto.length ? `<button data-todas="1" class="mas">${verTodas
+        ? 'menos' : '+ ' + resto.length + ' clases mas'}</button>` : '')
     + estadoBusqueda(drones, orden).map(t => `<div class="acuse">${t}</div>`).join('');
+  const mas = cont.querySelectorAll('button[data-todas]')[0];
+  if (mas) mas.onclick = () => { verTodas = !verTodas; pintarBuscar(); };
   for (const b of cont.querySelectorAll('button')) {
     b.onclick = async () => {
       const c = b.dataset.b;
