@@ -147,6 +147,26 @@ estado = { pois: [ poi(200, {}) ]};
 delete estado.pois[0].age_s;
 pintar();
 ok(visibles.length === 1 && alfaDe(estado.pois[0]) === 1, 'sin age_s no hay nada que desvanecer');
+
+// 6. "limpiar" respeta lo confirmado a proposito, asi que sobre un mapa de puros confirmados no
+// hace nada visible. Un boton que no hace nada visible se lee como roto: tiene que DECIRLO. El caso
+// no es raro, es el del banco con camara en vivo, donde todo lo que se sostiene queda confirmado.
+limpiados.length = 0;
+estado = { ahora: 1000, pois: [ poi(0, { mature: true, age_s: 1 }), poi(90, { mature: true, age_s: 2 }) ]};
+limpiar();
+console.log('  mapa de puros confirmados :', document.getElementById('cuenta').textContent);
+ok(document.getElementById('cuenta').textContent.indexOf('nada que limpiar') >= 0,
+   'limpiar sobre puros confirmados tiene que decir que no hizo nada, y por que');
+ok(document.getElementById('cuenta').textContent.indexOf('2 puntos estan confirmados') >= 0,
+   'tiene que decir cuantos respeto');
+ok(visibles.length === 2, 'limpiar no puede ocultar un confirmado');
+
+limpiados.length = 0;
+estado = { ahora: 1000, pois: [ poi(0, { mature: true, age_s: 1 }), poi(90, { mature: false, age_s: 2 }) ]};
+limpiar();
+console.log('  con uno sin confirmar     :', document.getElementById('cuenta').textContent);
+ok(document.getElementById('cuenta').textContent.indexOf('limpiados 1') >= 0,
+   'cuando limpia algo tiene que decir cuantos');
 `;
 
 console.log('======================================================================');

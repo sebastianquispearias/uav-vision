@@ -859,6 +859,9 @@ const ALFA_HISTORIAL = 0.3;
 // quarter opacity cannot be.
 const ALFA_TARJETA_MIN = 0.45;
 let verHistorial = false;
+// Lo ultimo que un boton tiene para decir. Se borra con el reporte siguiente: es la respuesta a un
+// clic, no un estado del sistema.
+let aviso = '';
 // What "limpiar" hid: where each live contact was and how old it was at that moment. Kept by
 // position, like the verdicts, because a POI carries no id that survives a report.
 let limpiados = [];
@@ -917,11 +920,21 @@ function vistoHace(p) {
 // nothing would ever say it had been seen again, so it would be hidden for good.
 function limpiar() {
   if (!estado) return;
+  let ocultados = 0, confirmados = 0;
   for (const p of estado.pois) {
     const e = edadDe(p);
-    if (e == null || ocultas.has(claseDe(p)) || persistente(p) || ocultoPorCapas(p)) continue;
+    if (persistente(p)) { confirmados++; continue; }
+    if (e == null || ocultas.has(claseDe(p)) || ocultoPorCapas(p)) continue;
     limpiados.push({ x: p.x, y: p.y, r: p.radius_m || 0, edad: e });
+    ocultados++;
   }
+  // Un boton que no dice nada al apretarlo se lee como roto, y este NO oculta lo confirmado a
+  // proposito: un punto que el sistema ya sostiene no desaparece porque el operador limpie.
+  aviso = ocultados
+    ? 'limpiados ' + ocultados
+    : (confirmados
+       ? 'nada que limpiar: los ' + confirmados + ' puntos estan confirmados y no se ocultan'
+       : 'nada que limpiar');
   pintar();
 }
 
@@ -929,6 +942,8 @@ function alternarHistorial() {
   verHistorial = !verHistorial;
   const b = document.getElementById('btn-historial');
   b.className = verHistorial ? 'on' : '';
+  const tapados = estado ? estado.pois.filter(ocultoPorCapas).length : 0;
+  aviso = tapados ? '' : 'no hay nada oculto que mostrar';
   if (estado) pintar();
 }
 
@@ -1265,7 +1280,8 @@ function pintar() {
   document.getElementById('cuenta').textContent = visibles.length + ' POI'
     + (visibles.length === estado.pois.length ? '' : ` de ${estado.pois.length}`)
     + (descartados ? ` \u00b7 ${descartados} descartados` : '')
-    + (tapados ? ` \u00b7 ${tapados} ${verHistorial ? 'en historial' : 'ocultos'}` : '');
+    + (tapados ? ` \u00b7 ${tapados} ${verHistorial ? 'en historial' : 'ocultos'}` : '')
+    + (aviso ? ` \u00b7 ${aviso}` : '');
   ajustarVista(visibles);
   pintarLista(visibles);
   dibujar();
@@ -1275,6 +1291,7 @@ async function refrescar() {
   try {
     const r = await fetch('/estado');
     estado = await r.json();
+    aviso = '';
     if (estado.tiene_fondo && !fondo) {
       fondo = new Image();
       fondo.onload = dibujar;
@@ -1435,7 +1452,9 @@ function estadoBusqueda(drones, ord) {
     if (!b) return `dron ${id}: no informa que busca`;
     const pendiente = ord.v != null && ord.v > 0 && (b.v !== ord.v || b.epoca !== ord.epoca);
     if (pendiente) return `dron ${id}: todavia no tomo la orden`;
-    if (b.rechazo) return `dron ${id}: rechazo la orden (${b.rechazo})`;
+    // El motivo del rechazo trae la lista entera de lo que el detector conoce, que son ochenta
+    // nombres y tapan la pantalla. Se muestra lo que importa: que rechazo, y que pidio.
+    if (b.rechazo) return `dron ${id}: rechazo la orden (${String(b.rechazo).split(';')[0]})`;
     return `dron ${id}: busca ${b.clases ? b.clases.join(', ') : 'lo de siempre'}`;
   });
 }
@@ -1467,7 +1486,10 @@ function pintarBuscar() {
   }
   const mas = cont.querySelectorAll('button[data-todas]')[0];
   if (mas) mas.onclick = () => { verTodas = !verTodas; pintarBuscar(); };
-  for (const b of cont.querySelectorAll('button')) {
+  // Solo los botones de CLASE llevan el manejador de busqueda. Atarlo a todos los botones de la
+  // barra hacia que "segunda opinion" y "+ N clases mas" mandaran una orden con la clase undefined,
+  // y el dron la rechazaba con "the detector does not emit [None]".
+  for (const b of cont.querySelectorAll('button[data-b]')) {
     b.onclick = async () => {
       const c = b.dataset.b;
       if (sel.has(c)) sel.delete(c); else sel.add(c);
