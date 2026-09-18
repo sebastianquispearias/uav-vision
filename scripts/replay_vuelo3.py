@@ -32,6 +32,7 @@ import numpy as np
 
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
+from uav_vision.camera import OnboardCamera, dentro_del_foco
 from uav_vision.camera_config import ARDUCAM_MODULE_3
 from uav_vision.vision_protocol import VisionProtocol
 
@@ -109,13 +110,21 @@ class CamaraReplay:
     reaching the report, and the protocol treats None as "no opinion".
     """
 
-    def __init__(self, dets_por_frame, camera):
+    def __init__(self, dets_por_frame, camera, banda_baja=None):
         self.dets_por_frame = dets_por_frame
+        # The boxes the detector scored between 0.10 and the reporting threshold and threw away.
+        # They enter only through the window the operator's verdict opens, which is the whole point
+        # of the fixed-target mode: no extra inference, just evidence that was already computed.
+        self.banda_baja = banda_baja or {}
+        self.foco = None
         self.camera = camera
         self.frame = None
         self._servido = True
         self.clases = None
         self.servidas = {}      # what actually reached the protocol, by class
+
+    # The same window contract the real camera has, so what is measured here is what would fly.
+    set_focus = OnboardCamera.set_focus
 
     def set_frame(self, frame):
         self.frame = frame
@@ -168,6 +177,19 @@ class CamaraReplay:
             if cls is not None:
                 det["cls"] = cls
             salida.append(det)
+        if self.foco is not None:
+            for d, emb, cls in self.banda_baja.get(self.frame, []):
+                if not self._pasa(cls):
+                    continue
+                x1, y1, x2, y2 = d[2:6]
+                det = {"px": float((x1 + x2) / 2), "py": float(y2), "conf": float(d[1]),
+                       "emb": emb}
+                if not dentro_del_foco(det, self.foco) or det["conf"] < self.foco["umbral"]:
+                    continue
+                if cls is not None:
+                    det["cls"] = cls
+                self.servidas[cls] = self.servidas.get(cls, 0) + 1
+                salida.append(det)
         return salida
 
 
@@ -297,6 +319,21 @@ _CLASE_PERSONA = "pedestrian" if CON_VEHICULOS else None
 EVIDENCIA_MIN = next((float(a.split("=", 1)[1]) for a in sys.argv
                       if a.startswith("--evidencia-min=")), None)
 
+# --foco=x,y fixes a target the way the operator's "es lo que busco" does, so the fixed-target
+# mode can be judged by people and phantoms and not only by boxes. Absent, nothing below the
+# reporting threshold is ever loaded and the run is byte for byte the one the gate pins.
+FOCO = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--foco=")), None)
+banda_baja = {}
+if FOCO is not None:
+    baja = dets_all[(dets_all[:, 1] < CONF_MIN) & (dets_all[:, 1] >= 0.10)]
+    embs_all = D["embs"].astype(np.float32)
+    embs_all /= (np.linalg.norm(embs_all, axis=1, keepdims=True) + 1e-9)
+    emb_baja = embs_all[(dets_all[:, 1] < CONF_MIN) & (dets_all[:, 1] >= 0.10)]
+    for i, d in enumerate(baja):
+        banda_baja.setdefault(int(d[0]), []).append((d, emb_baja[i], _CLASE_PERSONA))
+    print("objetivo fijado en (%s): %d cajas de la banda baja disponibles en %d frames"
+          % (FOCO, len(baja), len(banda_baja)))
+
 por_frame = {}
 for f, ix in idx_por_frame.items():
     por_frame[f] = [(dets[i], int(track_de[i]) if track_de[i] >= 0 else None, embs[i],
@@ -387,7 +424,7 @@ print(f"cadencia del vuelo: {fps_replay:.2f} FPS")
 from uav_vision.identity import IncrementalIdentity
 
 Protocolo = VisionProtocol.with_config(
-    camera=CamaraReplay(por_frame, camara_cfg),
+    camera=CamaraReplay(por_frame, camara_cfg, banda_baja),
     pitch_deg=PITCH,
     yaw_source=lambda: state["yaw"],
     # --actitud feeds the body pitch recorded in frames.csv into each ray; --actitud-roll=+1/-1
@@ -449,6 +486,12 @@ print("  >> rayos del protocolo coinciden con los del vuelo real")
 provider = FakeProvider()
 protocol = Protocolo.instantiate(provider)
 protocol.initialize()
+if FOCO is not None:
+    # The operator points at what the MAP showed, not at the surveyed truth: fixing the true
+    # position would measure a mode nobody can use. The point passed here is the one the baseline
+    # run reported for the operator, 2.29 m from the survey.
+    _fx, _fy = (float(v) for v in FOCO.split(","))
+    protocol.fix_target(_fx, _fy)
 camera = protocol.camera
 
 t0 = float(poses[frames_aire[0]]["t_mono"])

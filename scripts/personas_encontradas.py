@@ -116,9 +116,13 @@ def letra_de(det):
     return "X"
 
 
-def evaluar(nombre, datos, pistas, candidatos):
+def evaluar(nombre, datos, pistas, candidatos, piso=0.25):
+    # piso is the confidence the TRACKS were computed at, not a taste: the track array has one row
+    # per detection above it, and reading it against a different cut shifts every id by one. The
+    # fixed-target mode is the case that needs another value, because there the tracker was also
+    # shown the band the detector was discarding.
     dets = np.load(os.path.join(datos, "examen_v3_datos.npz"))["dets"]
-    dets = dets[dets[:, 1] >= 0.25]
+    dets = dets[dets[:, 1] >= piso]
     track = np.load(pistas)["track"]
     cands = json.load(open(candidatos))
     idx_de_pista = defaultdict(list)
@@ -165,8 +169,10 @@ def main():
                     help="the same track file the replay was fed")
     ap.add_argument("--datos", default=DATOS, help="directory holding examen_v3_datos.npz")
     ap.add_argument("--nombre", default="DETECTOR QUE VUELA")
+    ap.add_argument("--piso", type=float, default=0.25,
+                    help="la confianza a la que se calcularon las pistas")
     a = ap.parse_args()
-    evaluar(a.nombre, a.datos, a.pistas, a.candidatos)
+    evaluar(a.nombre, a.datos, a.pistas, a.candidatos, a.piso)
 
 
 if __name__ == "__main__":

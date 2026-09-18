@@ -81,6 +81,21 @@ MIN_MEASUREMENTS = 8
 # threshold is the floor the detector was already scoring at. Neither is derivable from the optics:
 # they encode how much invented evidence is acceptable in exchange for finding the target, and that
 # changes per mission.
+#
+# WHAT THIS BUYS, MEASURED, AND IT IS NOT WHAT THE BOX NUMBERS PROMISE. Against ground-truth boxes
+# the window takes recall on the target from 43.9 % to 60.7 %. Run through the whole chain on the
+# 02ago flight and scored by people and phantoms, it changes NOTHING: same five people, same six
+# phantoms, in all four variants tried (target on the operator and on the most fragile candidate,
+# with the tracker as it flies and with its floor lowered to accept the band).
+#
+# The mechanism is visible in the numbers: 1673 boxes fell inside the window and 29 of them ended up
+# with a track id. BoT-SORT drops everything under its own low threshold of 0.20 before it
+# associates anything, and a detection with no track id never reaches the identity layer. Of the 841
+# boxes between 0.10 and 0.15, and the 494 between 0.15 and 0.20, exactly zero were tracked.
+#
+# And above 0.20 the window adds nothing either, because camera.py already opens that band over the
+# WHOLE frame (low_band=0.2). What is left is plumbing for acting on the operator's click, which is
+# worth having, and a measured claim that the recall gain does not survive the pipeline.
 FOCO_RADIO_PX = 320.0
 FOCO_UMBRAL = 0.10
 
