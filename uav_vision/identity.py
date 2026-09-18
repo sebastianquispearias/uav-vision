@@ -46,6 +46,26 @@ DUTY_MIN = 0.10
 EMB_DIST_GEMELO = 0.70
 POS_FRAC_GEMELO = 0.4
 
+# Re-associating a moving candidate is the one case where position argues for splitting and
+# appearance argues for joining, so appearance decides, and it is asked for more than the 0.95 that
+# decides a static merge.
+#
+# THIS NUMBER IS NOT SAFE AND THAT IS WHY REJOINING IS OFF BY DEFAULT. Measured over the 02ago
+# flight, track by track, against the letters a human put on every box:
+#
+#   pieces of the SAME person   0.26 (the operator) and 0.41 0.41 0.60 0.61 0.64 0.81 (the walker)
+#   DIFFERENT people            0.64 (B vs C)  0.67 (H vs C)  0.68 (H vs B)  0.73 ...
+#
+# The two ranges OVERLAP by 0.18: seven pairs of different people are closer than the furthest pair
+# of the same person. No threshold separates them. What joins the walker without fusing anybody is a
+# window between 0.61 and 0.67, and 0.63 sits in it -- chosen by looking at the flight it is judged
+# on, which is the error this repository has already paid for once. At 0.70 the boy on the balcony
+# is absorbed into somebody else and DISAPPEARS FROM THE MAP, which in a search is the worst failure
+# there is: the operator is not told there is a person there at all.
+#
+# It stays off until a second flight exists to choose the number on.
+EMB_DIST_REUNE = 0.63
+
 # Radius of the circle holding 95 % of a two-dimensional isotropic Gaussian, in sigmas:
 # sqrt(-2 ln 0.05). Used to turn a per-axis position uncertainty into something an operator can
 # draw on a map and walk to.
@@ -289,6 +309,9 @@ class IncrementalIdentity:
         motion_window_s: float = 5.0,
         mobile_speed_mps: float = 0.5,
         extrapolation_max_s: float = 3.0,
+        rejoin_mobile: bool = False,
+        emb_dist_rejoin: float = EMB_DIST_REUNE,
+        rejoin_max_gap_s: float = 30.0,
         crop_choice: str = "confidence",
     ) -> None:
         if maturity not in ("span", "looks"):
@@ -296,6 +319,9 @@ class IncrementalIdentity:
         if crop_choice not in ("confidence", "appearance"):
             raise ValueError("crop_choice must be 'confidence' or 'appearance', got %r" % (crop_choice,))
         self.crop_choice = crop_choice
+        self.rejoin_mobile = bool(rejoin_mobile)
+        self.emb_dist_rejoin = float(emb_dist_rejoin)
+        self.rejoin_max_gap_s = float(rejoin_max_gap_s)
         self.fusion_radius_m = fusion_radius_m
         self.reinforce_with_fragments = reinforce_with_fragments
         self.maturity = maturity
@@ -583,16 +609,33 @@ class IncrementalIdentity:
 
     def _match(self, tk: dict, cands: List[dict]) -> Optional[int]:
         """
-        Index of the static candidate this track belongs to, or None.
+        Index of the candidate this track belongs to, or None.
 
         The rules apply in order -- class, co-occurrence, distance, appearance -- and among the
         candidates that pass all of them the one closest in position and appearance wins.
+
+        A moving candidate is compared where it would BE when this track was seen, not where it was
+        last seen, and against the margin that goes with having been unseen that long. Comparing a
+        walker against a stale position is what broke one person into three points on the map: on
+        the 02ago flight the walking woman's three pieces sit 2.9, 7.0 and 9.1 m apart with a fusion
+        radius of 3.5 m, while OSNet scores them 0.41 to 0.61 against a threshold of 0.95. Position
+        said three people and appearance said one, and position was the one that was wrong, because
+        she had walked. Rejoining asks more of appearance than a static merge does, and refuses
+        outright when either side has no appearance at all: guessing that two points on a projected
+        path are the same person, with nothing but geometry, is how two people become one.
         """
         radio = self._radio(tk["cls"])
+        cuando = tk.get("t_ultimo") if tk.get("t_ultimo") is not None else tk.get("t0")
         mejor, smin = None, math.inf
         for k, c in enumerate(cands):
             if c["mobile"]:
-                continue
+                if not self.rejoin_mobile:
+                    continue
+                if tk["emb"] is None or c["emb"] is None:
+                    continue
+                if (cuando is not None and c.get("t_ultimo") is not None
+                        and abs(float(cuando) - float(c["t_ultimo"])) > self.rejoin_max_gap_s):
+                    continue
             # Two names, two things. This veto comes before every other rule, the twin
             # exception included: a car is not the person standing beside it however
             # close they are and however alike their crops look at 35 m. Silence on
@@ -603,7 +646,9 @@ class IncrementalIdentity:
             if (tk["cls"] is not None and c_cls is not None
                     and tk["cls"] != c_cls):
                 continue
-            dp = float(np.linalg.norm(tk["pos"] - c["pos"]))
+            radio_c = self._radio_ahora(c, cuando) if c["mobile"] else radio
+            emb_max = self.emb_dist_rejoin if c["mobile"] else self.emb_dist_max
+            dp = float(np.linalg.norm(tk["pos"] - self._en(c, cuando)))
             if len(tk["frames"] & c["frames"]) >= COOCURRENCIA_MIN:
                 # Seen together: two different things — unless this is the duplicate-box
                 # case (same spot, same appearance).
@@ -614,15 +659,15 @@ class IncrementalIdentity:
                     < EMB_DIST_GEMELO)
                 if not es_gemelo:
                     continue
-            if dp >= radio:
+            if dp >= radio_c:
                 continue
             if tk["emb"] is not None and c["emb"] is not None:
                 de = float(np.linalg.norm(tk["emb"] - c["emb"]))
-                if de >= self.emb_dist_max:
+                if de >= emb_max:
                     continue
-                s = dp / radio + 0.5 * de / self.emb_dist_max
+                s = dp / radio_c + 0.5 * de / emb_max
             else:
-                s = dp / radio
+                s = dp / radio_c
             if s < smin:
                 mejor, smin = k, s
         return mejor
