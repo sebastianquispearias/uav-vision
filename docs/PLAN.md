@@ -3,6 +3,70 @@
 Cada punto dice **cuándo está listo**, para que el trabajo tenga final y no sea una cinta sin fin.
 Lo que ya está medido y descartado vive en `DESCARTADO.md`; los números actuales en `RESULTADOS.md`.
 
+## Verificación activa: el bloque nuevo, y va antes que el resto
+
+Las tres piezas de abajo son un solo mecanismo, no tres funciones sueltas. El operador dice qué
+busca, el sistema mide cuánta evidencia tiene y cuánta le falta, y el dron va a conseguir la que
+falta. En la literatura eso se llama **active sequential hypothesis testing**, y la regla de parada
+es el test secuencial de Wald (1945): se acumula evidencia y se para al cruzar uno de dos umbrales,
+uno para confirmar y otro para descartar.
+
+Van antes que los puntos 1 a 6 porque ninguna necesita volar, y porque la medición del 30sep (abajo,
+en lo que no hay que hacer) sacó de la mesa la justificación que se les suponía.
+
+### A. La barra de certeza, visible
+
+Hoy un candidato está maduro o no está, y el operador no ve nada mientras se decide. Medido en el
+vuelo 3: un barrido de 30 s sobre una persona **nunca** madura un candidato, y uno de 60 s lo hace
+el 47 % de las veces. Durante esos 30 s el sistema está a mitad de camino y el operador no lo sabe.
+
+La cuenta ya existe: `identity.py` calcula `c["n"]` contra `n_reporte` y la cobertura temporal en
+cada cuadro. Falta mostrarla, y faltan dos cosas de fondo. Primero, **ponderar cada avistamiento**:
+hoy el décimo desde el mismo ángulo vale igual que el primero desde un ángulo nuevo, y en un test
+secuencial cada observación aporta según cuán informativa es. Segundo, **el umbral de abajo**: hoy
+la barra sólo sube, y un candidato que acumula evidencia en contra debería vaciarse y descartarse
+solo en vez de quedar colgado como preliminar.
+
+**Listo cuando:** la estación muestra, por candidato, la fracción de evidencia reunida; un candidato
+con evidencia en contra se descarta solo; y el marcador de producto no empeora.
+
+### B. El click que define el objetivo
+
+El veredicto del operador existe y hoy hace poco: "es lo que busco" baja el umbral en esa ventana, y
+"no es" borra un punto del mapa. Lo primero está medido y no sirve (ver punto 5). Lo segundo tira la
+señal más valiosa que hay.
+
+La vía medida es la plantilla de apariencia: el recorte del click es la huella, y una detección
+dudosa que se le parece se acepta. El objetivo sube de 91,1 a 94,4 % sin tocar un peso y con vuelta
+atrás inmediata. **No se entrenan pesos en vuelo**, por lo que ya está en la lista de abajo.
+
+Y el "no es" se guarda como negativo difícil. En aprendizaje activo el ejemplo más valioso no es el
+positivo sino el negativo que el modelo clasificó mal con confianza, que es exactamente lo que ese
+botón produce.
+
+**Listo cuando:** el click del operador cambia qué candidatos se reportan en el replay del 02ago, los
+veredictos negativos quedan guardados y utilizables, y el marcador de producto lo juzga.
+
+### C. La maniobra: mandar un dron a mirar desde otro lado
+
+Es la fase 2 de la misión original ("los drones van, circulan y mantienen posición") y nunca se
+construyó. Hoy la estación propone una segunda mirada y el piloto decide.
+
+**No se justifica por recall.** La medición del 30sep lo cierra: el detector pierde personas más
+grandes que las que encuentra en la misma imagen, así que ir a buscar más píxeles no arregla nada.
+Lo que la justifica es la imagen para que decida el operador, seguir un blanco que se desplaza, y el
+caso fuera de distribución (SeaDronesSee: 0,866 con la cámara a 36 grados contra 0,067 apuntando
+recto hacia abajo, con barcos de 74 a 160 px).
+
+Lo que falta no es el criterio sino su objetivo. `view_selection.py` puntúa vistas por **diversidad
+geométrica**, que es lo correcto para triangular y lo equivocado para reconocer. Para verificar qué
+es algo, el criterio tiene que ser la reducción esperada de incertidumbre **de clasificación**.
+Primer obstáculo material: `correr.py` es el único que importa `view_selection.py` y `fusion.py`, y
+no arranca (importa `CamaraSimulada`, que no existe: `camera.py` define `SimulatedCamera`).
+
+**Listo cuando:** el operador señala un candidato, un dron no líder llega a una posición calculada y
+devuelve una imagen desde otro ángulo, y queda medido cuánto movió la barra del punto A.
+
 ## Producto
 
 ### 1. Volar otra vez, a 20-25 m, otro día y otro sitio
@@ -53,12 +117,15 @@ estación dispare el pedido y pinte lo que vuelve.
 **Listo cuando:** el operador hace click en un punto del mapa y ve, en menos de 5 s, lo que RF-DETR
 encontró en ese cuadro.
 
-### 5. Modo "objetivo fijado"
+### 5. Modo "objetivo fijado" — HECHO el 17sep, NEGATIVO
 
-Bajar el umbral solo dentro de la ventana del objetivo: recall 43,9 → 60,7 % sobre lo que el operador
-señaló, **sin un milisegundo extra de cómputo** y reversible.
+Bajar el umbral solo dentro de la ventana del objetivo lleva el recall sobre el objetivo de 43,9 a
+60,7 %, sin un milisegundo extra de cómputo y reversible. **Pasado por la cadena entera no cambia
+nada**: las mismas cinco personas y los mismos seis fantasmas, en las cuatro variantes probadas, con
+el objetivo puesto en el operador y en el candidato más frágil (commit `e186c50`).
 
-**Listo cuando:** se enciende con el veredicto "es lo que busco" y se mide con el marcador de producto.
+Diecisiete puntos de recall que no compran una persona. Es el techo medido de la versión barata de
+"que el click enseñe", y el motivo por el que la vía es la plantilla de apariencia del punto B.
 
 ### 6. Re-unir a una persona tras un hueco
 
@@ -97,5 +164,44 @@ Está medido y agotado, el detalle en `DESCARTADO.md`:
   etiquetar por encima de 12 m son vecinos inmediatos de lo ya etiquetado.
 - **RF-DETR como maestro mientras no haya metraje nuevo.** Pseudo-etiquetar los mismos vuelos
   triplicaría el sobreajuste, no la variedad.
+- **Acercarse volando para que el detector vea mejor.** Medido el 30sep sobre las 764 pérdidas
+  etiquetadas del 02ago: no son chicas (mediana 49,3 px, sólo el 8,2 % bajo los 28 px para los que el
+  detector fue entrenado). Y comparando **dentro del mismo cuadro**, donde la altura del dron y la
+  escena son idénticas, en el 59,1 % de los 176 cuadros el detector perdió a una persona **más
+  grande** que una que encontró en la misma imagen (f2586: perdió 186 px y encontró 141). El fallo no
+  es de resolución, así que más píxeles no lo arreglan. El zoom digital ya se había medido peor
+  (43,9 → 11,2 → 2,3 %). La señal que queda es la **forma**: relación alto/ancho 1,27 en las perdidas
+  contra 1,79 en las encontradas, y más anchas que altas el 20,0 % contra el 0,9 %. Para recall la
+  vía es el detector (punto 4, segunda opinión en tierra), no la maniobra.
 - **Adaptación de pesos en vuelo sin poder revertir.** La adaptación funciona, pero el modo de fallo
   es silencioso: hay que tener los dos modelos y poder volver al original.
+
+## Trabajo futuro: servocontrol visual (cerrar el lazo)
+
+Hoy el sistema es **percepción en lazo abierto**: mira, calcula la posición y la reporta, pero
+nunca toca el vuelo. Los únicos comandos que un protocolo GrADyS puede emitir son `GotoCoords`,
+`GotoGeoCoords` y `SetSpeed`: coordenadas y velocidad, nada de imagen.
+
+Cerrar el lazo se llama **servocontrol visual** (*visual servoing*). Dos variantes:
+**IBVS** (*image-based*), donde el error se mide en pixeles, y **PBVS** (*position-based*), que
+primero convierte la imagen en una posicion. El sistema ya hace la mitad dificil de PBVS:
+`pinhole_local.py` + `identity.py` convierten imagen en metros. Falta usar ese resultado para
+mandar un comando.
+
+**Las primitivas ya existen en `uav_api`**, solo que no estan expuestas como comando de GrADyS:
+
+    /drive_body, /drive_body_wait    velocidad en el sistema del propio dron
+    /travel_at_ned                   velocidad
+    /set_heading, /set_yaw_rate      rumbo y velocidad de giro
+
+**El caso que lo justifica:** a 40 m una persona son 42 px y el detector falla pasados los 24 m.
+Un lazo que mantenga al objetivo a un tamano fijo en pixeles (por ejemplo 80 px de alto) elige la
+altura solo, en vez de fijarla a mano antes de despegar.
+
+**Lo que lo hace dificil, y por que no esta hecho:**
+- Hay que exponer un comando nuevo en GrADyS, o llamar a uav_api directo desde el protocolo
+  salteandose la abstraccion, que es justo lo que la interfaz existe para evitar.
+- Un lazo cerrado a 3 FPS con un detector que pierde el 45 % de los cuadros se queda sin senal
+  cada vez que el detector falla. Hace falta decidir que hace el controlador mientras tanto.
+- Cambia lo que el sistema ES: de "observo y reporto" a "observo y vuelo", que es mucho mas
+  dificil de defender como seguro ante un operador.
