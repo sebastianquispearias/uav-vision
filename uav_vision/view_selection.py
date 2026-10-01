@@ -79,6 +79,55 @@ def compute_angular_diversity(
     return min(min_angle, _MAX_DIVERSITY_DEG)
 
 
+def next_best_viewpoint(
+    target: Tuple[float, float, float],
+    seen_dirs: List[Tuple[float, float, float]],
+    radius_m: float,
+    altitude_m: float,
+    n_azimuths: int = 72,
+) -> Tuple[Tuple[float, float, float], float]:
+    """Where to fly so that the next bearing ray is the most different from the ones already taken.
+
+    The paper's criterion selects the best K views out of measurements already collected. This is
+    the other direction: the same criterion used to decide where to GO and collect one. The step
+    is small because compute_angular_diversity does not care whether a ray exists yet -- it scores
+    a direction -- so the function that ranks rays already taken also ranks a hypothetical one.
+
+    Azimuths are sampled around the target at a fixed radius and altitude rather than solved in
+    closed form. With one direction seen the answer is near 90 degrees away, because the diversity
+    uses the absolute dot product and a ray from the far side is as parallel as one from here; with
+    several it has no closed form worth writing.
+
+    radius_m and altitude_m are NOT derived from anything. They are where the operator wants the
+    aircraft to stand, and that is a mission decision: close enough to see a face, far enough not
+    to be over somebody's head, within whatever the airspace allows. They are arguments and they
+    have no default here on purpose.
+
+    Returns the position and the diversity, in degrees, that the ray from it would have. A
+    diversity near zero means no viewpoint at this radius adds anything, which is the honest answer
+    when the aircraft is already where the geometry wants it.
+    """
+    tx, ty, tz = (float(c) for c in target)
+    vistos = [np.asarray(d, dtype=float) for d in seen_dirs]
+    vistos = [v / n for v, n in ((v, float(np.linalg.norm(v))) for v in vistos) if n > 1e-9]
+
+    mejor_pos, mejor_div = None, -1.0
+    for k in range(int(n_azimuths)):
+        a = 2.0 * math.pi * k / float(n_azimuths)
+        pos = (tx + radius_m * math.cos(a), ty + radius_m * math.sin(a), tz + altitude_m)
+        # The ray this viewpoint would produce: from the aircraft towards the target.
+        d = np.array([tx - pos[0], ty - pos[1], tz - pos[2]], dtype=float)
+        norma = float(np.linalg.norm(d))
+        if norma < 1e-9:
+            continue
+        d /= norma
+        div = (compute_angular_diversity(tuple(d), [tuple(v) for v in vistos])
+               if vistos else _MAX_DIVERSITY_DEG)
+        if div > mejor_div:
+            mejor_pos, mejor_div = pos, div
+    return mejor_pos, mejor_div
+
+
 def compute_selection_score(
     angular_diversity_deg: float,
     confidence: float,

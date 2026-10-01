@@ -31,12 +31,14 @@ import numpy as np
 
 from gradys_embedded.protocol.interface import IProtocol
 from gradys_embedded.protocol.messages.communication import BroadcastMessageCommand
+from gradys_embedded.protocol.messages.mobility import GotoCoordsMobilityCommand
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
 from uav_vision.flota import mismo_objetivo
 
 from uav_vision.identity import dominant_class
 from uav_vision.pinhole_local import pixel_to_ray, project_to_pixel
+from uav_vision.view_selection import next_best_viewpoint
 
 TIMER_SEE = "uav_vision:see"
 TIMER_REPORT = "uav_vision:report"
@@ -98,6 +100,13 @@ MIN_MEASUREMENTS = 8
 # worth having, and a measured claim that the recall gain does not survive the pipeline.
 FOCO_RADIO_PX = 320.0
 FOCO_UMBRAL = 0.10
+
+# How close the aircraft has to be to where it was sent before the frame is worth taking. A radius
+# and not a coordinate match, because an aircraft holding position drifts and demanding the
+# coordinate would mean never arriving. Five metres is the order of the GPS bias this system
+# already accounts for (gps_sigma 1.5 m, and the 95 % radius of a static candidate on flight 3 is
+# 2.4 m), so inside it the view is the one that was asked for.
+RODEO_TOLERANCIA_M = 5.0
 
 
 def _ground_impact(
@@ -311,6 +320,10 @@ class VisionProtocol(IProtocol):
         # costs one click. Keeping the refusal here is what stops the drone from spending the link
         # on the same wrong point every two seconds for the rest of the flight.
         self._descartados: List[dict] = []
+        # Where this aircraft was told to go to look at a target from another side, and the target
+        # it was sent to look at. None when nothing was asked. This is the one place in the whole
+        # package that makes the aircraft move, and it only ever moves because a human clicked.
+        self._rodeo: Optional[dict] = None
         # What the neighbours are reporting, by sender. Emptied here rather than at class
         # level so a relaunched protocol does not start out corroborating a previous flight.
         self._ajenos: Dict = {}
@@ -342,6 +355,8 @@ class VisionProtocol(IProtocol):
 
     def handle_telemetry(self, telemetry: Telemetry) -> None:
         self._position = telemetry.current_position
+        if self._rodeo is not None:
+            self._llego_al_rodeo()
 
     def handle_timer(self, timer: str) -> None:
         if timer == TIMER_SEE:
@@ -407,6 +422,9 @@ class VisionProtocol(IProtocol):
         if m.get("type") == "vision_mirar":
             self.send_frame(m.get("para"))
             return
+        if m.get("type") == "vision_rodear":
+            self.rodear(m.get("x"), m.get("y"), m.get("radio_m"), m.get("altura_m"))
+            return
         if m.get("type") == "vision_descarte":
             self.descartar(m.get("x"), m.get("y"), m.get("cls"), m.get("plantilla"))
             return
@@ -423,6 +441,68 @@ class VisionProtocol(IProtocol):
             "t": self.provider.current_time(),
             "pois": m.get("pois") or [],
         }
+
+    def rodear(self, x=None, y=None, radio_m=None, altura_m=None) -> bool:
+        """Flies to the place from which this target has not been seen yet, and sends that frame.
+
+        This is the second half of the mission as it was written: detect a POI, and then the
+        aircraft goes, circles it and holds position. Everything before this reported and never
+        touched the flight.
+
+        The place is not "closer". Closer was measured and does not settle the detection question
+        on this flight: within one frame, where altitude and light are identical, the detector
+        missed people LARGER than ones it found. What is missing from a single pass is not pixels,
+        it is a second direction, and that is what next_best_viewpoint returns: the position whose
+        ray to the target is the most different from the ones already taken.
+
+        What the extra view is FOR is worth being exact about, because it decides how to judge it.
+        It is not a claim that the detector will do better from there; that depends on the model
+        and is not measured. It is a second geometry for the same target, which tightens the
+        bearing-only estimate, and a picture of the target from the side for the person who has to
+        decide, who needs a posture or a face and not a shape seen from above.
+
+        radio_m and altura_m are mission decisions and have no defaults in this layer: see
+        next_best_viewpoint. Call with x None to cancel.
+        """
+        if x is None:
+            self._rodeo = None
+            return True
+        if self.camera is None or self._position is None:
+            return False
+        if radio_m is None or altura_m is None:
+            return False
+        objetivo = (float(x), float(y), self.ground_z)
+        # The only viewing direction this aircraft can vouch for is its own, right now. A station
+        # that knows where the other drones are can pass theirs; this layer does not invent them.
+        d = np.array([objetivo[0] - self._position[0],
+                      objetivo[1] - self._position[1],
+                      objetivo[2] - self._position[2]], dtype=float)
+        norma = float(np.linalg.norm(d))
+        vistas = [tuple(d / norma)] if norma > 1e-9 else []
+        pos, diversidad = next_best_viewpoint(objetivo, vistas,
+                                              radius_m=float(radio_m),
+                                              altitude_m=float(altura_m))
+        if pos is None:
+            return False
+        self._rodeo = {"objetivo": (objetivo[0], objetivo[1]), "ir_a": pos,
+                       "diversidad": float(diversidad), "mirado": False}
+        self.provider.send_mobility_command(GotoCoordsMobilityCommand(*pos))
+        return True
+
+    def _llego_al_rodeo(self) -> None:
+        """Sends the frame once the aircraft is standing where it was sent, and not before.
+
+        Sending on the way would hand the ground the same view it already had, which is the whole
+        point of having flown. The tolerance is a radius, not a coordinate match: an aircraft
+        holding position drifts, and demanding a coordinate would mean never arriving.
+        """
+        if self._rodeo is None or self._rodeo["mirado"] or self._position is None:
+            return
+        ir = self._rodeo["ir_a"]
+        d = math.hypot(self._position[0] - ir[0], self._position[1] - ir[1])
+        if d <= RODEO_TOLERANCIA_M:
+            self._rodeo["mirado"] = True
+            self.send_frame()
 
     def descartar(self, x=None, y=None, cls=None, plantilla=None) -> bool:
         """Records that the operator looked at this point and said it is not what we are after.

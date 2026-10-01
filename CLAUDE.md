@@ -31,6 +31,7 @@ node tests/test_gs_barra.js      # the evidence bar: how far a candidate is from
 python tests/test_correr.py      # the paper's chain (view_selection + fusion) still runs
 python tests/test_plantilla_objetivo.py  # the operator's click keeps boxes that look like the target
 python tests/test_descarte_operador.py   # the operator's "no es" stops the drone reporting it
+python tests/test_rodear.py       # the aircraft flies to see a target from another side
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```
 
