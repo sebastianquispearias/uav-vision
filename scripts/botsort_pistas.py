@@ -47,13 +47,32 @@ def main():
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--calibrado", action="store_true")
+    # --piso lowers the confidence floor of the detections FED to the tracker. It exists because
+    # anything measured about the BYTE band on the replay is otherwise unmeasurable: the band is
+    # the boxes between 0.10 and the reporting threshold, and a band box only earns its way into
+    # the chain by being claimed by an existing track. With the floor at 0.25 the tracker never
+    # sees those boxes, so they arrive at the protocol without a track id, so the identity layer
+    # ignores them, so the window and the appearance template cannot change a single candidate no
+    # matter what they do. Measured: the three runs give n_obs 1299 each, to the unit.
+    ap.add_argument("--piso", type=float, default=CONF_MIN,
+                    help="confidence floor of the detections fed in (default %.2f)" % CONF_MIN)
     args = ap.parse_args()
     umbrales = UMBRALES_CALIBRADOS if args.calibrado else UMBRALES_VUELO
     salida = SALIDA.replace(".npz", "_calibrado.npz") if args.calibrado else SALIDA
+    if args.piso != CONF_MIN:
+        salida = salida.replace(".npz", "_piso%03d.npz" % round(args.piso * 100))
 
-    dets_all = np.load(os.path.join(DATOS, "examen_v3_datos.npz"))["dets"]
-    dets = dets_all[dets_all[:, 1] >= CONF_MIN]
-    embs = np.load(os.path.join(DATOS, "embs_osnet.npy")).astype(np.float32)
+    D = np.load(os.path.join(DATOS, "examen_v3_datos.npz"))
+    dets_all = D["dets"]
+    mascara = dets_all[:, 1] >= args.piso
+    dets = dets_all[mascara]
+    # The cached embs_osnet.npy only covers the detections above 0.25; the flight's npz carries
+    # one embedding per detection, band included, which is what makes a lower floor possible at
+    # all. Above 0.25 the two are the same vectors.
+    if args.piso >= CONF_MIN:
+        embs = np.load(os.path.join(DATOS, "embs_osnet.npy")).astype(np.float32)
+    else:
+        embs = D["embs"][mascara].astype(np.float32)
     embs /= np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9
     assert len(embs) == len(dets), "embeddings not aligned with detections"
     n = len(dets)
@@ -106,7 +125,8 @@ def main():
     print(f"BoT-SORT: {len(ids)} tracks | {int((track >= 0).sum())}/{n} detections assigned | "
           f"boxes per track: median {int(np.median(cuenta))}, max {int(cuenta.max())} | "
           f"tracks with >=10 boxes: {int((cuenta >= 10).sum())}", flush=True)
-    np.savez(salida, track=track, fps=fps, track_buffer=buffer_frames, conf_min=CONF_MIN, **umbrales)
+    np.savez(salida, track=track, fps=fps, track_buffer=buffer_frames, conf_min=args.piso,
+             **umbrales)
     print("saved", salida, umbrales)
 
 

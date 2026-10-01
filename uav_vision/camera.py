@@ -66,6 +66,13 @@ def dentro_del_foco(det, foco) -> bool:
 # defended, and until then the gate stays off unless a caller asks for it by passing a distance.
 EMB_DIST_OBJETIVO = 0.85
 
+# Floor of the BYTE band: the lowest score the detector is asked for when a tracker is running.
+# It is 0.2 because that is BoT-SORT's own track_low_thresh, and a box under the tracker's floor is
+# discarded before association, so asking for it is paying OSNet (~33 ms a box) for something
+# nobody will look at. Measured on the 02ago flight: of 2443 boxes between 0.10 and 0.20, exactly
+# zero ever received a track id; between 0.20 and 0.25, 30 of 628 did.
+BANDA_BAJA = 0.2
+
 
 def se_parece_al_objetivo(det, foco) -> bool:
     """Whether a doubted detection looks like the target the operator fixed.
@@ -217,7 +224,7 @@ class OnboardCamera:
         # score, but only those the tracker attached to an existing track are reported. A person
         # the detector merely doubted keeps her track alive; a box out of nowhere does not become
         # a target, because new_track_thresh still guards that. None disables the band.
-        low_band: Optional[float] = 0.2,
+        low_band: Optional[float] = BANDA_BAJA,
         classes: Optional[Sequence[str]] = None,
         camera: CameraConfig = ARDUCAM_MODULE_3,
         rot180: bool = True,

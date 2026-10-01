@@ -32,7 +32,8 @@ import numpy as np
 
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
-from uav_vision.camera import OnboardCamera, dentro_del_foco
+from uav_vision.camera import (BANDA_BAJA, EMB_DIST_OBJETIVO, OnboardCamera,
+                                dentro_del_foco, se_parece_al_objetivo)
 from uav_vision.camera_config import ARDUCAM_MODULE_3
 from uav_vision.vision_protocol import VisionProtocol
 
@@ -184,7 +185,11 @@ class CamaraReplay:
                 x1, y1, x2, y2 = d[2:6]
                 det = {"px": float((x1 + x2) / 2), "py": float(y2), "conf": float(d[1]),
                        "emb": emb}
-                if not dentro_del_foco(det, self.foco) or det["conf"] < self.foco["umbral"]:
+                # Inside the window above its floor, OR it looks like the target. The second is
+                # not a second window: it does not ask where the box is.
+                en_ventana = (dentro_del_foco(det, self.foco)
+                              and det["conf"] >= self.foco["umbral"])
+                if not en_ventana and not se_parece_al_objetivo(det, self.foco):
                     continue
                 if cls is not None:
                     det["cls"] = cls
@@ -323,12 +328,24 @@ EVIDENCIA_MIN = next((float(a.split("=", 1)[1]) for a in sys.argv
 # mode can be judged by people and phantoms and not only by boxes. Absent, nothing below the
 # reporting threshold is ever loaded and the run is byte for byte the one the gate pins.
 FOCO = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--foco=")), None)
+# --plantilla=f.npy adds the other half of the operator's click: what the target LOOKS like. With
+# it a doubted box is kept wherever it falls and not only inside the projected window, which is
+# the mode measured at 94.4 % recall on the target against 91.1 %. The vector is read from a file
+# so this script keeps knowing nothing about who the letters of the flight belong to; building the
+# template from the hand labels is the measuring script's job, not the replay's.
+PLANTILLA = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--plantilla=")), None)
+EMB_DIST = next((float(a.split("=", 1)[1]) for a in sys.argv
+                 if a.startswith("--emb-dist=")), None)
+_plantilla = np.load(PLANTILLA).astype(np.float32) if PLANTILLA else None
 banda_baja = {}
 if FOCO is not None:
-    baja = dets_all[(dets_all[:, 1] < CONF_MIN) & (dets_all[:, 1] >= 0.10)]
+    # The floor is the camera's, imported and not written out again: the replay used to load from
+    # 0.10, below both the camera's band and the tracker's own track_low_thresh, so it served boxes
+    # the drone would never have fed to a tracker in the first place.
+    baja = dets_all[(dets_all[:, 1] < CONF_MIN) & (dets_all[:, 1] >= BANDA_BAJA)]
     embs_all = D["embs"].astype(np.float32)
     embs_all /= (np.linalg.norm(embs_all, axis=1, keepdims=True) + 1e-9)
-    emb_baja = embs_all[(dets_all[:, 1] < CONF_MIN) & (dets_all[:, 1] >= 0.10)]
+    emb_baja = embs_all[(dets_all[:, 1] < CONF_MIN) & (dets_all[:, 1] >= BANDA_BAJA)]
     for i, d in enumerate(baja):
         banda_baja.setdefault(int(d[0]), []).append((d, emb_baja[i], _CLASE_PERSONA))
     print("objetivo fijado en (%s): %d cajas de la banda baja disponibles en %d frames"
@@ -491,7 +508,9 @@ if FOCO is not None:
     # position would measure a mode nobody can use. The point passed here is the one the baseline
     # run reported for the operator, 2.29 m from the survey.
     _fx, _fy = (float(v) for v in FOCO.split(","))
-    protocol.fix_target(_fx, _fy)
+    protocol.fix_target(_fx, _fy, plantilla=_plantilla,
+                        emb_dist=(EMB_DIST if EMB_DIST is not None
+                                  else (EMB_DIST_OBJETIVO if _plantilla is not None else None)))
 camera = protocol.camera
 
 t0 = float(poses[frames_aire[0]]["t_mono"])

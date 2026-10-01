@@ -67,6 +67,36 @@ sombra. El detector no encierra al objeto, encierra al objeto más su sombra.
 | Exigir cobertura temporal a la rapidez | conserva el móvil **falso** (el operador quieto) y pierde el **verdadero** (G) |
 | Que los móviles pregunten antes de abrir candidato | **funciona**: el operador de 2,37 a 1,92 m. Commiteado |
 | Ajustes de ReID | empeoran: fusionan objetos distintos |
+| Exigir densidad para confirmar (piso de ciclo de trabajo en modo miradas) | **revertido**: ver abajo |
+
+### El piso de densidad: separa en un vuelo y se cae al cambiar de seguidor
+
+En modo `looks`, que es el que vuela, confirmar un candidato es solo contar veinte miradas de un
+segundo. Eso premia la permanencia, y lo más permanente de una escena es un fantasma estático. Se
+cruzó, candidato por candidato, contra las letras que un humano puso en cada caja del 02ago:
+
+```
+de los 4 candidatos confirmados, 3 son fantasmas y 1 es el operador
+de las personas reales B, C, G y H, ninguna confirma
+```
+
+La densidad (en qué fracción de los cuadros con detección de su propia vida se vio al candidato)
+los separaba con un hueco limpio: fantasmas hasta **0,397**, personas desde **0,714**, nada en el
+medio. Y el piso en 0,55 quitaba los tres fantasmas confirmados sin tocar al operador.
+
+**Por qué se revirtió.** Un test de la suite corre con el seguidor de reserva en vez de BoT-SORT, y
+ahí el operador saca densidad 0,126 y queda en el medio del pelotón. La causa es la fragmentación:
+un objetivo partido en pedazos conserva un span largo y reparte sus avistamientos, así que su
+densidad se hunde. Pistas por candidato: con compensación de movimiento el operador tiene 5 y los
+fantasmas 1 a 3; con el seguidor de reserva el operador tiene 14.
+
+**Y el vuelo que voló tenía la compensación apagada**, o sea que el régimen donde la regla falla es
+el real. La variante por pista (máximo de las pistas del candidato) no separa en ninguno de los dos
+casos: un fantasma con tres pistas tiene una perfectamente densa en su propia ventana y marca 1,000.
+
+**Qué haría falta:** un segundo vuelo con la compensación encendida, o una cantidad que no dependa
+de cómo el seguidor parta las pistas. La medición de la densidad sí quedó, como medición y sin
+umbral, y la barra de la estación la muestra.
 
 ## Etiquetado
 
@@ -87,3 +117,30 @@ sombra. El detector no encierra al objeto, encierra al objeto más su sombra.
 - **Medir con 200 frames muestreados.** La ganancia de la adaptación sobre el objetivo parecía +7,6
   puntos y con la misión entera es +2,9.
 - **Cortar un entrenamiento con `| head`.** La tubería cerrada mató el proceso a la primera época.
+- **Medir la banda baja contra el marcador de producto, sobre el replay.** No da cero: no puede dar
+  nada. El archivo de pistas tiene 2.637 filas y las detecciones son 5.708, exactamente las de
+  confianza ≥ 0,25, porque el seguidor se corrió sobre ese corte. Las 3.071 cajas de la banda llegan
+  al protocolo **sin `track_id`**, y la capa de identidad solo ve detecciones con pista. Así que ni
+  la ventana del objetivo ni la plantilla de apariencia pueden mover un candidato en ese replay,
+  hagan lo que hagan: los tres corridos dan `n_obs` total **1299**, a la unidad. Cualquier
+  conclusión sobre la banda sacada por esa vía mide el cableado, no la idea.
+- **Y re-correr el seguidor con el piso bajo tampoco alcanza, por un motivo peor.** Se corrió
+  (`scripts/botsort_pistas.py --piso 0.10`, dos configuraciones) y el resultado deja la idea sin
+  nada que medir en este vuelo:
+
+  | tramo de confianza | cajas | con `track_id` | |
+  |---|---|---|---|
+  | 0,10 – 0,20 | 2.443 | **0** (0,0 %) | por debajo del `track_low_thresh` de BoT-SORT, que las descarta antes de asociar |
+  | 0,20 – 0,25 | 628 | **30** (4,8 %) | la única parte de la banda que el seguidor puede reclamar |
+  | ≥ 0,25 | 2.637 | 1.284 (48,7 %) | sobre el umbral de reporte |
+
+  De las 3.071 cajas de la banda, **30 pueden llegar a la capa de identidad**: el 1 %. Contra 1.299
+  observaciones del corrido base, eso no mueve un candidato ni podría. Y el seguimiento de todo lo
+  demás empeora al alimentarle la banda: con los umbrales del vuelo asigna **860** pistas contra las
+  **1.608** del piso en 0,25, así que tampoco hay un A/B limpio, porque la línea base cambia con el
+  cambio.
+
+  **El detalle de diseño que sale de ahí:** el piso de la banda y el piso del seguidor tienen que
+  coincidir y no coinciden. El replay carga la banda desde 0,10 y `OnboardCamera` la pide desde 0,20,
+  que es justo el `track_low_thresh`. Pedirle al detector cajas por debajo del piso del seguidor es
+  pagar OSNet (~33 ms por caja) por cajas que se descartan sin mirarlas.
