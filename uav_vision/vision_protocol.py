@@ -304,6 +304,13 @@ class VisionProtocol(IProtocol):
         # projected onto every frame: where it lands in the image depends on the aircraft's pose
         # at that instant, which is not something the ground can send.
         self._objetivo = None
+        # What the operator has looked at and refused. The drone's own signals cannot tell a
+        # person from an object the detector keeps confusing with one: CLIP and the physical size
+        # of the box both miss the phantom that is person-shaped and person-sized, and on flight 3
+        # six of the eleven candidates reported were nobody. The operator can tell, and saying so
+        # costs one click. Keeping the refusal here is what stops the drone from spending the link
+        # on the same wrong point every two seconds for the rest of the flight.
+        self._descartados: List[dict] = []
         # What the neighbours are reporting, by sender. Emptied here rather than at class
         # level so a relaunched protocol does not start out corroborating a previous flight.
         self._ajenos: Dict = {}
@@ -400,6 +407,9 @@ class VisionProtocol(IProtocol):
         if m.get("type") == "vision_mirar":
             self.send_frame(m.get("para"))
             return
+        if m.get("type") == "vision_descarte":
+            self.descartar(m.get("x"), m.get("y"), m.get("cls"), m.get("plantilla"))
+            return
         if m.get("type") == "vision_objetivo":
             self.fix_target(m.get("x"), m.get("y"), m.get("radio_px"), m.get("umbral"),
                             self._emb_de_mensaje(m.get("plantilla")), m.get("emb_dist"))
@@ -413,6 +423,34 @@ class VisionProtocol(IProtocol):
             "t": self.provider.current_time(),
             "pois": m.get("pois") or [],
         }
+
+    def descartar(self, x=None, y=None, cls=None, plantilla=None) -> bool:
+        """Records that the operator looked at this point and said it is not what we are after.
+
+        A refusal needs an appearance and is rejected without one. Position and class alone would
+        suppress whatever stands where a refused object stood, and the thing most likely to stand
+        there next is a person walking past it: mismo_objetivo falls back to class and distance
+        when either side has no vector, which is right for fusing two drones' reports and wrong
+        for refusing to report at all. So a refusal carries the embedding of what was refused, and
+        a candidate with no embedding of its own is never suppressed.
+
+        Call with x None to forget every refusal, which is the way back: a refusal is the
+        operator's judgement and the operator has to be able to withdraw it.
+        """
+        if x is None:
+            self._descartados = []
+            return True
+        vector = self._emb_de_mensaje(plantilla)
+        if vector is None:
+            return False
+        self._descartados.append({"x": float(x), "y": float(y), "cls": cls, "emb": vector})
+        return True
+
+    def _fue_descartado(self, poi) -> bool:
+        """Whether the operator already refused this target, by position AND appearance."""
+        if not self._descartados or poi.get("emb") is None:
+            return False
+        return any(mismo_objetivo(poi, no) for no in self._descartados)
 
     @staticmethod
     def _emb_de_mensaje(valor):
@@ -718,6 +756,12 @@ class VisionProtocol(IProtocol):
         pois = (self.identity.candidates(preliminary=self.report_preliminary,
                                          now=self.provider.current_time())
                 if self.identity is not None else [])
+        # Filtered here and not inside the identity layer on purpose. The layer's job is to say
+        # what it has seen, and it has still seen this; what changed is that a human looked at it
+        # and said no. Keeping the two apart means the refusal costs nothing to undo and leaves
+        # the measurements of the layer untouched.
+        if self._descartados:
+            pois = [p for p in pois if not self._fue_descartado(p)]
         latido = False
 
         if not pois:

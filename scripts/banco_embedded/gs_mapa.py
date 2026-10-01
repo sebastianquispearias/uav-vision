@@ -626,6 +626,21 @@ class Handler(server.BaseHTTPRequestHandler):
             print('[%s] veredicto del operador: %s en (%.1f, %.1f)%s' %
                   (datetime.now().strftime('%H:%M:%S'), d['v'], x, y,
                    ' con recorte' if archivo else ''), flush=True)
+            # A "no es" used to stop here, on disk. The drone kept reporting the same wrong point
+            # every two seconds for the rest of the flight, over a 4G dongle, and the next session
+            # started knowing nothing. Now the refusal goes back with the appearance of what was
+            # refused, so the drone can stop sending it. Position alone is not sent as a refusal:
+            # see VisionProtocol.descartar for why, and without an appearance nothing travels and
+            # the verdict keeps working exactly as it did.
+            if d['v'] == 'no':
+                with CANDADO:
+                    nodos = dict(ESTADO['nodos'])
+                    vigentes = pois_vigentes(time.time())
+                plantilla = plantilla_para(x, y, vigentes)
+                if plantilla is not None:
+                    empujar_mensaje(nodos, {'type': 'vision_descarte', 'x': x, 'y': y,
+                                            'cls': d.get('cls'), 'plantilla': plantilla})
+                    print('        y el dron deja de reportarlo', flush=True)
             self._responder(json.dumps({'status': 'ok', 'crop': archivo}).encode('utf-8'))
             return
         self._responder(b'{"status": "ok"}')
