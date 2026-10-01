@@ -13,6 +13,44 @@ becomes a ray; the rays are intersected with the ground; the intersections are
 fused into one coordinate. That is the whole idea, and it needs neither a second
 camera nor a rangefinder.
 
+## What it does not do
+
+Every number above is a median over the one flight that has surveyed ground truth. Here is the
+same flight scored the way a mission would score it, in people reached and false points walked to:
+
+```
+  people really reported:  5 of 7   ->  A(1) B(1) C(1) G(3) H(1)
+  never reported:          D, E
+  phantoms (candidates that are nobody):  6
+```
+
+Five people found, and six points an operator would have to walk to for nothing. Two people the
+system never reports at all. That is the honest headline, and the rest of this list is why.
+
+- **The detector misses 44 % of the appearances** a human confirmed (660 missed against 835
+  found), and 598 of those 660 are a single scene: people on a balcony, raised, behind a railing,
+  against a building instead of against grass.
+- **Flying closer does not fix it.** Measured within the same frame, where the aircraft's altitude
+  and the light are identical, in 104 of 176 frames the detector missed a person **larger** than
+  one it found in the same picture (frame 2586: missed 186 px, found 141 px). The failure is not
+  one of resolution, so more pixels do not solve it. Digital zoom is worse still: recall 43.9 % →
+  11.2 % → 2.3 %, because the model was trained on VisDrone and only recognises people of about
+  28 pixels.
+- **A model that cannot fly finds twice as many.** RF-DETR with tiles finds 90.5 % where the model
+  that flies finds 46.2 %, at 1410 ms a frame against 35 ms. That gap is the argument for the
+  second-opinion path, and it is in `docs/yolo26_vs_rfdetr.mp4` with the running total on screen.
+- **It never touches the flight.** This is open-loop perception: it looks, computes a position and
+  reports it. Closing the loop is visual servoing, and the only commands a GrADyS protocol can
+  emit are coordinates and speed, so it is future work and not a missing feature.
+- **It has never been tried over water.** VisDrone has no boat class. On the SeaDronesSee
+  validation set an untrained COCO model reaches 0.83–0.87 recall on boats with the camera tilted
+  36° and **0.067 pointing straight down**, on boats 74–160 px across. Thirteen times, from the
+  viewing angle alone.
+- **Three trainings in a row lost**, and a fourth was sabotaged by a single line of Ultralytics
+  reinitialising the classification head. The numbers and the cause of each are in
+  [docs/DESCARTADO.md](docs/DESCARTADO.md), which is the document to read first if you are judging
+  the method rather than the result.
+
 ## Run it on a real flight, without a drone
 
 ```bash

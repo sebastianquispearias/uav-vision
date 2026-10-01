@@ -139,10 +139,16 @@ visión no puede arreglar, y la vía es comparar apariencia contra los candidato
 El objetivo declarado es conseguir trabajo como ingeniero de visión o percepción. Para eso el sistema
 **no necesita estar terminado**, necesita ser defendible y entendible rápido.
 
-### 7. Una página que se entienda en 40 segundos
+### 7. Una página que se entienda en 40 segundos — EN PIE, falta el medio
 
-Hoy todo vive en un archivo de estado de miles de líneas y videos sueltos. Falta lo de arriba contado
-en una página: qué hace, con qué número, y qué no hace.
+El `README.md` ya abre con la afirmación y el número, y ya tiene la sección **What it does not do**,
+que es la parte que un lector que contrata valora: las 5 personas de 7 con sus 6 fantasmas, el 44 %
+que el detector pierde, la medición de que acercarse no lo arregla, los 46,2 % contra 90,5 % del
+modelo que no puede volar, que el sistema nunca toca el vuelo, y que sobre agua nunca se probó.
+
+**Lo que falta:** el medio. Entre el titular y las limitaciones hay secciones de uso y de contrato de
+cámara, que son para quien va a trabajar en el repo, no para quien lo está juzgando en 40 segundos.
+Y el video comparativo (punto 9) está citado pero no incrustado.
 
 ### 8. Los tres entrenamientos que perdieron, contados como resultado
 
