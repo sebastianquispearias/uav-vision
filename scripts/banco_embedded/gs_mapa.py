@@ -58,9 +58,15 @@ from http import server
 try:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
     from uav_vision.flota import fundir, pedidos_de_verificacion
+    # Imported and not copied, for the same reason as fundir: a threshold written out by hand in
+    # two places is how the station and the drones end up disagreeing about what the operator's
+    # click meant. Without the package the template simply does not travel and the click keeps
+    # meaning only a position, which is what it meant before.
+    from uav_vision.camera import EMB_DIST_OBJETIVO
     FUSION_DISPONIBLE = True
 except Exception:
     FUSION_DISPONIBLE = False
+    EMB_DIST_OBJETIVO = None
 
     def fundir(por_dron):
         return [q for lista in por_dron.values() for q in lista]
@@ -370,6 +376,32 @@ def _rastro(fuente, pos):
 # the same window the drones apply to what they hear from each other. --callado-s changes it.
 CLIP_DESCARTA = False          # --clip-descarta: sacar de la lista lo que CLIP llama no-persona
 DRON_CALLADO_S = 15.0
+# How far from the click a candidate may be and still be taken as the one the operator meant.
+# Same reasoning as the verdict, which only applies to the nearest POI: a click is a gesture with
+# the precision of a finger on a map, and reaching further would hand the drone the appearance of
+# somebody standing next to the person who was pointed at.
+OBJETIVO_RADIO_M = 3.0
+
+
+def plantilla_para(x, y, vigentes):
+    """The appearance of the candidate the operator meant, or None when there is none near.
+
+    The click says where and who. The who is the embedding this station already received with the
+    candidate, handed straight back the way it arrived, base64 of float16: nothing is decoded
+    here, because nothing here reads it. A click with no candidate within OBJETIVO_RADIO_M sends
+    only the position, exactly as it did before, rather than reaching further and handing the
+    drone the appearance of somebody standing next to the person who was pointed at.
+    """
+    # Sorted by the distance alone. Two candidates exactly as far from the click is not a corner
+    # case to shrug at: comparing the pairs would compare the dicts and raise, inside the handler
+    # that answers the operator's click.
+    cerca = sorted(((math.hypot(p['x'] - x, p['y'] - y), p) for p in vigentes
+                    if p.get('emb') is not None
+                    and p.get('x') is not None and p.get('y') is not None),
+                   key=lambda par: par[0])
+    if cerca and cerca[0][0] <= OBJETIVO_RADIO_M:
+        return cerca[0][1]['emb']
+    return None
 
 
 def pois_vigentes(ahora):
@@ -530,11 +562,17 @@ class Handler(server.BaseHTTPRequestHandler):
                 return
             with CANDADO:
                 nodos = dict(ESTADO['nodos'])
+                vigentes = [] if apagar else pois_vigentes(time.time())
                 ESTADO['objetivo'] = None if apagar else {'x': x, 'y': y, 't': time.time()}
             print('[%s] objetivo %s' % (datetime.now().strftime('%H:%M:%S'),
                                         'liberado' if apagar else 'fijado en (%.1f, %.1f)' % (x, y)),
                   flush=True)
-            empujar_mensaje(nodos, {'type': 'vision_objetivo', 'x': x, 'y': y})
+            plantilla = None if apagar else plantilla_para(x, y, vigentes)
+            mensaje = {'type': 'vision_objetivo', 'x': x, 'y': y}
+            if plantilla is not None and EMB_DIST_OBJETIVO is not None:
+                mensaje['plantilla'] = plantilla
+                mensaje['emb_dist'] = EMB_DIST_OBJETIVO
+            empujar_mensaje(nodos, mensaje)
             self._responder(json.dumps({'objetivo': None if apagar else {'x': x, 'y': y}}).encode('utf-8'))
             return
         if self.path.split('?')[0] == '/mirar':

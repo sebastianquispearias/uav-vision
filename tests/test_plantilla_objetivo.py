@@ -172,4 +172,30 @@ assert esta(parecida, pasan) and not esta(distinta, pasan), \
 assert VisionProtocol._emb_de_mensaje(None) is None, "sin plantilla no se inventa una"
 
 print()
+print("=" * 70)
+print("5. LA ESTACION ELIGE DE QUIEN ES LA PLANTILLA: EL CANDIDATO MAS CERCANO AL CLICK")
+print("=" * 70)
+# The click has the precision of a finger on a map, so the station has to decide which candidate
+# was meant. Reaching too far would hand the drone the appearance of somebody standing next to
+# the person pointed at, which is the one mistake that turns this feature into a target swap.
+sys.path.insert(0, os.path.join(RAIZ, "scripts", "banco_embedded"))
+import gs_mapa  # noqa: E402
+
+A, B = "AAAA", "BBBB"          # two different appearances, as they arrive: already encoded
+vigentes = [{"x": 0.0, "y": 0.0, "emb": A},
+            {"x": 10.0, "y": 0.0, "emb": B},
+            {"x": 0.5, "y": 20.0, "emb": None}]      # a candidate with no appearance at all
+casos = [((0.4, 0.0), A, "sobre el primero"),
+         ((9.0, 0.0), B, "mas cerca del segundo"),
+         ((5.0, 0.0), None, "a cinco metros de los dos: nadie"),
+         ((0.5, 20.0), None, "sobre el que no trae apariencia")]
+print("  radio del click: %.1f m" % gs_mapa.OBJETIVO_RADIO_M)
+for (cx, cy), esperado, nota in casos:
+    got = gs_mapa.plantilla_para(cx, cy, vigentes)
+    print("  click (%5.1f,%5.1f) %-34s -> %s" % (cx, cy, nota, got if got else "sin plantilla"))
+    assert got == esperado, "la estacion eligio la plantilla equivocada %s" % nota
+assert gs_mapa.plantilla_para(0.4, 0.0, []) is None, "sin candidatos no hay plantilla que mandar"
+assert gs_mapa.EMB_DIST_OBJETIVO == EMB_DIST_OBJETIVO,     "la estacion y el dron tienen que estar usando la MISMA distancia, importada y no copiada"
+
+print()
 print("TODO OK")
