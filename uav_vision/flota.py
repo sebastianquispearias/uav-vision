@@ -137,7 +137,7 @@ def fundir(por_dron):
                 # threshold. Looks are not added up: two drones watching the same target at the
                 # same time are counting the same seconds, so the sum would invent evidence.
                 if (poi.get('evidence') or 0.0) > (ya.get('evidence') or 0.0):
-                    for campo in ('evidence', 'looks', 'looks_min'):
+                    for campo in ('evidence', 'looks', 'looks_min', 'duty'):
                         ya[campo] = poi.get(campo)
                 ya['drones'].append(str(dron))
                 ya['dron'] = '+'.join(ya['drones'])

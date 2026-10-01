@@ -497,4 +497,50 @@ for caso in (con_miradas(3), pocas, con_miradas(19), muchas, con_miradas(40), ba
     assert (caso["evidence"] >= 1.0) == caso["mature"],         "la barra llena y el veredicto tienen que decir lo mismo, siempre"
 
 print()
+print("=" * 64)
+print("16. DENSIDAD: en que fraccion de los cuadros con deteccion se vio al candidato")
+print("=" * 64)
+# Measured on the 02ago replay against the letters a human put on every box: the six ghosts top
+# out at a density of 0.397 and the seven real-person candidates floor at 0.714, nothing in
+# between, because a static false positive is a flicker spread thin while a person being tracked
+# is dense while she is in view. Sightings per second separates the same rows on that flight and
+# is the wrong quantity, because it is not scale free. The third case below is the proof: the same
+# target, the same seconds, twice the frame rate, and sightings per look DOUBLES while the density
+# does not move. On a steady 3 FPS board a threshold set on sightings per second would never fire.
+e_obj, e_esc = emb_de(41), emb_de(42)
+
+def densidad(fps_cam, parpadea, segundos=20):
+    """Twenty seconds of frames, every one of them carrying a detection of something.
+
+    The target is seen in all of them, or, when it flickers, only during one second out of
+    every four, which is the shape a static false positive has: present across a long life and
+    absent from most of it. The density is read inside the candidate's own span, so a target
+    tracked perfectly while it is in view scores 1 however briefly it was there.
+    """
+    ident = IncrementalIdentity(fusion_radius_m=2.0, fps=fps_cam)
+    n_frames = int(segundos * fps_cam)
+    for k in range(n_frames):
+        sello = k / fps_cam
+        # The rest of the scene: what makes a frame count as one detection was produced in.
+        ident.observe(k, 801, np.array([50.0, 50.0]), 0.6, e_esc, t=sello)
+        if (not parpadea) or int(sello) % 4 == 0:
+            ident.observe(k, 800, np.array([2.0, -1.0]) + RNG.normal(0, 0.2, size=2), 0.7,
+                          e_obj + 0.03 * RNG.normal(size=512), t=sello)
+    return [c for c in ident.candidates(preliminary=True, now=float(segundos))
+            if abs(c["x"] - 2.0) < 3.0][0]
+
+denso = densidad(2.0, parpadea=False)   # seen in every frame of its life
+tirones = densidad(2.0, parpadea=True)  # present for twenty seconds, seen in a quarter of them
+rapido = densidad(4.0, parpadea=True)   # the same flicker, same seconds, twice the frame rate
+for nom, c in (("visto siempre     ", denso), ("parpadea a 2 FPS  ", tirones),
+               ("parpadea a 4 FPS  ", rapido)):
+    print(f"  {nom}: duty={c['duty']:<6} looks={c['looks']:<4} n_obs={c['n_obs']:<4} "
+          f"obs/mirada={c['n_obs'] / c['looks']:.1f}")
+assert denso["duty"] == 1.0, "visto en cada cuadro de su vida es densidad 1"
+assert tirones["duty"] < 0.4,     "quien parpadea tiene que caer del lado de los fantasmas, cuyo techo medido es 0.397"
+assert abs(rapido["duty"] - tirones["duty"]) < 0.02,     "la densidad no puede depender de la cadencia de la camara"
+assert rapido["n_obs"] / rapido["looks"] > 1.8 * (tirones["n_obs"] / tirones["looks"]),     "el contraste: avistamientos por mirada SI dependen de la cadencia, y por eso no se usan"
+assert "duty" not in span, "el modo span no cambia su reporte"
+
+print()
 print("TODO OK")

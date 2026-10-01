@@ -434,6 +434,7 @@ def registrar(mensaje, fuente):
             'looks': p.get('looks'),
             'looks_min': p.get('looks_min'),
             'evidence': p.get('evidence'),
+            'duty': p.get('duty'),
             'radius_m': p.get('radius_m'),
             # Seconds between the drone's last sighting of the target and this report. The page
             # adds the time elapsed since the report ('t') and fades live contacts by it.

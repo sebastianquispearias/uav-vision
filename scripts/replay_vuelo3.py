@@ -638,7 +638,7 @@ maduros = sum(1 for c in todos if c.get("mature"))
 _CANDS = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--candidatos=")), None)
 if _CANDS:
     _guardables = ("x", "y", "n_obs", "conf", "mature", "tracks", "mobile", "cls",
-                   "looks", "looks_min", "evidence")
+                   "looks", "looks_min", "evidence", "duty")
     with open(_CANDS, "w") as _f:
         json.dump([{k: (sorted(v) if isinstance(v, (set, frozenset)) else v)
                     for k, v in c.items() if k in _guardables}

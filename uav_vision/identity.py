@@ -361,6 +361,18 @@ class IncrementalIdentity:
         self.n_reporte = max(5, round(DUTY_MIN * self.span_reporte))
 
         self._tracks: Dict[int, dict] = {}
+        # Every frame index this layer was ever handed a detection in. It is the denominator of
+        # opportunity: asking in what fraction of a candidate's life it was seen is only
+        # meaningful against the frames something was seen in at all. Seconds will not do,
+        # because the camera delivers in bursts: on flight 3 the operator is in nearly every
+        # frame that exists and still shows 0.18 looks per second.
+        #
+        # Note what this is NOT: a frame the detector found nothing in never reaches observe, so
+        # it is not counted here. The denominator is therefore frames in which detection was
+        # producing something, not frames the camera captured. That is the stricter of the two
+        # readings -- it refuses to credit a candidate for frames where nothing was working --
+        # and it is the one available without a second channel from the camera.
+        self._frames_vistos: set = set()
 
     def _radio(self, cls: Optional[str]) -> float:
         """The fusion radius that applies to a class: its own if it declared one, else the
@@ -435,6 +447,7 @@ class IncrementalIdentity:
             t["rangos"].append(float(range_m))
         t["conf_sum"] += float(conf)
         t["frames"].add(int(frame))
+        self._frames_vistos.add(int(frame))
         # The look this sighting belongs to: off the clock when there is one, else off the frame
         # index at the declared rate, the same fallback the span mode uses.
         if sello is not None:
@@ -847,6 +860,24 @@ class IncrementalIdentity:
                 if mejor is not None:
                     self._absorb(cands[mejor], tk)
 
+        # Of the frames this layer was handed a detection in while this candidate was alive, the
+        # fraction in which the candidate itself was seen. A static false positive is a flicker spread thin over a
+        # long time; a person being tracked is dense while she is in view. Measured on flight 3
+        # against the letters a human put on every box, that is what tells them apart: the six
+        # ghosts top out at 0.397 and the seven real-person candidates floor at 0.714, with
+        # nothing in between. Sightings per second does the same on this flight and must not be
+        # used: it is not scale free, so a figure of 5.7 sightings per second exists only
+        # because this recording is bursty at 1.64 FPS, and on a steady 3 FPS board the same
+        # quantity cannot exceed 3. Frames delivered is the unit of opportunity; seconds are not.
+        vistos = np.fromiter(sorted(self._frames_vistos), dtype=np.int64, count=len(self._frames_vistos))
+
+        def duty(c):
+            if not c["frames"]:
+                return 0.0
+            lo, hi = min(c["frames"]), max(c["frames"])
+            entregados = int(np.searchsorted(vistos, hi, "right") - np.searchsorted(vistos, lo, "left"))
+            return len(c["frames"]) / max(1, entregados)
+
         def mature(c):
             if self.maturity == "looks":
                 return len(c["bins"]) >= self.report_min_looks
@@ -882,6 +913,10 @@ class IncrementalIdentity:
             **({"looks": len(c["bins"]),
                 "looks_min": int(self.report_min_looks),
                 "evidence": round(min(1.0, len(c["bins"]) / max(1, self.report_min_looks)), 3),
+                # The density defined above, reported as a measurement and nothing more: no
+                # threshold travels with it yet because none is enforced yet, and publishing a
+                # bar nobody applies would be the same fault this field exists to fix.
+                "duty": round(duty(c), 3),
                 "radius_m": round(self._radio_ahora(c, now), 2)}
                if self.maturity == "looks" else {}),
             # Seconds since the candidate was last seen. The position of a lost target keeps being reported, and
