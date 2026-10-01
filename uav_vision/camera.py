@@ -50,6 +50,39 @@ def dentro_del_foco(det, foco) -> bool:
             and abs(det["py"] - foco["cy"]) <= foco["radio"])
 
 
+# Appearance distance under which a box the detector doubted is kept because it looks like the
+# target the operator pointed at. Measured over 773 frames of the 02ago mission (2746-3700),
+# 1673 boxes of people and 484 of the target, by keeping the boxes scored between 0.10 and 0.25
+# that today are thrown away:
+#     only conf >= 0.25, as it flies      target 91.1 %   all 48.3 %   precision 57.9 %
+#     + the doubtful ones that LOOK alike target 94.4 %   all 50.1 %   precision 55.6 %   <- 0.85
+#     the same at 1.00                    target 97.7 %   all 52.5 %   precision 52.3 %
+#     the same at 1.20                    target 97.7 %   all 61.1 %   precision 40.3 %
+# No weight is retrained and nothing is adapted: the template is the embedding of the crop the
+# operator clicked, so switching this off returns the system to exactly what it was.
+#
+# THE NUMBER IS NOT SAFE YET, FOR THE SAME REASON EMB_DIST_REUNE IS NOT: it was chosen by looking
+# at the stretch it is judged on. It has to be re-chosen on the 01ago flights before it can be
+# defended, and until then the gate stays off unless a caller asks for it by passing a distance.
+EMB_DIST_OBJETIVO = 0.85
+
+
+def se_parece_al_objetivo(det, foco) -> bool:
+    """Whether a doubted detection looks like the target the operator fixed.
+
+    Unlike the window, this does not ask where the box is. That is the point of it: the window is
+    the projection of a ground position and goes wrong exactly when the aircraft's attitude is
+    least certain, while an appearance match does not care whether the geometry agrees.
+    """
+    if not foco:
+        return False
+    plantilla, tope, emb = foco.get("plantilla"), foco.get("emb_dist"), det.get("emb")
+    if plantilla is None or tope is None or emb is None:
+        return False
+    d = np.asarray(emb, dtype=np.float32) - np.asarray(plantilla, dtype=np.float32)
+    return float(np.linalg.norm(d)) <= float(tope)
+
+
 def solo_confirmadas(detections, threshold, foco=None):
     """
     Drops the weak boxes the tracker did not claim, except inside the operator's window.
@@ -67,10 +100,17 @@ def solo_confirmadas(detections, threshold, foco=None):
     its own. Measured over the balcony window of the 02ago flight, lowering the threshold to
     0.10 inside it takes recall on the target from 43.9 % to 60.7 % at no computing cost at
     all: the detector had already scored those boxes and was throwing them away.
+
+    The second exception does not look at position at all: a box the detector doubted is kept if
+    its appearance matches the template of the target the operator pointed at. See
+    EMB_DIST_OBJETIVO for what that buys and for why the distance is not settled yet. It costs no
+    extra computing either, because with the band open the embedding of a doubted box is already
+    computed before it is filtered.
     """
     return [d for d in detections
             if d["conf"] >= threshold or "track_id" in d
-            or (dentro_del_foco(d, foco) and d["conf"] >= foco["umbral"])]
+            or (dentro_del_foco(d, foco) and d["conf"] >= foco["umbral"])
+            or se_parece_al_objetivo(d, foco)]
 
 
 class SimulatedCamera:
@@ -566,7 +606,8 @@ class OnboardCamera:
 
         return detections
 
-    def set_focus(self, cx=None, cy=None, radio_px=320.0, umbral=0.10) -> None:
+    def set_focus(self, cx=None, cy=None, radio_px=320.0, umbral=0.10,
+                  plantilla=None, emb_dist=None) -> None:
         """Points the low threshold at one square of the image, or clears it when cx is None.
 
         Zooming into that square was tried first and is much worse: cropping it and enlarging it
@@ -578,7 +619,12 @@ class OnboardCamera:
             self.foco = None
             return
         self.foco = {"cx": float(cx), "cy": float(cy), "radio": float(radio_px),
-                     "umbral": float(umbral)}
+                     "umbral": float(umbral),
+                     # The appearance of the target, and how far a doubted box may be from it and
+                     # still be kept. Both None leaves the gate shut and the behaviour unchanged.
+                     "plantilla": (np.asarray(plantilla, dtype=np.float32)
+                                   if plantilla is not None else None),
+                     "emb_dist": float(emb_dist) if emb_dist is not None else None}
 
     def _crop(self, frame, caja) -> bytes:
         """

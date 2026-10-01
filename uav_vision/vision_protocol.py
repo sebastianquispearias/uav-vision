@@ -401,7 +401,8 @@ class VisionProtocol(IProtocol):
             self.send_frame(m.get("para"))
             return
         if m.get("type") == "vision_objetivo":
-            self.fix_target(m.get("x"), m.get("y"), m.get("radio_px"), m.get("umbral"))
+            self.fix_target(m.get("x"), m.get("y"), m.get("radio_px"), m.get("umbral"),
+                            self._emb_de_mensaje(m.get("plantilla")), m.get("emb_dist"))
             return
         if m.get("type") != "vision_poi":
             return
@@ -413,7 +414,24 @@ class VisionProtocol(IProtocol):
             "pois": m.get("pois") or [],
         }
 
-    def fix_target(self, x=None, y=None, radio_px=None, umbral=None) -> bool:
+    @staticmethod
+    def _emb_de_mensaje(valor):
+        """Reads an appearance template off the wire, in either form it can arrive in.
+
+        A report leaving this drone packs the embedding as base64 of float16, which is what the
+        station holds and hands straight back when the operator clicks a candidate. A caller
+        inside the process, a test or the replay, has the vector itself. Accepting both is what
+        keeps the station from having to decode and re-encode something it never reads.
+        """
+        if valor is None:
+            return None
+        if isinstance(valor, str):
+            import base64
+            return np.frombuffer(base64.b64decode(valor), dtype=np.float16).astype(np.float32)
+        return np.asarray(valor, dtype=np.float32)
+
+    def fix_target(self, x=None, y=None, radio_px=None, umbral=None,
+                   plantilla=None, emb_dist=None) -> bool:
         """Fixes the target the operator pointed at, or releases it when x is None.
 
         What this buys, measured over the balcony window of the 02ago flight: recall on the target
@@ -426,6 +444,13 @@ class VisionProtocol(IProtocol):
         Only the target's ground position travels. Turning it into a square of the image is this
         drone's job and nobody else's, because the square depends on where the aircraft is and
         where it is pointing at the instant the frame is taken, which the ground cannot know.
+
+        What CAN travel, and is the other half of the operator's click, is what the target looks
+        like: the appearance template, which is the embedding the station already received with
+        the candidate. With it a doubted box is kept wherever it falls, which is what the window
+        cannot do, because the window is a projection and goes wrong when the attitude is least
+        certain. Both plantilla and emb_dist have to arrive for the gate to open; see
+        camera.EMB_DIST_OBJETIVO for what it buys and why the distance is not settled yet.
         """
         if self.camera is None:
             return False
@@ -437,7 +462,9 @@ class VisionProtocol(IProtocol):
             return True
         self._objetivo = {"pos": (float(x), float(y)),
                           "radio_px": float(radio_px) if radio_px is not None else FOCO_RADIO_PX,
-                          "umbral": float(umbral) if umbral is not None else FOCO_UMBRAL}
+                          "umbral": float(umbral) if umbral is not None else FOCO_UMBRAL,
+                          "plantilla": plantilla,
+                          "emb_dist": emb_dist}
         return True
 
     def _apuntar_foco(self, yaw, alabeo, cabeceo) -> None:
@@ -462,7 +489,15 @@ class VisionProtocol(IProtocol):
         if px is None:
             fijar(None)
             return
-        fijar(px[0], px[1], self._objetivo["radio_px"], self._objetivo["umbral"])
+        # The template is only handed over when there is one. A camera that implements the older
+        # set_focus, of which the test stubs are two, keeps working untouched: the protocol must
+        # not demand a capability it is not using, and this is the same duck typing the getattr
+        # above already relies on.
+        extra = {}
+        if self._objetivo.get("plantilla") is not None:
+            extra = {"plantilla": self._objetivo["plantilla"],
+                     "emb_dist": self._objetivo.get("emb_dist")}
+        fijar(px[0], px[1], self._objetivo["radio_px"], self._objetivo["umbral"], **extra)
 
     def send_frame(self, para=None) -> bool:
         """Sends one frame, once, because somebody on the ground asked to look at it.

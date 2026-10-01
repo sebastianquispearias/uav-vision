@@ -29,6 +29,7 @@ node tests/test_gs_veredicto.js  # the operator's verdict and the 95 % margin on
 node tests/test_gs_barra.js      # the evidence bar: how far a candidate is from reportable
 ../drone-geolocation/entrenamiento/venv/Scripts/python.exe tests/test_tracker.py  # needs boxmot
 python tests/test_correr.py      # the paper's chain (view_selection + fusion) still runs
+python tests/test_plantilla_objetivo.py  # the operator's click keeps boxes that look like the target
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```
 
