@@ -128,6 +128,36 @@ def next_best_viewpoint(
     return mejor_pos, mejor_div
 
 
+def orbit_waypoints(
+    target: Tuple[float, float, float],
+    seen_dirs: List[Tuple[float, float, float]],
+    radius_m: float,
+    altitude_m: float,
+    n_points: int = 12,
+) -> List[Tuple[float, float, float]]:
+    """The whole way round a target, starting where the view is most needed.
+
+    An orbit is not a control problem. The autopilot already closes a loop on position: a
+    GotoCoords is measured against its own GPS and corrected a hundred times a second, and that
+    loop is not ours to write. What is ours is the list of places to stand, and the only loop
+    above it is "arrived? then the next one".
+
+    The ring starts at the azimuth next_best_viewpoint picks, so the first leg is the one that
+    buys a direction nobody has, and continues the short way round. It is a finite list on
+    purpose: an orbit that never ends is an aircraft nobody told to stop.
+    """
+    primero, _ = next_best_viewpoint(target, seen_dirs, radius_m, altitude_m)
+    if primero is None or n_points < 1:
+        return []
+    tx, ty, tz = (float(c) for c in target)
+    a0 = math.atan2(primero[1] - ty, primero[0] - tx)
+    puntos = []
+    for k in range(int(n_points)):
+        a = a0 + 2.0 * math.pi * k / float(n_points)
+        puntos.append((tx + radius_m * math.cos(a), ty + radius_m * math.sin(a), tz + altitude_m))
+    return puntos
+
+
 def compute_selection_score(
     angular_diversity_deg: float,
     confidence: float,

@@ -104,6 +104,12 @@ ok(String(ult.cuerpo.dron) === '2',
    'viaja QUIEN vio el punto, para que la estacion pueda mandar a OTRO');
 ok(!('radio_m' in ult.cuerpo) && !('altura_m' in ult.cuerpo),
    'el radio y la altura los pone la estacion, que es el instrumento del operador');
+// Whether the contact is moving travels, because a walker is refused: the order carries a
+// coordinate, and by the time the aircraft lands on it the person is somewhere else.
+ok(ult.cuerpo.movil === false, 'tiene que viajar si el contacto se mueve, porque eso lo rechaza');
+pedirRodeo(Object.assign({}, estado.pois[1], {mobile: true}));
+console.log('  un contacto movil      :', JSON.stringify(rodeos()[1].cuerpo.movil));
+ok(rodeos()[1].cuerpo.movil === true, 'un contacto movil tiene que viajar marcado como tal');
 
 // The notice names the aircraft that went, checked on the next tick because it is set when the
 // answer resolves.

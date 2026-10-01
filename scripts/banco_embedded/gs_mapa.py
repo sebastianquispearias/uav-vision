@@ -388,6 +388,10 @@ OBJETIVO_RADIO_M = 3.0
 # them, and they are overridable from the command line.
 RODEO_RADIO_M = 30.0
 RODEO_ALTURA_M = 25.0
+# How many stops the way round. One is "go and look from the other side"; the mission asks the
+# drones to circle, and twelve is a stop every thirty degrees, which at this radius is a leg of
+# tens of seconds. Also a mission decision and also not derived from anything.
+RODEO_PUNTOS = 12
 
 
 def dron_para_rodear(nodos, dron_que_vio):
@@ -631,6 +635,14 @@ class Handler(server.BaseHTTPRequestHandler):
                 return
             with CANDADO:
                 nodos = dict(ESTADO['nodos'])
+            # A walker is refused HERE, on the ground, so the operator is told why instead of
+            # the order vanishing. The drone refuses it too, which is the line that matters, but a
+            # refusal nobody explains reads as a broken button.
+            if d.get('movil'):
+                self._responder(json.dumps({'error':
+                    'ese contacto se esta moviendo: cuando el dron llegue ya no va a estar ahi'
+                    }).encode('utf-8'), codigo=409)
+                return
             elegido = dron_para_rodear(nodos, d.get('dron'))
             if elegido is None:
                 self._responder(b'{"error": "ningun dron conectado"}', codigo=409)
@@ -639,7 +651,8 @@ class Handler(server.BaseHTTPRequestHandler):
             altura = float(d.get('altura_m') or RODEO_ALTURA_M)
             empujar_mensaje({elegido: nodos[elegido]},
                             {'type': 'vision_rodear', 'x': x, 'y': y,
-                             'radio_m': radio, 'altura_m': altura})
+                             'radio_m': radio, 'altura_m': altura,
+                             'puntos': int(d.get('puntos') or RODEO_PUNTOS)})
             print('[%s] el operador manda al dron %s a mirar (%.1f, %.1f) desde otro lado, '
                   'a %.0f m de radio y %.0f m de altura'
                   % (datetime.now().strftime('%H:%M:%S'), elegido, x, y, radio, altura),
@@ -1377,7 +1390,8 @@ function pedirSegunda(dron) {
 // send, because the station knows who is connected and the card only knows who reported.
 function pedirRodeo(p) {
   fetch('/rodear', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({x: p.x, y: p.y, dron: String(p.dron)})})
+                    body: JSON.stringify({x: p.x, y: p.y, dron: String(p.dron),
+                                          movil: !!p.mobile})})
     .then(r => r.json()).then(d => {
       // Same reasoning as the clear button: one that says nothing when pressed reads as broken,
       // and this one is sending an aircraft somewhere, so it has to say which one went.

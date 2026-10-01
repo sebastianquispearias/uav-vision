@@ -30,8 +30,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(RAIZ), "gradys-embedded"))
 
 import numpy as np  # noqa: E402
 
-from uav_vision.vision_protocol import (RODEO_TOLERANCIA_M,  # noqa: E402
-                                        VisionProtocol)
+from uav_vision.vision_protocol import (RODEO_PLAZO_S,  # noqa: E402
+                                        RODEO_TOLERANCIA_M, VisionProtocol)
 from uav_vision.view_selection import next_best_viewpoint  # noqa: E402
 
 RADIO, ALTURA = 30.0, 25.0
@@ -48,8 +48,10 @@ class ProveedorQueAnota:
     def send_mobility_command(self, command):
         self.ordenes.append(command)
 
+    ahora = 0.0
+
     def current_time(self):
-        return 0.0
+        return self.ahora
 
     def get_id(self):
         return 1
@@ -203,6 +205,66 @@ for nodos, vio, esperado, nota in casos:
 assert gs_mapa.RODEO_RADIO_M > 0 and gs_mapa.RODEO_ALTURA_M > 0,     "la estacion tiene que traer un radio y una altura, porque la capa que vuela se niega sin ellos"
 print("  radio %.0f m y altura %.0f m: decisiones de mision, en el instrumento del operador"
       % (gs_mapa.RODEO_RADIO_M, gs_mapa.RODEO_ALTURA_M))
+
+print()
+print("=" * 76)
+print("7. UN BLANCO QUE CAMINA SE RECHAZA, Y ES LA LINEA MAS IMPORTANTE DEL ARCHIVO")
+print("=" * 76)
+# La orden lleva una COORDENADA, no un pixel, y por eso funciona con la camara sin ver nada en el
+# momento del click: la posicion sale de la capa de identidad, que nunca olvida un candidato. Pero
+# la posicion de quien camina envejece mientras el avion vuela, y esta capa se niega a extrapolar
+# un movil mas de extrapolation_max_s = 3 s. Un vuelo de decenas de segundos esta un orden de
+# magnitud afuera, asi que llegaria a fotografiar suelo vacio.
+m = protocolo()
+quieto = protocolo()
+print("  blanco quieto -> %s" % ("vuela" if quieto.rodear(0.0, 0.0, RADIO, ALTURA) else "rechazado"))
+print("  blanco movil  -> %s" % ("vuela" if m.rodear(0.0, 0.0, RADIO, ALTURA, movil=True) else "rechazado"))
+print("  ordenes de movimiento al movil: %d" % len(m.provider.ordenes))
+assert not m.rodear(0.0, 0.0, RADIO, ALTURA, movil=True),     "no se manda una aeronave a fotografiar donde alguien ESTUVO"
+assert m.provider.ordenes == [], "y no se emite ninguna orden al negarse"
+assert quieto._rodeo is not None, "el contraste: el mismo pedido sobre un quieto si vuela"
+
+print()
+print("=" * 76)
+print("8. LA VUELTA COMPLETA AVANZA PUNTO A PUNTO Y TERMINA")
+print("=" * 76)
+# El lazo no es un controlador: el piloto automatico ya cierra el lazo de posicion contra su GPS.
+# Lo unico nuestro es "llegue? entonces el siguiente", y que la lista se TERMINE.
+o = protocolo()
+o.rodear(0.0, 0.0, RADIO, ALTURA, puntos=6)
+print("  puntos de la vuelta: %d   ordenes tras la primera: %d"
+      % (len(o._rodeo["puntos"]), len(o.provider.ordenes)))
+assert len(o._rodeo["puntos"]) == 6 and len(o.provider.ordenes) == 1,     "se manda UN punto a la vez, no los seis de golpe"
+for paso in range(6):
+    o._position = o._rodeo["ir_a"] if o._rodeo else o._position
+    o.provider.ahora += 5.0
+    o._llego_al_rodeo()
+    print("  tramo %d -> %d cuadros, %d ordenes, vuelta %s"
+          % (paso + 1, len(o._marcos), len(o.provider.ordenes),
+             "en curso" if o._rodeo else "TERMINADA"))
+assert len(o._marcos) == 6, "una foto en cada punto de la vuelta"
+assert len(o.provider.ordenes) == 6, "seis puntos, seis ordenes, ni una mas"
+assert o._rodeo is None, "una vuelta que no termina es una aeronave que nadie mando a parar"
+
+print()
+print("=" * 76)
+print("9. UN PUNTO AL QUE NO LLEGA NO CUELGA LA SECUENCIA")
+print("=" * 76)
+# Una aeronave aparcada contra un punto que no puede alcanzar, mientras el operador espera, es
+# peor que abandonar la vuelta y decirlo.
+z = protocolo()
+z.rodear(0.0, 0.0, RADIO, ALTURA, puntos=6)
+z._position = (999.0, 999.0, ALTURA)          # nunca llega
+z.provider.ahora = RODEO_PLAZO_S - 1.0
+z._llego_al_rodeo()
+print("  a %.0f s del plazo de %.0f s -> vuelta %s"
+      % (z.provider.ahora, RODEO_PLAZO_S, "en curso" if z._rodeo else "abandonada"))
+assert z._rodeo is not None, "antes del plazo sigue intentando"
+z.provider.ahora = RODEO_PLAZO_S + 1.0
+z._llego_al_rodeo()
+print("  pasado el plazo                -> vuelta %s" % ("en curso" if z._rodeo else "abandonada"))
+assert z._rodeo is None, "pasado el plazo se abandona"
+assert len(z._marcos) == 0, "y no se manda una foto de un sitio al que no llego"
 
 print()
 print("TODO OK")

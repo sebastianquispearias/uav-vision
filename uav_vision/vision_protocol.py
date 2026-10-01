@@ -38,7 +38,7 @@ from uav_vision.flota import mismo_objetivo
 
 from uav_vision.identity import dominant_class
 from uav_vision.pinhole_local import pixel_to_ray, project_to_pixel
-from uav_vision.view_selection import next_best_viewpoint
+from uav_vision.view_selection import next_best_viewpoint, orbit_waypoints
 
 TIMER_SEE = "uav_vision:see"
 TIMER_REPORT = "uav_vision:report"
@@ -107,6 +107,11 @@ FOCO_UMBRAL = 0.10
 # already accounts for (gps_sigma 1.5 m, and the 95 % radius of a static candidate on flight 3 is
 # 2.4 m), so inside it the view is the one that was asked for.
 RODEO_TOLERANCIA_M = 5.0
+# How long one leg of the orbit may take before the whole thing is abandoned. Not derived from
+# anything: it is a guard, and what it guards against is an aircraft that was told to go somewhere
+# it cannot reach and waits for it forever. A leg of a thirty metre orbit is tens of seconds at the
+# speeds this aircraft flies, so a minute is generous and still finite.
+RODEO_PLAZO_S = 60.0
 
 
 def _ground_impact(
@@ -423,7 +428,8 @@ class VisionProtocol(IProtocol):
             self.send_frame(m.get("para"))
             return
         if m.get("type") == "vision_rodear":
-            self.rodear(m.get("x"), m.get("y"), m.get("radio_m"), m.get("altura_m"))
+            self.rodear(m.get("x"), m.get("y"), m.get("radio_m"), m.get("altura_m"),
+                        bool(m.get("movil")), int(m.get("puntos") or 1))
             return
         if m.get("type") == "vision_descarte":
             self.descartar(m.get("x"), m.get("y"), m.get("cls"), m.get("plantilla"))
@@ -442,7 +448,8 @@ class VisionProtocol(IProtocol):
             "pois": m.get("pois") or [],
         }
 
-    def rodear(self, x=None, y=None, radio_m=None, altura_m=None) -> bool:
+    def rodear(self, x=None, y=None, radio_m=None, altura_m=None,
+               movil=False, puntos=1) -> bool:
         """Flies to the place from which this target has not been seen yet, and sends that frame.
 
         This is the second half of the mission as it was written: detect a POI, and then the
@@ -461,6 +468,20 @@ class VisionProtocol(IProtocol):
         bearing-only estimate, and a picture of the target from the side for the person who has to
         decide, who needs a posture or a face and not a shape seen from above.
 
+        A MOVING target is refused, and that is the most important line of this method. The order
+        carries a ground coordinate and not a pixel, which is why it works with the camera seeing
+        nothing at the moment of the click: the position comes from the identity layer, which never
+        forgets a candidate. But a walker's position goes stale while the aircraft flies, and this
+        layer refuses to extrapolate a mover beyond extrapolation_max_s, three seconds, because
+        'past the window its velocity was estimated over, following the line is guessing'. A flight
+        of tens of seconds is an order of magnitude outside what the estimate can carry, so the
+        aircraft would arrive at where somebody was and photograph empty ground. Following a mover
+        needs the loop closed on the image, which is visual servoing and is not this.
+
+        puntos > 1 asks for the whole way round instead of one stop. The orbit is a finite list on
+        purpose and each leg has a deadline: an aircraft that was told to go somewhere it cannot
+        reach must give up, not wait forever.
+
         radio_m and altura_m are mission decisions and have no defaults in this layer: see
         next_best_viewpoint. Call with x None to cancel.
         """
@@ -471,6 +492,8 @@ class VisionProtocol(IProtocol):
             return False
         if radio_m is None or altura_m is None:
             return False
+        if movil:
+            return False
         objetivo = (float(x), float(y), self.ground_z)
         # The only viewing direction this aircraft can vouch for is its own, right now. A station
         # that knows where the other drones are can pass theirs; this layer does not invent them.
@@ -479,14 +502,22 @@ class VisionProtocol(IProtocol):
                       objetivo[2] - self._position[2]], dtype=float)
         norma = float(np.linalg.norm(d))
         vistas = [tuple(d / norma)] if norma > 1e-9 else []
-        pos, diversidad = next_best_viewpoint(objetivo, vistas,
-                                              radius_m=float(radio_m),
-                                              altitude_m=float(altura_m))
-        if pos is None:
+        if int(puntos) > 1:
+            lista = orbit_waypoints(objetivo, vistas, float(radio_m), float(altura_m),
+                                    n_points=int(puntos))
+            diversidad = next_best_viewpoint(objetivo, vistas,
+                                             float(radio_m), float(altura_m))[1]
+        else:
+            uno, diversidad = next_best_viewpoint(objetivo, vistas,
+                                                  radius_m=float(radio_m),
+                                                  altitude_m=float(altura_m))
+            lista = [uno] if uno is not None else []
+        if not lista:
             return False
-        self._rodeo = {"objetivo": (objetivo[0], objetivo[1]), "ir_a": pos,
-                       "diversidad": float(diversidad), "mirado": False}
-        self.provider.send_mobility_command(GotoCoordsMobilityCommand(*pos))
+        self._rodeo = {"objetivo": (objetivo[0], objetivo[1]), "puntos": lista, "i": 0,
+                       "ir_a": lista[0], "diversidad": float(diversidad), "mirado": False,
+                       "t_tramo": self.provider.current_time()}
+        self.provider.send_mobility_command(GotoCoordsMobilityCommand(*lista[0]))
         return True
 
     def _llego_al_rodeo(self) -> None:
@@ -496,13 +527,27 @@ class VisionProtocol(IProtocol):
         point of having flown. The tolerance is a radius, not a coordinate match: an aircraft
         holding position drifts, and demanding a coordinate would mean never arriving.
         """
-        if self._rodeo is None or self._rodeo["mirado"] or self._position is None:
+        if self._rodeo is None or self._position is None:
             return
-        ir = self._rodeo["ir_a"]
-        d = math.hypot(self._position[0] - ir[0], self._position[1] - ir[1])
-        if d <= RODEO_TOLERANCIA_M:
-            self._rodeo["mirado"] = True
-            self.send_frame()
+        r = self._rodeo
+        ahora = self.provider.current_time()
+        if ahora - r["t_tramo"] > RODEO_PLAZO_S:
+            # Gave up on this leg. Abandoning the orbit and saying nothing is better than an
+            # aircraft parked against a waypoint it cannot reach while the operator waits.
+            self._rodeo = None
+            return
+        ir = r["ir_a"]
+        if math.hypot(self._position[0] - ir[0], self._position[1] - ir[1]) > RODEO_TOLERANCIA_M:
+            return
+        self.send_frame()
+        r["i"] += 1
+        if r["i"] >= len(r["puntos"]):
+            r["mirado"] = True
+            self._rodeo = None
+            return
+        r["ir_a"] = r["puntos"][r["i"]]
+        r["t_tramo"] = ahora
+        self.provider.send_mobility_command(GotoCoordsMobilityCommand(*r["ir_a"]))
 
     def descartar(self, x=None, y=None, cls=None, plantilla=None) -> bool:
         """Records that the operator looked at this point and said it is not what we are after.
