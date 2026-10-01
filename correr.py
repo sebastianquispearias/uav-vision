@@ -46,15 +46,15 @@ def elegir_camara(mundo: str, alvo, pitch_deg: float, modelo: str, semilla: int)
     program that knows the difference between simulation and hardware.
     """
     if mundo == "sim":
-        from uav_vision.camera import CamaraSimulada
-        return CamaraSimulada(
-            alvo=alvo,
+        from uav_vision.camera import SimulatedCamera
+        return SimulatedCamera(
+            target=alvo,
             pitch_deg=pitch_deg,
-            camara=SIYI_A8_MINI,
+            camera=SIYI_A8_MINI,
             rng=np.random.default_rng(semilla),
         )
-    from uav_vision.camera import CamaraArduCam
-    return CamaraArduCam(modelo=modelo, umbral=0.3, camara=ARDUCAM_MODULE_3)
+    from uav_vision.camera import OnboardCamera
+    return OnboardCamera(model=modelo, threshold=0.3, camera=ARDUCAM_MODULE_3)
 
 
 def trayectoria(n: int, altura: float, radio: float) -> List[Tuple[float, float, float]]:
@@ -90,8 +90,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print("=" * 64)
     print(f"  mundo   : {args.mundo}")
     print(f"  camara  : {type(camara).__name__}")
-    print(f"  optica  : {camara.camara.name}  f={camara.camara.focal_length_px:.0f} px"
-          f"  punto principal={camara.camara.principal_point}")
+    print(f"  optica  : {camara.camera.name}  f={camara.camera.focal_length_px:.0f} px"
+          f"  punto principal={camara.camera.principal_point}")
     print(f"  pitch   : {args.pitch} grados")
     print("=" * 64)
 
@@ -102,14 +102,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     t0 = time.time()
 
     for i, (pos, yaw) in enumerate(trayectoria(args.pasos, args.altura, args.radio)):
-        for det in camara.ver_alvo(pos, yaw):
+        for det in camara.detect(pos, yaw):
             rayo = pixel_to_ray(
                 pos, yaw, (det["px"], det["py"]),
                 pitch_deg=args.pitch,
-                focal_px=camara.camara.focal_length_px,
-                img_w=camara.camara.image_width,
-                img_h=camara.camara.image_height,
-                principal_point=camara.camara.principal_point,
+                focal_px=camara.camera.focal_length_px,
+                img_w=camara.camera.image_width,
+                img_h=camara.camera.image_height,
+                principal_point=camara.camera.principal_point,
             )
             mediciones.append(rayo)
             confianzas.append(det["conf"])
@@ -122,8 +122,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if len(mediciones) < 2:
         print("  no alcanza para triangular (hacen falta 2 rayos)")
-        if hasattr(camara, "apagar"):
-            camara.apagar()
+        if hasattr(camara, "close"):
+            camara.close()
         return 1
 
     indices = select_best_views(
@@ -152,8 +152,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         print("  (en el dron no hay verdad conocida: comparar con el GPS del objetivo)")
 
-    if hasattr(camara, "apagar"):
-        camara.apagar()
+    if hasattr(camara, "close"):
+        camara.close()
     return 0
 
 
