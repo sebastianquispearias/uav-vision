@@ -182,4 +182,27 @@ assert dos[1] <= una[1] + 1e-6, \
     "con mas vistas cubiertas, lo mejor que queda no puede ser MAS diverso que antes"
 
 print()
+print("=" * 76)
+print("6. LA ESTACION ELIGE QUE AERONAVE VA, Y MANDA A OTRA QUE LA QUE YA MIRO")
+print("=" * 76)
+# The drone that reported the target is standing in the direction we already have, so sending it
+# would fly something and collect the view we had. The card cannot decide this: it knows who
+# reported and not who is connected.
+sys.path.insert(0, os.path.join(RAIZ, "scripts", "banco_embedded"))
+import gs_mapa  # noqa: E402
+
+casos = [({"1": {}, "2": {}, "3": {}}, "1", "2", "hay otros: va el primero de los otros"),
+         ({"1": {}}, "1", "1", "uno solo: va ese, que todavia puede moverse"),
+         ({"2": {}, "3": {}}, "9", "2", "el que vio ya no esta: va cualquiera"),
+         ({}, "1", None, "no hay nadie a quien mandar")]
+for nodos, vio, esperado, nota in casos:
+    got = gs_mapa.dron_para_rodear(nodos, vio)
+    print("  drones %-18s vio el %-2s -> %-6s  %s"
+          % (sorted(nodos) or "ninguno", vio, got if got else "ninguno", nota))
+    assert got == esperado, "eligio mal: %s" % nota
+assert gs_mapa.RODEO_RADIO_M > 0 and gs_mapa.RODEO_ALTURA_M > 0,     "la estacion tiene que traer un radio y una altura, porque la capa que vuela se niega sin ellos"
+print("  radio %.0f m y altura %.0f m: decisiones de mision, en el instrumento del operador"
+      % (gs_mapa.RODEO_RADIO_M, gs_mapa.RODEO_ALTURA_M))
+
+print()
 print("TODO OK")

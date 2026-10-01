@@ -32,6 +32,7 @@ python tests/test_correr.py      # the paper's chain (view_selection + fusion) s
 python tests/test_plantilla_objetivo.py  # the operator's click keeps boxes that look like the target
 python tests/test_descarte_operador.py   # the operator's "no es" stops the drone reporting it
 python tests/test_rodear.py       # the aircraft flies to see a target from another side
+node tests/test_gs_rodear.js     # the one button on the page that makes something fly
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```
 

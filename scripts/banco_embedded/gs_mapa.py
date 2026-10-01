@@ -381,6 +381,29 @@ DRON_CALLADO_S = 15.0
 # the precision of a finger on a map, and reaching further would hand the drone the appearance of
 # somebody standing next to the person who was pointed at.
 OBJETIVO_RADIO_M = 3.0
+# Where the operator wants an aircraft to stand when it is sent to look at a target from another
+# side. These are mission decisions and nothing derives them: close enough that a person is more
+# than a shape, far enough not to be over somebody's head, inside whatever the airspace allows.
+# They live here, in the operator's instrument, because the layer that flies refuses to invent
+# them, and they are overridable from the command line.
+RODEO_RADIO_M = 30.0
+RODEO_ALTURA_M = 25.0
+
+
+def dron_para_rodear(nodos, dron_que_vio):
+    """Which aircraft to send. Another one if there is another one.
+
+    The point of flying is a direction nobody has yet, and the drone that reported the target is
+    standing in the direction we already have. With a single aircraft the answer is that one: it
+    can still move, and refusing would be a worse answer than an imperfect one. Returns None when
+    there is nobody to send, which the caller has to say out loud rather than pretend it ordered
+    something.
+    """
+    ids = [str(d) for d in nodos]
+    if not ids:
+        return None
+    otros = [d for d in ids if d != str(dron_que_vio)]
+    return sorted(otros)[0] if otros else ids[0]
 
 
 def plantilla_para(x, y, vigentes):
@@ -593,6 +616,36 @@ class Handler(server.BaseHTTPRequestHandler):
             empujar_mensaje(nodos, {'type': 'vision_mirar', 'para': dron})
             listo = SEGUNDA is not None and SEGUNDA.listo
             self._responder(json.dumps({'dron': dron, 'detector_listo': listo}).encode('utf-8'))
+            return
+        if self.path.split('?')[0] == '/rodear':
+            # The operator sends an aircraft to look at one target from a side nobody has looked
+            # from. This is the only request in the station that makes something fly, so it says
+            # out loud which aircraft went and refuses rather than pretend when there is nobody to
+            # send. The radius and the altitude travel with the order because the layer that flies
+            # will not invent them.
+            try:
+                d = json.loads(crudo)
+                x, y = float(d['x']), float(d['y'])
+            except Exception:
+                self._responder(b'{"error": "rodear"}', codigo=400)
+                return
+            with CANDADO:
+                nodos = dict(ESTADO['nodos'])
+            elegido = dron_para_rodear(nodos, d.get('dron'))
+            if elegido is None:
+                self._responder(b'{"error": "ningun dron conectado"}', codigo=409)
+                return
+            radio = float(d.get('radio_m') or RODEO_RADIO_M)
+            altura = float(d.get('altura_m') or RODEO_ALTURA_M)
+            empujar_mensaje({elegido: nodos[elegido]},
+                            {'type': 'vision_rodear', 'x': x, 'y': y,
+                             'radio_m': radio, 'altura_m': altura})
+            print('[%s] el operador manda al dron %s a mirar (%.1f, %.1f) desde otro lado, '
+                  'a %.0f m de radio y %.0f m de altura'
+                  % (datetime.now().strftime('%H:%M:%S'), elegido, x, y, radio, altura),
+                  flush=True)
+            self._responder(json.dumps({'dron': elegido, 'radio_m': radio,
+                                        'altura_m': altura}).encode('utf-8'))
             return
         if self.path.split('?')[0] == '/veredicto':
             # The operator's verdict on a point, kept on disk with the crop it was given on. The
@@ -1196,13 +1249,17 @@ function pintarLista(pois) {
       <div class="veredicto">${veredictoDe(p) === 'si' ? '' :
         `<button data-v="si" data-i="${i}">es lo que busco</button>`
         + `<button data-v="no" data-i="${i}">no es</button>`}
-        <button data-mirar="${i}">segunda opinion</button></div>
+        <button data-mirar="${i}">segunda opinion</button>
+        <button data-rodear="${i}">mirar desde otro lado</button></div>
     </div>`).join('');
   for (const b of cont.querySelectorAll('button[data-v]')) {
     b.onclick = () => marcar(pois[+b.dataset.i], b.dataset.v);
   }
   for (const b of cont.querySelectorAll('button[data-mirar]')) {
     b.onclick = () => pedirSegunda(pois[+b.dataset.mirar].dron);
+  }
+  for (const b of cont.querySelectorAll('button[data-rodear]')) {
+    b.onclick = () => pedirRodeo(pois[+b.dataset.rodear]);
   }
 }
 
@@ -1314,6 +1371,21 @@ function pedirSegunda(dron) {
   fetch('/mirar', {method: 'POST', headers: {'Content-Type': 'application/json'},
                    body: JSON.stringify({dron: String(dron)})})
     .then(() => refrescar()).catch(() => {});
+}
+
+// The only click in this page that makes an aircraft fly. It asks the ground which drone to
+// send, because the station knows who is connected and the card only knows who reported.
+function pedirRodeo(p) {
+  fetch('/rodear', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({x: p.x, y: p.y, dron: String(p.dron)})})
+    .then(r => r.json()).then(d => {
+      // Same reasoning as the clear button: one that says nothing when pressed reads as broken,
+      // and this one is sending an aircraft somewhere, so it has to say which one went.
+      aviso = (d && d.dron)
+        ? 'dron ' + d.dron + ' va a mirar (' + p.x + ', ' + p.y + ') desde otro lado'
+        : 'no hay dron a quien mandar: ' + ((d && d.error) || 'sin respuesta');
+      pintar();
+    }).catch(() => { aviso = 'no se pudo mandar la orden'; pintar(); });
 }
 
 function textoSegunda(d) {
