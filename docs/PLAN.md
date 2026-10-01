@@ -171,16 +171,30 @@ modelo que no puede volar, que el sistema nunca toca el vuelo, y que sobre agua 
 cámara, que son para quien va a trabajar en el repo, no para quien lo está juzgando en 40 segundos.
 Y el video comparativo (punto 9) está citado pero no incrustado.
 
-### 8. Los tres entrenamientos que perdieron, contados como resultado
+### 8. Los entrenamientos que perdieron, contados como resultado — HECHO
 
-`DESCARTADO.md` tiene tres entrenamientos con sus números y el motivo de cada fracaso. **Eso vale más
-en una entrevista que tres que ganan**, porque muestra saber cuándo la propia mejora no funcionó. Hoy
-está escrito como registro, no como argumento.
+Son cuatro, no tres, y `DESCARTADO.md` ya los cuenta como argumento y no como registro: la tabla con
+el número de cada uno, y debajo la lección que no era obvia, que el entrenamiento 3 ganaba mirando
+recall y precisión y perdía mirando personas, **y que por eso existe el marcador de personas y
+fantasmas**. Eso es el argumento: el fracaso explica por qué el sistema se mide como se mide.
 
-### 9. El video comparativo como pieza central
+Y los cuatro estaban lastrados por una línea de Ultralytics que reinicializa la cabeza de
+clasificación, así que ninguno estaba afinando nada. Está dicho ahí con el mensaje literal.
 
-`docs/yolo26_vs_rfdetr.mp4` muestra 46 % contra 90 % con el acumulado corriendo en pantalla. Es lo más
-convincente que hay y no está usado en ningún lado.
+El `README.md` manda a ese documento diciendo para qué sirve: *"the document to read first if you
+are judging the method rather than the result"*.
+
+### 9. El video comparativo como pieza central — FALTA UN PASO QUE NO ES DE CÓDIGO
+
+`docs/yolo26_vs_rfdetr.mp4` muestra 46,2 % contra 90,5 % con el acumulado corriendo en pantalla, y
+ahora está citado en la sección **What it does not do** del `README.md`, que es donde lo va a ver
+quien juzgue el repo.
+
+**Lo que falta es subirlo.** Los binarios no entran al repositorio, por la misma convención que
+`demo.gif`: se sube a un issue de GitHub y se pega la URL. El hueco con la instrucción ya está en el
+README, en el sitio exacto. Es un paso manual y nadie más que el autor lo puede dar.
+
+**Listo cuando:** el video se reproduce dentro del README sin que el archivo esté versionado.
 
 ## Lo que NO hay que hacer
 

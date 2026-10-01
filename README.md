@@ -38,7 +38,10 @@ system never reports at all. That is the honest headline, and the rest of this l
   28 pixels.
 - **A model that cannot fly finds twice as many.** RF-DETR with tiles finds 90.5 % where the model
   that flies finds 46.2 %, at 1410 ms a frame against 35 ms. That gap is the argument for the
-  second-opinion path, and it is in `docs/yolo26_vs_rfdetr.mp4` with the running total on screen.
+  second-opinion path, and the video below is it, with the running total on screen.
+
+<!-- Upload docs/yolo26_vs_rfdetr.mp4 to a GitHub issue and paste the resulting URL here, the same
+     way demo.gif is handled above, so the binary never enters the repository. -->
 - **It never touches the flight.** This is open-loop perception: it looks, computes a position and
   reports it. Closing the loop is visual servoing, and the only commands a GrADyS protocol can
   emit are coordinates and speed, so it is future work and not a missing feature.
