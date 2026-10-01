@@ -108,14 +108,22 @@ y no una corrida congelada.
 **Lo que queda abierto:** decidir si la adaptación se enciende, y con qué salvaguarda. Como dice el
 final de este documento, el modo de fallo es silencioso y hay que poder volver al modelo original.
 
-### 4. RF-DETR en tierra, de punta a punta
+### 4. RF-DETR en tierra, de punta a punta — HECHO el 17sep (`39f8f86`)
 
-La cañería está: el dron responde a `vision_mirar` mandando el cuadro que miró, y
-`scripts/banco_embedded/segunda_opinion.py` lo mira con fichas. **Falta el botón**: que un click en la
-estación dispare el pedido y pinte lo que vuelve.
+El botón existe y está fijado por `tests/test_gs_segunda.js`, que recorre el flujo entero:
 
-**Listo cuando:** el operador hace click en un punto del mapa y ve, en menos de 5 s, lo que RF-DETR
-encontró en ese cuadro.
+```
+  clic en el del dron 2  : {"ruta":"/mirar","cuerpo":{"dron":"2"}}
+  mientras espera        : se ven las dos fases y ninguna afirma un resultado
+  contesta               : 4 personas en tierra, en 1.44 s
+  y solo al dron que miro: la tarjeta del dron 2 sigue sin respuesta
+```
+
+1,44 s contra el criterio de 5 s. El botón va junto al dron y no junto al punto del mapa, porque la
+segunda opinión se le pide a **un dron**: es su cuadro el que se mira.
+
+**Lo que queda, y es del portafolio y no del producto:** el video comparativo (punto 9) está citado
+en `docs/README.md` y no incrustado en ningún lado.
 
 ### 5. Modo "objetivo fijado" — HECHO el 17sep, NEGATIVO
 
@@ -127,12 +135,25 @@ el objetivo puesto en el operador y en el candidato más frágil (commit `e186c5
 Diecisiete puntos de recall que no compran una persona. Es el techo medido de la versión barata de
 "que el click enseñe", y el motivo por el que la vía es la plantilla de apariencia del punto B.
 
-### 6. Re-unir a una persona tras un hueco
+### 6. Re-unir a una persona tras un hueco — CONSTRUIDO Y APAGADO, por el umbral
 
-G y H aparecen como dos puntos cada una **incluso con un detector perfecto**. Es lo único que la
-visión no puede arreglar, y la vía es comparar apariencia contra los candidatos ya cerrados.
+El criterio **se cumple**, y `tests/test_reunir_movil.py` lo mide:
 
-**Listo cuando:** G y H aparecen como un punto cada una en el test.
+```
+  como viene (apagado)               A(1) B(1) C(1) G(3) H(1)   6 fantasmas
+  encendido (0.63, 30 s)             A(1) B(1) C(1) G(1) H(1)   6 fantasmas
+  un poco mas suelto (0.70)          A(1) B(1) G(1) H(1)        6 fantasmas
+```
+
+G pasa de tres puntos a uno sin perder a nadie y sin un fantasma más. H ya era uno.
+
+**Por qué sigue apagado**, y es el motivo que no hay que saltearse: entre unir a la que camina y
+borrar al chico del balcón hay **0,07** de distancia OSNet, en una escala donde dos pedazos de la
+misma persona llegan a estar a 0,81. El `EMB_DIST_REUNE = 0,63` se eligió mirando el vuelo contra el
+que se lo juzga, y su propio comentario lo declara: *"THIS NUMBER IS NOT SAFE AND THAT IS WHY
+REJOINING IS OFF BY DEFAULT"*.
+
+**Listo cuando:** el 0,63 se re-elija sobre un vuelo que no sea el del test. Es el punto 1 otra vez.
 
 ## Portafolio
 
