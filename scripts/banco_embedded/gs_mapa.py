@@ -388,10 +388,16 @@ OBJETIVO_RADIO_M = 3.0
 # them, and they are overridable from the command line.
 RODEO_RADIO_M = 30.0
 RODEO_ALTURA_M = 25.0
-# How many stops the way round. One is "go and look from the other side"; the mission asks the
-# drones to circle, and twelve is a stop every thirty degrees, which at this radius is a leg of
-# tens of seconds. Also a mission decision and also not derived from anything.
-RODEO_PUNTOS = 12
+# How many stops. ONE by default, and the reasoning matters more than the number: the question the
+# operator is asking is "is that a person", and one photograph from an angle nobody has answers it.
+# Twelve stops is twelve photographs of the same point, eleven of them answering a question nobody
+# asked, and at this radius each leg takes tens of seconds, so a full way round is minutes of
+# flight during which that aircraft is not patrolling anything.
+#
+# The orbit is still there and the protocol takes any number, because 'go and hold over it' is in
+# the mission and will be wanted. It is not the default because the default has to be the cheap
+# answer to the common question. A mission decision, like the radius and the altitude.
+RODEO_PUNTOS = 1
 
 
 def dron_para_rodear(nodos, dron_que_vio):
