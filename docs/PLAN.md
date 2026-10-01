@@ -52,11 +52,22 @@ veredictos negativos quedan guardados y utilizables, y el marcador de producto l
 Es la fase 2 de la misión original ("los drones van, circulan y mantienen posición") y nunca se
 construyó. Hoy la estación propone una segunda mirada y el piloto decide.
 
-**No se justifica por recall.** La medición del 30sep lo cierra: el detector pierde personas más
+**Lo que la justifica es la decisión del operador, y eso NO es un premio de consuelo.** De los 11
+candidatos que el sistema reporta, 6 son nadie. El que los mata es el operador, y hoy decide con un
+recorte de 128 px tomado casi desde arriba, que es el peor punto de vista que existe: medido sobre
+barcos, la cámara a 36 grados da 0,866 de recall y apuntando recto hacia abajo **0,067**. Trece
+veces, por el ángulo solo. Si el punto de vista vale eso para un detector, para un ojo humano
+juzgando si una mancha es una persona vale igual: desde arriba una persona no tiene postura.
+
+**El contraste que lo deja claro:** la segunda opinión de RF-DETR vuelve a leer **la misma foto**,
+mejor. La maniobra trae **una foto nueva**. Solo una de las dos agrega información que antes no
+estaba, y es la única que un modelo más grande no puede reemplazar.
+
+**Por recall del detector NO se justifica**, y eso sigue en pie: el detector pierde personas más
 grandes que las que encuentra en la misma imagen, así que ir a buscar más píxeles no arregla nada.
-Lo que la justifica es la imagen para que decida el operador, seguir un blanco que se desplaza, y el
-caso fuera de distribución (SeaDronesSee: 0,866 con la cámara a 36 grados contra 0,067 apuntando
-recto hacia abajo, con barcos de 74 a 160 px).
+Tampoco encoge el margen: medido sobre los candidatos del 02ago, el radio del 95 % de un blanco
+quieto es 82 a 99,9 % sesgo del GPS y la brújula de ese avión, y llevar la dispersión a cero lo
+encoge 0,1 a 0,5 %. Por eso la orden va a **otra** aeronave, cuyo sesgo es otro.
 
 Lo que falta no es el criterio sino su objetivo. `view_selection.py` puntúa vistas por **diversidad
 geométrica**, que es lo correcto para triangular y lo equivocado para reconocer. Para verificar qué
