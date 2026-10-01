@@ -427,9 +427,13 @@ def registrar(mensaje, fuente):
             'mobile': p.get('mobile'),
             'mature': bool(p.get('mature', False)),
             'crop': p.get('crop'),
-            # How much independent evidence, and how far off the point may be, when the drone
-            # matures by looks. Absent from older reports, and then simply not drawn.
+            # How much independent evidence, how much it takes to be reported, the fraction of
+            # the way there, and how far off the point may be, when the drone matures by looks.
+            # Absent from older reports, and then simply not drawn: a bar with no threshold
+            # behind it would be a guess dressed as a measurement.
             'looks': p.get('looks'),
+            'looks_min': p.get('looks_min'),
+            'evidence': p.get('evidence'),
             'radius_m': p.get('radius_m'),
             # Seconds between the drone's last sighting of the target and this report. The page
             # adds the time elapsed since the report ('t') and fades live contacts by it.
@@ -743,6 +747,12 @@ PAGINA = r"""<!doctype html>
             gap:2px 10px; font-size:13px; }
   .poi dt { color:var(--tenue); }
   .poi dd { margin:0; font-variant-numeric:tabular-nums; }
+  .poi .barra { margin:8px 0 0; height:6px; border-radius:99px; overflow:hidden;
+                background:rgba(255,255,255,.08); }
+  .poi .barra i { display:block; height:100%; border-radius:99px; background:var(--duda); }
+  .poi.ok .barra i { background:var(--ok); }
+  .poi .cuenta { margin:4px 0 0; font-size:11px; color:var(--tenue);
+                 font-variant-numeric:tabular-nums; }
   .veredicto button { font:600 11px system-ui; padding:3px 9px; margin:8px 6px 0 0;
                       border-radius:99px; border:1px solid var(--linea); background:transparent;
                       color:inherit; cursor:pointer; }
@@ -1121,6 +1131,10 @@ function pintarLista(pois) {
         ${p.radius_m != null
           ? `<dt>margen</dt><dd>&plusmn;${p.radius_m} m (95 %), ${p.looks} miradas</dd>` : ''}
       </dl>
+      ${p.evidence != null && p.looks_min
+        ? `<div class="barra"><i style="width:${Math.round(p.evidence * 100)}%"></i></div>
+           <div class="cuenta">${p.looks} de ${p.looks_min} miradas${
+             p.evidence >= 1 ? ' &middot; alcanza para reportar' : ''}</div>` : ''}
       ${p.crop
         ? `<img class="crop" src="data:image/jpeg;base64,${p.crop}" alt="lo que vio el dron">`
         : (p.mature ? '' : '<div class="sinrecorte">sin crop: no se puede verificar</div>')}

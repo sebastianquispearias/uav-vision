@@ -637,7 +637,8 @@ maduros = sum(1 for c in todos if c.get("mature"))
 # file on disk, so the score always describes the identity layer as it stands, not as it once was.
 _CANDS = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--candidatos=")), None)
 if _CANDS:
-    _guardables = ("x", "y", "n_obs", "conf", "mature", "tracks", "mobile", "cls")
+    _guardables = ("x", "y", "n_obs", "conf", "mature", "tracks", "mobile", "cls",
+                   "looks", "looks_min", "evidence")
     with open(_CANDS, "w") as _f:
         json.dump([{k: (sorted(v) if isinstance(v, (set, frozenset)) else v)
                     for k, v in c.items() if k in _guardables}

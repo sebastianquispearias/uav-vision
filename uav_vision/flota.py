@@ -131,6 +131,14 @@ def fundir(por_dron):
                     ya['age_s'] = None
                 elif (poi.get('t') or 0.0) - eb > (ya.get('t') or 0.0) - ea:
                     ya['age_s'], ya['t'] = eb, poi.get('t', ya.get('t'))
+                # Evidence travels as a trio (how much, out of how much, as a fraction), and the
+                # trio is taken whole from the drone that has more of it rather than each field
+                # being maximised on its own, which could pair one drone's count with another's
+                # threshold. Looks are not added up: two drones watching the same target at the
+                # same time are counting the same seconds, so the sum would invent evidence.
+                if (poi.get('evidence') or 0.0) > (ya.get('evidence') or 0.0):
+                    for campo in ('evidence', 'looks', 'looks_min'):
+                        ya[campo] = poi.get(campo)
                 ya['drones'].append(str(dron))
                 ya['dron'] = '+'.join(ya['drones'])
                 break

@@ -452,4 +452,49 @@ assert "age_s" not in sin_reloj, "sin el instante del reporte no hay edad que da
 assert "age_s" not in span.candidates(preliminary=True, now=29.8)[0], "el modo span no cambia su reporte"
 
 print()
+print("=" * 64)
+print("15. EVIDENCIA: el reporte dice cuanta falta para reportar, no solo cuanta hay")
+print("=" * 64)
+# Measured on the 02ago replay against the letters a human put on every box: of the four mature
+# candidates three were nobody and one was the operator, while the real people B, C, G and H never
+# matured. The station already printed "22 miradas" with no threshold beside it, so neither an
+# operator nor this repository could see how far from reportable anything was. The fraction has to
+# be the count over the threshold IN FORCE, which is what the third case below proves: the same
+# five looks read 0.25 against a bar of 20 and 0.50 against a bar of 10. A field that always said
+# 0.25 would pass the first two cases and fail that one.
+e = emb_de(31)
+
+def con_miradas(n_looks, min_looks=20, modo="looks"):
+    ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity=modo,
+                                report_min_looks=min_looks)
+    for k in range(n_looks):
+        ident.observe(k, 700, np.array([2.0, -1.0]) + RNG.normal(0, 0.3, size=2), 0.7,
+                      e + 0.03 * RNG.normal(size=512), t=float(k))
+    return ident.candidates(preliminary=True, now=float(n_looks))[0]
+
+pocas = con_miradas(5)
+muchas = con_miradas(20)
+bar_baja = con_miradas(5, min_looks=10)
+span = con_miradas(20, modo="span")
+print(f"   5 de 20 miradas: evidence={pocas['evidence']} looks={pocas['looks']} "
+      f"looks_min={pocas['looks_min']} maduro={pocas['mature']}")
+print(f"  20 de 20 miradas: evidence={muchas['evidence']} looks={muchas['looks']} "
+      f"looks_min={muchas['looks_min']} maduro={muchas['mature']}")
+print(f"   5 de 10 miradas: evidence={bar_baja['evidence']} looks_min={bar_baja['looks_min']} "
+      f"maduro={bar_baja['mature']}")
+print(f"  modo span: {'evidence' in span}, {'looks_min' in span}")
+assert pocas["evidence"] == 0.25 and pocas["looks"] == 5 and pocas["looks_min"] == 20,     "cinco de veinte miradas es un cuarto de la evidencia"
+assert not pocas["mature"] and muchas["mature"],     "el contraste: con un cuarto no se reporta y con la barra llena si"
+assert muchas["evidence"] == 1.0, "la barra llena es exactamente 1.0, no 1.05"
+assert bar_baja["evidence"] == 0.5,     "la fraccion se mide contra el umbral vigente, no contra un 20 escrito a mano"
+assert "evidence" not in span and "looks_min" not in span, "el modo span no cambia su reporte"
+# The bar and the verdict have to be the same statement. Today both read one axis, so the
+# equivalence is free; the moment a second axis joins the rule, evidence has to be the MINIMUM
+# over every axis or the card will say "alcanza para reportar" about something the layer refuses
+# to report. This assertion is what makes that a failure instead of a surprise.
+for caso in (con_miradas(3), pocas, con_miradas(19), muchas, con_miradas(40), bar_baja,
+             con_miradas(10, min_looks=10)):
+    assert (caso["evidence"] >= 1.0) == caso["mature"],         "la barra llena y el veredicto tienen que decir lo mismo, siempre"
+
+print()
 print("TODO OK")

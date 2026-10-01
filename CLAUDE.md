@@ -26,6 +26,7 @@ for t in tests/test_*.py; do echo "== $t"; python "$t" >/dev/null && echo OK || 
 node tests/test_gs_filtro.js     # the ground station page, without a browser
 node tests/test_gs_buscar.js     # the search buttons and what each drone reports it is doing
 node tests/test_gs_veredicto.js  # the operator's verdict and the 95 % margin on the map
+node tests/test_gs_barra.js      # the evidence bar: how far a candidate is from reportable
 ../drone-geolocation/entrenamiento/venv/Scripts/python.exe tests/test_tracker.py  # needs boxmot
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```

@@ -874,9 +874,15 @@ class IncrementalIdentity:
             # one target is a comparison neither of them can make alone, and position is not
             # enough: two people three metres apart are two people.
             "emb": c.get("emb"),
-            # How much independent evidence, and how far off the point may be. Only in "looks"
-            # mode, so the validated chain's report is unchanged byte for byte.
-            **({"looks": len(c["bins"]), "radius_m": round(self._radio_ahora(c, now), 2)}
+            # How much independent evidence there is, how much it takes to be reported, and the
+            # fraction of the way there. Only in "looks" mode, so the validated chain's report is
+            # unchanged byte for byte. The count travels with its threshold because the count
+            # alone cannot be read: "22 looks" means nothing to an operator who does not know
+            # that 20 is the bar. radius_m is how far off the point may be.
+            **({"looks": len(c["bins"]),
+                "looks_min": int(self.report_min_looks),
+                "evidence": round(min(1.0, len(c["bins"]) / max(1, self.report_min_looks)), 3),
+                "radius_m": round(self._radio_ahora(c, now), 2)}
                if self.maturity == "looks" else {}),
             # Seconds since the candidate was last seen. The position of a lost target keeps being reported, and
             # without this a consumer cannot tell a fresh sighting from old news.
