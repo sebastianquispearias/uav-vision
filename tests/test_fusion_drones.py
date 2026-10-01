@@ -116,6 +116,22 @@ try:
     e = pedir('/estado')
     print('  mismo caso, reportes en el otro orden -> age_s: %s' % e['pois'][0].get('age_s'))
     assert e['pois'][0]['age_s'] < 2.0, e['pois'][0]['age_s']
+    # El margen fundido es el MENOR de los dos, no el del que llego primero. Medido sobre los
+    # candidatos del 02ago, el radio del 95 % de un blanco quieto es 82 a 99.9 % sesgo, y el sesgo
+    # es gps_sigma mas el rango oblicuo por yaw_sigma: el mismo blanco visto desde 14 m y desde
+    # 37 m no tiene una incertidumbre, tiene la del dron mas cercano.
+    v = vector(77)
+    for primero, segundo, nombre in ((7.2, 4.4, 'el lejano primero'), (4.4, 7.2, 'el cercano primero')):
+        a = poi(60.0, 60.0, 'person', v); a['radius_m'] = primero
+        b = poi(60.4, 60.2, 'person', v); b['radius_m'] = segundo
+        reportar('8', [a]); reportar('9', [b])
+        e = pedir('/estado')
+        fundidos = [q for q in e['pois'] if abs(q['x'] - 60.0) < 2.0 and '+' in str(q.get('dron', ''))]
+        assert fundidos, 'los dos reportes tenian que fundirse en un pin'
+        r = fundidos[0].get('radius_m')
+        print('  %-22s radios %.1f y %.1f -> el pin fundido dice %.1f' % (nombre, primero, segundo, r))
+        assert abs(r - min(primero, segundo)) < 1e-6,             'el pin fundido tiene que quedarse con el margen MENOR, no con el que llego primero'
+
     print('test_fusion_drones OK')
 finally:
     est.terminate()

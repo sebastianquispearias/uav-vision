@@ -139,6 +139,20 @@ def fundir(por_dron):
                 if (poi.get('evidence') or 0.0) > (ya.get('evidence') or 0.0):
                     for campo in ('evidence', 'looks', 'looks_min', 'duty'):
                         ya[campo] = poi.get(campo)
+                # The margin of a fused pin is the SMALLER of the two, not the first drone's.
+                # Measured on the 02ago candidates, the 95 % radius of a static target is 82 to
+                # 99.9 % bias and almost nothing scatter, and that bias is gps_sigma plus the
+                # slant range times yaw_sigma: a target seen from 14 m and from 37 m does not have
+                # one uncertainty, it has the closer drone's. Keeping whichever arrived first was
+                # reporting the worse of two answers for no reason.
+                #
+                # What is NOT done here, and would need an argument first: averaging the two
+                # biases down. Two aircraft have independent compasses, so the yaw half really is
+                # independent and sqrt(2) of it would be honest; their GPS error is partly common,
+                # so the gps half is not. Claiming the whole bias averages would invent precision.
+                ra, rb = ya.get('radius_m'), poi.get('radius_m')
+                if rb is not None and (ra is None or rb < ra):
+                    ya['radius_m'] = rb
                 ya['drones'].append(str(dron))
                 ya['dron'] = '+'.join(ya['drones'])
                 break
