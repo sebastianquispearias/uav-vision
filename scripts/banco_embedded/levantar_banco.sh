@@ -40,6 +40,27 @@ MISION="${BANCO_MISION:-mision_banco_dos_drones:ProtocoloVisionBanco}"
 
 # The addresses the boards exchange reports on, plus the station last: this is node_ip_dict, and
 # the node ids are the positions in it.
+# Nothing starts until every argument looks like a board. A line pasted twice into a terminal
+# arrives as six boards, three of which are a filename, the station's own address and a hostname
+# with 'bash' stuck to the end -- and the old version gave each of them a node id, tried to set
+# its clock, and started the two real boards TWICE under different ids. In the field that is a
+# fleet where two aircraft answer to one name and the dictionary is nonsense, and the only sign is
+# a few lines of 'Name or service not known' scrolling past.
+for host in "${PIS[@]}"; do
+    case "${host#*@}" in
+        *[!0-9.]*|*..*|"") echo "NO ARRANCO: '$host' no parece una placa."
+                           echo "Se espera  usuario@A.B.C.D  por cada placa, y nada mas."
+                           echo "Si pegaste la linea dos veces, el terminal las unio: borra y repite."
+                           exit 1 ;;
+    esac
+done
+if [ "$(printf '%s
+' "${PIS[@]}" | sort | uniq -d | wc -l)" -gt 0 ]; then
+    echo "NO ARRANCO: hay una placa repetida en la lista."
+    echo "Dos node_id para la misma placa es una flota donde dos aeronaves contestan al mismo nombre."
+    exit 1
+fi
+
 DIRS=()
 for host in "${PIS[@]}"; do DIRS+=("${host#*@}:8200"); done
 DIRS+=("$EST")
