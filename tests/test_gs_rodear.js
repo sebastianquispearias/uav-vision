@@ -85,9 +85,9 @@ estado = { pois: [poi(3), poi(30, {dron: 2})] };
 pintar();
 
 console.log('  botones de rodeo       :', botones('rodear').length, 'para 2 POI');
-console.log('  lo que dice el boton   :', /mirar desde otro lado/.test(lista()) ? 'mirar desde otro lado' : 'NADA');
-ok(botones('rodear').length === 2, 'cada POI necesita su boton de mirar desde otro lado');
-ok(lista().indexOf('mirar desde otro lado') >= 0, 'el boton tiene que decir que hace');
+console.log('  lo que dice el boton   :', /look from another angle/.test(lista()) ? 'look from another angle' : 'NADA');
+ok(botones('rodear').length === 2, 'cada POI necesita su boton de look from another angle');
+ok(lista().indexOf('look from another angle') >= 0, 'el boton tiene que decir que hace');
 
 // Nothing flies until it is pressed. This is the assertion that matters most in this file.
 console.log('  antes del clic         :', __pedidos.length, 'pedidos,', rodeos().length, 'de rodeo');

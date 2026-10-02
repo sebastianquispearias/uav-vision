@@ -61,8 +61,8 @@ const lista = () => document.getElementById('lista').innerHTML;
 const cuenta = () => document.getElementById('cuenta').textContent;
 console.log('  llegan 3 POI           :', cuenta());
 ok(visibles.length === 3, 'sin veredictos tienen que verse los 3');
-ok(lista().indexOf('&plusmn;5.2 m (95 %), 22 miradas') >= 0, 'la tarjeta no muestra el margen');
-ok((lista().match(/margen/g) || []).length === 2, 'un POI sin radio no deberia inventarse un margen');
+ok(lista().indexOf('&plusmn;5.2 m (95 %)') >= 0, 'la tarjeta no muestra el margin');
+ok((lista().match(/margin/g) || []).length === 2, 'un POI sin radio no deberia inventarse un margen');
 ok((lista().match(/data-v="no"/g) || []).length === 3, 'cada POI necesita su boton de descarte');
 
 marcar(estado.pois[1], 'no');
@@ -83,8 +83,8 @@ ok(visibles.length === 2 && !visibles.some(p => p.x === 12), 'el descarte no sig
 ok(visibles.some(p => p.x === 30), 'un POI a 18 m del descarte no puede ocultarse');
 
 marcar(estado.pois[2], 'si');
-console.log('  verifico el de x=0     :', (lista().match(/VERIFICADO/g) || []).length, 'chip VERIFICADO');
-ok(lista().indexOf('VERIFICADO') >= 0, 'el verificado no lo dice');
+console.log('  verifico el de x=0     :', (lista().match(/OPERATOR CONFIRMED/g) || []).length, 'chip OPERATOR CONFIRMED');
+ok(lista().indexOf('OPERATOR CONFIRMED') >= 0, 'el verificado no lo dice');
 ok(visibles.some(p => p.x === 0), 'verificar no puede ocultar');
 `;
 

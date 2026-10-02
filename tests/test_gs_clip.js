@@ -49,7 +49,7 @@ const prueba = `
 const poi = (x, extra) => Object.assign(
   { x, y: 0, cls: 'person', mature: false, mobile: false, n_obs: 9, conf: .5, dron: 1 }, extra);
 const lista = () => document.getElementById('lista').innerHTML;
-const marcas = () => (lista().match(/probable no persona \\(CLIP [0-9.-]+\\)/g) || []);
+const marcas = () => (lista().match(/probably not a person \\(CLIP [0-9.-]+\\)/g) || []);
 const tarjetas = () => lista().split('class="poi ').slice(1);
 
 // Without scores: what a station started without --clip sends.
@@ -67,10 +67,10 @@ estado = { pois: [
 pintar();
 console.log('  con puntaje   : orden x =', visibles.map(p => p.x).join(', '), '| marcas:', marcas().join(' / '));
 ok(marcas().length === 1, 'solo el marcado lleva la marca');
-ok(marcas()[0] === 'probable no persona (CLIP 0.12)', 'la marca tiene que decir el puntaje');
+ok(marcas()[0] === 'probably not a person (CLIP 0.12)', 'la marca tiene que decir el puntaje');
 ok(visibles.map(p => p.x).join() === '10,20,0', 'el dudoso va al final, el resto en su orden');
-ok(tarjetas()[2].indexOf('probable no persona') >= 0, 'la marca esta en la tarjeta del ultimo');
-ok(tarjetas()[0].indexOf('probable no persona') < 0, 'la del confiable no la lleva');
+ok(tarjetas()[2].indexOf('probably not a person') >= 0, 'la marca esta en la tarjeta del ultimo');
+ok(tarjetas()[0].indexOf('probably not a person') < 0, 'la del confiable no la lleva');
 ok((lista().match(/data-v="no"/g) || []).length === 3, 'el operador sigue pudiendo decidir sobre los 3');
 ok(visibles.length === 3, 'nada se oculta');
 `;

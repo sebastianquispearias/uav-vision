@@ -6,7 +6,7 @@
  * own 95 % radius. That radius is how far off the point may be, not how far apart two things are:
  * a mobile POI carries 68-218 m and so inherited every verdict on the map, and on the recorded
  * station a "no es" given on a doubtful point 4 m from the confirmed operator discarded the
- * operator too, while an "es lo que busco" marked every point VERIFICADO.
+ * operator too, while an "that is what I am looking for" marked every point OPERATOR CONFIRMED.
  *
  * Each section is a contrast: a neighbour, a mobile POI and a verified point must come out
  * differently from the POI the verdict was given on, and that POI must still carry it after it
@@ -55,7 +55,7 @@ const prueba = `
 const poi = (x, y, extra) => Object.assign(
   { x, y, cls: 'person', mature: true, mobile: false, n_obs: 40, conf: .6, dron: 1 }, extra);
 const cuenta = () => document.getElementById('cuenta').textContent;
-const verificados = () => (document.getElementById('lista').innerHTML.match(/VERIFICADO/g) || []).length;
+const verificados = () => (document.getElementById('lista').innerHTML.match(/OPERATOR CONFIRMED/g) || []).length;
 const en = x => visibles.some(p => p.x === x);
 // The scene of the recorded station: the confirmed operator (A), a doubtful point 4 m from it (B)
 // whose 95 % circle covers A, and a mobile POI 20 m away whose circle covers everything.
@@ -82,15 +82,15 @@ ok(!en(0), 'A, sobre el que se dio el veredicto, sigue visible');
 ok(en(4), 'el "no es" sobre A oculto a B, a 4 m');
 ok(en(20), 'el "no es" sobre A oculto al POI movil de radio 150 m a 20 m');
 
-console.log('3) "es lo que busco" en A');
+console.log('3) "that is what I am looking for" en A');
 empezar(0, 0);
 marcar(estado.pois[0], 'si');
-console.log('   ', verificados(), 'chip VERIFICADO | veredictos:',
+console.log('   ', verificados(), 'chip OPERATOR CONFIRMED | veredictos:',
             estado.pois.map(p => p.x + '=' + veredictoDe(p)).join(', '));
 ok(veredictoDe(estado.pois[0]) === 'si', 'A no quedo verificado');
 ok(veredictoDe(estado.pois[1]) === null, 'verificar A marco tambien a B, a 4 m');
 ok(veredictoDe(estado.pois[2]) === null, 'verificar A marco tambien al POI movil');
-ok(verificados() === 1, 'tiene que haber un solo chip VERIFICADO');
+ok(verificados() === 1, 'tiene que haber un solo chip OPERATOR CONFIRMED');
 
 console.log('4) el reporte siguiente trae a A corrido 1.5 m y la lista en otro orden');
 empezar(0, 0);
@@ -105,9 +105,9 @@ marcar(estado.pois[0], 'si');
 estado = { pois: escena(1.5, 0).reverse() };
 pintar();
 console.log('    verificado corrido 1.5 m:', estado.pois.map(p => p.x + '=' + veredictoDe(p)).join(', '));
-ok(veredictoDe(estado.pois[2]) === 'si', 'el "es lo que busco" no siguio a A corrido 1.5 m');
+ok(veredictoDe(estado.pois[2]) === 'si', 'el "that is what I am looking for" no siguio a A corrido 1.5 m');
 ok(veredictoDe(estado.pois[1]) === null && veredictoDe(estado.pois[0]) === null,
-   'el "es lo que busco" de A paso a otro POI en el reporte siguiente');
+   'el "that is what I am looking for" de A paso a otro POI en el reporte siguiente');
 `;
 
 console.log('======================================================================');

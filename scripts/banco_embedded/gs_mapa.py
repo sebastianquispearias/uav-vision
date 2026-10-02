@@ -398,6 +398,9 @@ RODEO_ALTURA_M = 25.0
 # the mission and will be wanted. It is not the default because the default has to be the cheap
 # answer to the common question. A mission decision, like the radius and the altitude.
 RODEO_PUNTOS = 1
+# --banco: this station is driving boards on a desk, not aircraft. Only affects what the page says
+# about position, and it says it instead of printing a number nobody should believe.
+EN_BANCO = False
 
 
 def dron_para_rodear(nodos, dron_que_vio):
@@ -744,6 +747,10 @@ class Handler(server.BaseHTTPRequestHandler):
                     'objetivo': ESTADO['objetivo'],
                     'segunda': ESTADO['segunda'],
                     'pois': ESTADO['pois'],
+                    # Whether these boards are on a desk. The page uses it to say the metres mean
+                    # nothing instead of printing a number nobody should believe, and it travels
+                    # here rather than being baked into the page so the page stays a static file.
+                    'banco': EN_BANCO,
                     'drones': ESTADO['drones'],
                     'rastros': ESTADO['rastros'],
                     'origen': ESTADO['origen'],
@@ -873,6 +880,7 @@ PAGINA = r"""<!doctype html>
             gap:2px 10px; font-size:13px; }
   .poi dt { color:var(--tenue); }
   .poi dd { margin:0; font-variant-numeric:tabular-nums; }
+  .poi dd.nosirve { color:var(--tenue); font-style:italic; font-variant-numeric:normal; }
   .poi .barra { margin:8px 0 0; height:6px; border-radius:99px; overflow:hidden;
                 background:rgba(255,255,255,.08); }
   .poi .barra i { display:block; height:100%; border-radius:99px; background:var(--duda); }
@@ -1242,34 +1250,36 @@ function pintarLista(pois) {
          style="opacity:${Math.max(alfaDe(p), ALFA_TARJETA_MIN).toFixed(2)}">
       <div class="tit">#${i+1}
         ${vistoHace(p) ? `<span class="chip viejo">${vistoHace(p)}</span>` : ''}
-        <span class="chip ${p.mature ? 'ok' : 'duda'}">${p.mature ? 'CONFIRMADO' : 'POR VERIFICAR'}</span>
-        ${p.mobile ? '<span class="chip mobile">MOVIL</span>' : ''}
+        <span class="chip ${p.mature ? 'ok' : 'duda'}">${p.mature ? 'CONFIRMED' : 'UNCONFIRMED'}</span>
+        ${p.mobile ? '<span class="chip mobile">MOVING</span>' : ''}
         ${p.cls ? `<span class="chip clase">${p.cls}</span>` : ''}
-        ${veredictoDe(p) === 'si' ? '<span class="chip ok">VERIFICADO</span>' : ''}
+        ${veredictoDe(p) === 'si' ? '<span class="chip ok">OPERATOR CONFIRMED</span>' : ''}
         ${p.clip_no_persona
-          ? `<span class="chip noper">probable no persona (CLIP ${p.clip.toFixed(2)})</span>` : ''}
+          ? `<span class="chip noper">probably not a person (CLIP ${p.clip.toFixed(2)})</span>` : ''}
       </div>
-      <dl>
-        <dt>local</dt><dd>${p.x} m E, ${p.y} m N</dd>
-        ${p.lat != null ? `<dt>coords</dt><dd>${p.lat}, ${p.lng}</dd>` : ''}
-        <dt>evidencia</dt><dd>${p.n_obs} obs${p.conf != null ? ', conf ' + p.conf : ''}</dd>
-        <dt>dron</dt><dd>${p.dron}</dd>
-        ${p.radius_m != null
-          ? `<dt>margen</dt><dd>&plusmn;${p.radius_m} m (95 %), ${p.looks} miradas</dd>` : ''}
-      </dl>
+      ${p.crop
+        ? `<img class="crop" src="data:image/jpeg;base64,${p.crop}" alt="what the drone saw">`
+        : (p.mature ? '' : '<div class="sinrecorte">no crop: nothing to judge by</div>')}
       ${p.evidence != null && p.looks_min
         ? `<div class="barra"><i style="width:${Math.round(p.evidence * 100)}%"></i></div>
-           <div class="cuenta">${p.looks} de ${p.looks_min} miradas${
-             p.evidence >= 1 ? ' &middot; alcanza para reportar' : ''}</div>` : ''}
-      ${p.crop
-        ? `<img class="crop" src="data:image/jpeg;base64,${p.crop}" alt="lo que vio el dron">`
-        : (p.mature ? '' : '<div class="sinrecorte">sin crop: no se puede verificar</div>')}
+           <div class="cuenta">seen in ${p.looks} of the ${p.looks_min} looks it takes${
+             p.evidence >= 1 ? ' &middot; enough to report' : ''}</div>` : ''}
+      <dl>
+        <dt>evidence</dt><dd>${p.n_obs} sightings${p.conf != null ? ', confidence ' + p.conf : ''}</dd>
+        <dt>drone</dt><dd>${p.dron}</dd>
+        ${(estado && estado.banco)
+          ? '<dt>where</dt><dd class="nosirve">on the bench: no autopilot, the metres mean nothing</dd>'
+          : `<dt>where</dt><dd>${p.x} m E, ${p.y} m N${
+               p.lat != null ? ` &middot; ${p.lat}, ${p.lng}` : ''}</dd>`
+            + (p.radius_m != null
+               ? `<dt>margin</dt><dd>&plusmn;${p.radius_m} m (95 %)</dd>` : '')}
+      </dl>
       ${segundaDe(p)}
       <div class="veredicto">${veredictoDe(p) === 'si' ? '' :
-        `<button data-v="si" data-i="${i}">es lo que busco</button>`
-        + `<button data-v="no" data-i="${i}">no es</button>`}
-        <button data-mirar="${i}">segunda opinion</button>
-        <button data-rodear="${i}">mirar desde otro lado</button></div>
+        `<button data-v="si" data-i="${i}" title="keep it on the map and stop asking">that is what I am looking for</button>`
+        + `<button data-v="no" data-i="${i}" title="the drone stops reporting this point">not it</button>`}
+        <button data-mirar="${i}" title="asks drone ${p.dron} for the frame it is looking at and runs a bigger detector on the ground, about 1.4 s">second opinion</button>
+        <button data-rodear="${i}" title="sends another drone to a point this target has not been seen from, and that picture comes back">look from another angle</button></div>
     </div>`).join('');
   for (const b of cont.querySelectorAll('button[data-v]')) {
     b.onclick = () => marcar(pois[+b.dataset.i], b.dataset.v);
@@ -1527,20 +1537,31 @@ function pintarCamara(n) {
   }
 }
 
-// -- what the station proposes ----------------------------------------------
-// A suggestion with the point already computed, never an order. The link carries data; the
-// stick stays with the pilot. Writing it as a command here would be writing a behaviour that
-// cannot legally fly.
+// -- what the station proposes, with the button that does it -----------------
+// This used to be a suggestion and nothing else, because the station could only propose: the
+// link carries data and the stick stays with the pilot. It still does -- nothing flies unless a
+// human presses this -- but a suggestion the operator cannot act on from where they read it is
+// the clearest kind of noise, so the button that sends the aircraft is here.
+//
+// It does NOT repeat a target that is already in the card list. Two places saying the same thing
+// makes the operator read both and wonder whether they agree. A target the operator can already
+// see gets the same button on its own card instead.
 function pintarPedidos(pedidos) {
   const c = document.getElementById('pedidos');
-  if (!pedidos.length) { c.innerHTML = ''; return; }
-  c.innerHTML = '<div class="cab">verificacion sugerida</div>' + pedidos.map(p => `
+  const enLista = new Set((visibles || []).map(p => p.x + ',' + p.y));
+  const nuevos = pedidos.filter(p => !enLista.has(p.x + ',' + p.y));
+  if (!nuevos.length) { c.innerHTML = ''; return; }
+  c.innerHTML = '<div class="cab">worth a second look</div>' + nuevos.map((p, i) => `
     <div class="item">
-      <b>${p.cls || 'sin clase'}</b> sin confirmar, visto solo por el dron ${p.visto_por}.
-      Podria ir: ${p.puede_ir.join(', ')}.
-      <div class="coord">${p.x} m E, ${p.y} m N${
-        p.lat != null ? ` &middot; ${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}` : ''}</div>
+      Nobody has corroborated this <b>${p.cls || 'contact'}</b>. Only drone ${p.visto_por}
+      has seen it.
+      <div class="veredicto"><button data-ir="${i}">send drone ${p.puede_ir[0]} to look
+        from another angle</button></div>
     </div>`).join('');
+  for (const b of c.querySelectorAll('button[data-ir]')) {
+    b.onclick = () => pedirRodeo(Object.assign({}, nuevos[+b.dataset.ir],
+                                               {dron: nuevos[+b.dataset.ir].visto_por}));
+  }
 }
 
 // -- the imagery ------------------------------------------------------------
@@ -1743,11 +1764,15 @@ if __name__ == '__main__':
     ap.add_argument('--puntos-rodeo', type=int, default=RODEO_PUNTOS,
                     help='paradas de la vuelta: 1 es una foto desde otro angulo, 12 es rodear '
                          '(por defecto %d)' % RODEO_PUNTOS)
+    ap.add_argument('--banco', action='store_true',
+                    help='las placas estan en un escritorio: la pagina dice que los metros no '
+                         'significan nada en vez de imprimir un numero que nadie deberia creer')
     args = ap.parse_args()
     DRON_CALLADO_S = args.callado_s
     RODEO_RADIO_M = float(args.radio_rodeo)
     RODEO_ALTURA_M = float(args.altura_rodeo)
     RODEO_PUNTOS = max(1, int(args.puntos_rodeo))
+    EN_BANCO = bool(args.banco)
     CLIP_DESCARTA = bool(args.clip_descarta)
     if args.clip:
         # Imported only when asked for: the station stays droppable anywhere without torch.

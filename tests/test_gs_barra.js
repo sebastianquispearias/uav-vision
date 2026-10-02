@@ -73,11 +73,11 @@ ok(tarjetas().length === 3, 'tienen que pintarse las tres tarjetas');
 ok(anchos().length === 2, 'un reporte sin los campos no puede inventarse una barra');
 ok(anchos()[0] === 100 && anchos()[1] === 25,
    'el ancho es la fraccion de evidencia, no un valor fijo ni el inverso');
-ok(lista().indexOf('20 de 20 miradas') >= 0 && lista().indexOf('5 de 20 miradas') >= 0,
+ok(lista().indexOf('seen in 20 of the 20 looks it takes') >= 0 && lista().indexOf('seen in 5 of the 20 looks it takes') >= 0,
    'la barra tiene que decir el contador Y el umbral, que es el dato que faltaba');
-ok(lista().indexOf('alcanza para reportar') >= 0,
+ok(lista().indexOf('enough to report') >= 0,
    'la barra llena tiene que decir que alcanza');
-ok(tarjetas()[1].indexOf('alcanza para reportar') < 0,
+ok(tarjetas()[1].indexOf('enough to report') < 0,
    'el contraste: la que va por un cuarto no puede decir que alcanza');
 
 // The colour comes from the card's own class, so the ghost reads as confirmed and the person as
@@ -86,8 +86,8 @@ ok(tarjetas()[0].slice(0, 2) === 'ok' && tarjetas()[1].slice(0, 4) === 'duda',
    'el color de la barra sale de la clase de la tarjeta');
 
 // The margin row must keep its own wording: test_gs_veredicto.js counts the word and expects two.
-ok((tarjetas()[0].match(/margen/g) || []).length === 1,
-   'la barra no puede agregar otra aparicion de la palabra margen');
+ok((tarjetas()[0].match(/margin/g) || []).length === 1,
+   'la barra no puede agregar otra aparicion de la palabra margin');
 `;
 
 console.log('======================================================================');
