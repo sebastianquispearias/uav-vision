@@ -9,6 +9,10 @@
 #
 #   bash scripts/banco_embedded/levantar_banco.sh <estacion ip:8300> <pi1> <pi2> [pi3 ...]
 #
+# Desde PowerShell, que es donde esto se usa, en UNA sola linea: PowerShell no entiende la barra
+# invertida como continuacion de linea, y el error que da no menciona la barra.
+#   bash scripts/banco_embedded/levantar_banco.sh 192.168.1.121:8300 pi@192.168.1.125 pi@192.168.1.126
+#
 # e.g.  bash scripts/banco_embedded/levantar_banco.sh 10.0.0.9:8300 \
 #           pi@10.0.0.11 pi@10.0.0.12 pi@10.0.0.13
 #
@@ -45,6 +49,29 @@ echo "BANCO DE ${#PIS[@]} PLACAS   estacion $EST"
 echo "  mision: $MISION"
 echo "  node_ip_dict: ${DIRS[*]}"
 echo "=============================================================="
+
+# 0. The station, unless one is already answering. Here and not in a second command because the
+#    arguments are easy to get wrong in a way that is hard to see: without --nodos the station
+#    cannot send anything and answers 'ningun dron conectado', and two stations can hold the same
+#    port without complaining, so the one that answers may not be the one just started. Set
+#    ESTACION_FLAGS to change what it is started with.
+PUERTO="${EST##*:}"
+if curl -s -m 3 -o /dev/null "http://127.0.0.1:$PUERTO/estado"; then
+    echo "-- ya hay una estacion viva en $PUERTO, se usa esa"
+else
+    echo "-- levantando la estacion en $PUERTO"
+    NODOS=""
+    for i in "${!PIS[@]}"; do
+        [ -n "$NODOS" ] && NODOS="$NODOS,"
+        NODOS="$NODOS$((i + 1))=${PIS[$i]#*@}:8200"
+    done
+    ( cd "$(dirname "$0")/../.." && nohup python scripts/banco_embedded/gs_mapa.py         --puerto "$PUERTO" --origen="${ORIGEN_GPS:--22.978029946,-43.23214256266666}"         --nodos "$NODOS" ${ESTACION_FLAGS:---segunda-opinion --banco}         > /tmp/estacion.log 2>&1 & )
+    for i in $(seq 1 40); do
+        curl -s -m 2 -o /dev/null "http://127.0.0.1:$PUERTO/estado" && break
+        sleep 1
+    done
+    echo "   estacion responde tras ${i}s   (--nodos $NODOS)"
+fi
 
 # 1. The clock. A Raspberry comes up with the wrong time after a cold boot, and then the three
 #    boards' logs cannot be crossed with the laptop's or with each other's.
