@@ -113,18 +113,23 @@ pintar();
 ok(xs() === '50,70', 'antes de limpiar se ven los dos');
 limpiar();
 console.log('  limpiar -> visibles x =', xs());
-ok(xs() === '70', 'limpiar tiene que ocultar el vivo y respetar el confirmado');
+// Limpiar limpia: el confirmado tambien se va, porque el operador lo pidio y un boton llamado
+// limpiar que deja la pantalla llena se lee como roto. historial los trae de vuelta.
+ok(xs() === '', 'limpiar tiene que ocultar los dos, vivo y confirmado');
 estado = { pois: [ poi(50, { age_s: 3 }), poi(70, { age_s: 3, mature: true }) ]};
 pintar();
 console.log('  reporte sin avistamiento nuevo (age_s 1 -> 3) -> visibles x =', xs());
-ok(xs() === '70', 'sin avistamiento nuevo el limpiado no vuelve');
+ok(xs() === '', 'sin avistamiento nuevo ninguno de los dos limpiados vuelve');
 estado = { pois: [ poi(50.5, { age_s: 0.2 }), poi(70, { age_s: 5, mature: true }) ]};
 pintar();
 console.log('  reporte con avistamiento nuevo (age_s 0.2) -> visibles x =', xs());
-ok(xs() === '50.5,70', 'un avistamiento nuevo tiene que traerlo de vuelta');
+// Solo vuelve el que tiene un avistamiento NUEVO. El confirmado de x=70 sigue reportandose con
+// age_s 5, que es mas viejo que cuando se limpio, asi que no es un avistamiento nuevo: es el mismo
+// dato envejeciendo, y traerlo de vuelta seria deshacer la limpieza sin que nadie lo pidiera.
+ok(xs() === '50.5', 'solo el que tiene un avistamiento nuevo vuelve');
 estado = { pois: [ poi(50.5, { age_s: 2 }), poi(70, { age_s: 7, mature: true }) ]};
 pintar();
-ok(xs() === '50.5,70', 'una vez de vuelta, envejecer dentro del tope no lo vuelve a ocultar');
+ok(xs() === '50.5', 'una vez de vuelta, envejecer dentro del tope no lo vuelve a ocultar');
 
 // 4. historial: everything the layers hid, faded; the verdict "no es" is not a layer.
 estado = { pois: [ poi(90, { age_s: 1 }), poi(100, { age_s: viejo }), poi(110, { age_s: 1 }) ]};
@@ -155,18 +160,24 @@ limpiados.length = 0;
 estado = { ahora: 1000, pois: [ poi(0, { mature: true, age_s: 1 }), poi(90, { mature: true, age_s: 2 }) ]};
 limpiar();
 console.log('  mapa de puros confirmados :', document.getElementById('cuenta').textContent);
-ok(document.getElementById('cuenta').textContent.indexOf('nada que limpiar') >= 0,
-   'limpiar sobre puros confirmados tiene que decir que no hizo nada, y por que');
-ok(document.getElementById('cuenta').textContent.indexOf('2 puntos estan confirmados') >= 0,
-   'tiene que decir cuantos respeto');
-ok(visibles.length === 2, 'limpiar no puede ocultar un confirmado');
+// El operador pidio que limpiar limpie: un boton con ese nombre que deja la pantalla llena se
+// lee como roto. Antes respetaba lo confirmado y lo decia; ahora lo oculta y DICE cuantos de los
+// que oculto estaban confirmados, porque esconder una decision del sistema en silencio seria peor
+// que no esconderla. historial los trae de vuelta, que es lo que hace que limpiar no sea destruir.
+ok(document.getElementById('cuenta').textContent.indexOf('cleared 2') >= 0,
+   'limpiar sobre puros confirmados tiene que limpiarlos');
+ok(document.getElementById('cuenta').textContent.indexOf('2 of them confirmed') >= 0,
+   'y tiene que decir cuantos de esos estaban confirmados');
+ok(visibles.length === 0, 'despues de limpiar no queda nada a la vista');
 
 limpiados.length = 0;
 estado = { ahora: 1000, pois: [ poi(0, { mature: true, age_s: 1 }), poi(90, { mature: false, age_s: 2 }) ]};
 limpiar();
 console.log('  con uno sin confirmar     :', document.getElementById('cuenta').textContent);
-ok(document.getElementById('cuenta').textContent.indexOf('limpiados 1') >= 0,
+ok(document.getElementById('cuenta').textContent.indexOf('cleared 2') >= 0,
    'cuando limpia algo tiene que decir cuantos');
+ok(document.getElementById('cuenta').textContent.indexOf('1 of them confirmed') >= 0,
+   'y cuantos de esos estaban confirmados, porque esconderlo en silencio seria peor');
 `;
 
 console.log('======================================================================');

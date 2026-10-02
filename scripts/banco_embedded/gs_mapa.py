@@ -1039,10 +1039,14 @@ function podarLimpiados(pois) {
 }
 
 function ocultoPorCapas(p) {
+  // Clearing wins over being confirmed, and only clearing does. The operator asked for a clear
+  // button that clears, and a confirmed point that survived it would make the button look broken.
+  // Fading does NOT win: a confirmed contact still stays put and says how long ago it was seen,
+  // because that is staleness and not a decision anybody made.
+  if (limpiados.some(v => cercaDe(p, v))) return true;
   if (persistente(p)) return false;
   const e = edadDe(p);
-  if (e != null && e >= TOPE_VIVO_S) return true;
-  return limpiados.some(v => cercaDe(p, v));
+  return e != null && e >= TOPE_VIVO_S;
 }
 
 // The opacity a POI is drawn with, pin, circle and card alike. 0 means not drawn.
@@ -1067,18 +1071,19 @@ function limpiar() {
   let ocultados = 0, confirmados = 0;
   for (const p of estado.pois) {
     const e = edadDe(p);
-    if (persistente(p)) { confirmados++; continue; }
     if (e == null || ocultas.has(claseDe(p)) || ocultoPorCapas(p)) continue;
+    if (persistente(p)) confirmados++;
     limpiados.push({ x: p.x, y: p.y, r: p.radius_m || 0, edad: e });
     ocultados++;
   }
-  // Un boton que no dice nada al apretarlo se lee como roto, y este NO oculta lo confirmado a
-  // proposito: un punto que el sistema ya sostiene no desaparece porque el operador limpie.
+  // It used to refuse to hide confirmed points, on the grounds that something the system stands
+  // behind should not vanish because the operator tidied up. The operator disagreed, and they are
+  // the one pressing it: a button called clear that leaves the screen full reads as broken. So it
+  // clears everything and SAYS how many of those were confirmed, and 'historial' brings them all
+  // back, which is what makes clearing safe rather than destructive.
   aviso = ocultados
-    ? 'limpiados ' + ocultados
-    : (confirmados
-       ? 'nada que limpiar: los ' + confirmados + ' puntos estan confirmados y no se ocultan'
-       : 'nada que limpiar');
+    ? 'cleared ' + ocultados + (confirmados ? ', ' + confirmados + ' of them confirmed' : '')
+    : 'nothing to clear';
   pintar();
 }
 
