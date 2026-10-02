@@ -1537,31 +1537,27 @@ function pintarCamara(n) {
   }
 }
 
-// -- what the station proposes, with the button that does it -----------------
-// This used to be a suggestion and nothing else, because the station could only propose: the
-// link carries data and the stick stays with the pilot. It still does -- nothing flies unless a
-// human presses this -- but a suggestion the operator cannot act on from where they read it is
-// the clearest kind of noise, so the button that sends the aircraft is here.
+// -- what the station used to propose -------------------------------------
+// This panel is gone, and the reason is worth keeping. It listed targets that only one drone had
+// seen, with the drone that could go and look, and at first it only proposed because the station
+// could not command. When the station learned to send an aircraft, the obvious fix looked like
+// adding a button to each line.
 //
-// It does NOT repeat a target that is already in the card list. Two places saying the same thing
-// makes the operator read both and wonder whether they agree. A target the operator can already
-// see gets the same button on its own card instead.
+// With three such targets on screen the user read this:
+//
+//     Nobody has corroborated this person. Only drone 1 has seen it.
+//     Nobody has corroborated this person. Only drone 1 has seen it.
+//     Nobody has corroborated this person. Only drone 1 has seen it.
+//
+// Three different targets described identically, so there is no way to tell which button sends a
+// drone where. Adding the target's number would have fixed the sentence and not the problem: every
+// one of those targets is already a card in the list, and every card already carries the same
+// button next to the picture the operator decides by. The panel was duplication with worse
+// information. flota.pedidos_de_verificacion still computes the suggestion and the station still
+// serves it; nothing reads it on the page.
 function pintarPedidos(pedidos) {
   const c = document.getElementById('pedidos');
-  const enLista = new Set((visibles || []).map(p => p.x + ',' + p.y));
-  const nuevos = pedidos.filter(p => !enLista.has(p.x + ',' + p.y));
-  if (!nuevos.length) { c.innerHTML = ''; return; }
-  c.innerHTML = '<div class="cab">worth a second look</div>' + nuevos.map((p, i) => `
-    <div class="item">
-      Nobody has corroborated this <b>${p.cls || 'contact'}</b>. Only drone ${p.visto_por}
-      has seen it.
-      <div class="veredicto"><button data-ir="${i}">send drone ${p.puede_ir[0]} to look
-        from another angle</button></div>
-    </div>`).join('');
-  for (const b of c.querySelectorAll('button[data-ir]')) {
-    b.onclick = () => pedirRodeo(Object.assign({}, nuevos[+b.dataset.ir],
-                                               {dron: nuevos[+b.dataset.ir].visto_por}));
-  }
+  if (c) c.innerHTML = '';
 }
 
 // -- the imagery ------------------------------------------------------------
