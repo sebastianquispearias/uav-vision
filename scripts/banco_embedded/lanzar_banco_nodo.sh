@@ -62,6 +62,17 @@ ORIGEN="-22.978029946,-43.23214256266666"
 setsid nohup env UAV_API_ORIGEN="$ORIGEN" python3 "$STUB" > ~/banco/uav_api.log 2>&1 < /dev/null &
 echo "dron $N: piloto falso $(basename "$STUB")"
 
+# And WAIT for it to answer before the runner starts. Without this the runner comes up first, its
+# first telemetry fetch fails with 'Cannot connect to host localhost:8000', it asks for an RTL that
+# also fails, and it shuts itself down. The mission looks loaded and set up and then the board is
+# simply gone, with the camera having opened correctly a second earlier, which sends you looking at
+# the camera.
+for i in $(seq 1 30); do
+    curl -s -o /dev/null -m 2 localhost:8000/telemetry/gps && break
+    sleep 1
+done
+echo "dron $N: piloto falso responde tras ${i}s"
+
 setsid nohup env PYTHONPATH="$HOME/banco:$HOME/gradys-embedded:$HOME/gradys_protocols" \
     BANCO_DESDE_S="$DESDE" BANCO_ESTACION="http://$EST" \
     python3 -m gradys_embedded.runner.cli --config "$HOME/banco/runner_banco.toml" \
