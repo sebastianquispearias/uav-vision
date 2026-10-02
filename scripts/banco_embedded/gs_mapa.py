@@ -912,40 +912,25 @@ PAGINA = r"""<!doctype html>
 <header>
   <h1>Ground Station</h1>
   <div class="estado">
-    <span><span class="punto" id="luz"></span><span id="enlace">esperando al dron</span></span>
+    <span><span class="punto" id="luz"></span><span id="enlace">waiting for a drone</span></span>
     <span id="cuenta">0 POI</span>
     <span id="ritmo"></span>
-    <span id="reportes">0 reportes</span>
+    <span id="reportes">0 reports</span>
     <button id="btn-limpiar"
-            title="ocultar los contactos no confirmados hasta que se vuelvan a ver">limpiar</button>
-    <button id="btn-historial" title="mostrar, atenuado, lo que las capas ocultaron">historial</button>
-    <button id="btn-fondo" hidden>satelite</button>
+            title="hide every unconfirmed contact until it is seen again">clear</button>
+    <button id="btn-historial" title="show, dimmed, what the layers hid">history</button>
+    <button id="btn-fondo" hidden>satellite</button>
   </div>
 </header>
 <main>
   <canvas id="lienzo"></canvas>
   <aside>
-    <h2>Detecciones</h2>
-    <div id="camara"><div class="cab">lo que ve la camara</div><img alt=""></div>
+    <h2>Contacts</h2>
+    <div id="camara"><div class="cab">what the camera sees</div><img alt=""></div>
     <div id="pedidos"></div>
     <div id="buscar"></div>
     <div id="filtro"></div>
-    <div id="lista"><div class="vacio">Nada todavia.</div></div>
-    <div class="nota">
-      <b style="color:var(--ok)">CONFIRMADO</b>: la capa de identity lo siguio lo
-      suficiente.<br>
-      <b style="color:var(--duda)">POR VERIFICAR</b>: se formo una pista pero no alcanzo a
-      madurar. Es lo que produce una pasada corta. No es un hallazgo: es un pedido de
-      verificacion.<br>
-      La rueda del raton aleja y acerca el mapa.<br>
-      <b>BUSCANDO</b> cambia lo que el dron detecta, en caliente y sin recargar el modelo.
-      Los botones de debajo solo <b>ocultan</b>: el POI sigue llegando y vuelve con un clic.
-      Uno manda sobre el sensor; el otro, sobre el dibujo.<br>
-      Lo no confirmado se apaga mientras pasa tiempo sin verse y desaparece al rato;
-      CONFIRMADO y VERIFICADO quedan en su ultima posicion y dicen hace cuanto se vieron.
-      <b>limpiar</b> oculta lo no confirmado hasta un avistamiento nuevo; <b>historial</b>
-      muestra lo oculto.
-    </div>
+    <div id="lista"><div class="vacio">Nothing yet.</div></div>
   </aside>
 </main>
 <script>
@@ -968,7 +953,7 @@ let zoom = 1;
 // dibujar(), which also runs on resize and when the imagery loads, never has to re-filter.
 let visibles = [];
 
-function claseDe(p) { return p.cls || 'sin clase'; }
+function claseDe(p) { return p.cls || 'no class'; }
 
 // -- the two layers ------------------------------------------------------------
 // A POI is a claim about where something was when the drone last saw it, and that claim loses
@@ -1061,7 +1046,7 @@ function alfaDe(p) {
 // "visto hace N s", only once the age has passed the cap: before it the fading already says so.
 function vistoHace(p) {
   const e = edadDe(p);
-  return (e != null && e > TOPE_VIVO_S) ? `visto hace ${Math.round(e)} s` : '';
+  return (e != null && e > TOPE_VIVO_S) ? `seen ${Math.round(e)} s ago` : '';
 }
 
 // Hides every live contact on screen until it is seen again. A POI without an age is left alone:
@@ -1092,7 +1077,7 @@ function alternarHistorial() {
   const b = document.getElementById('btn-historial');
   b.className = verHistorial ? 'on' : '';
   const tapados = estado ? estado.pois.filter(ocultoPorCapas).length : 0;
-  aviso = tapados ? '' : 'no hay nada oculto que mostrar';
+  aviso = tapados ? '' : 'nothing hidden to show';
   if (estado) pintar();
 }
 
@@ -1157,7 +1142,7 @@ function dibujarDrones() {
     ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.2832); ctx.fill();
     ctx.strokeStyle = '#0b0d12'; ctx.lineWidth = 2; ctx.stroke();
     ctx.fillStyle = col; ctx.font = '600 11px system-ui';
-    ctx.fillText('dron ' + id + (d.pos[2] != null ? '  ' + d.pos[2].toFixed(0) + ' m' : ''),
+    ctx.fillText('drone ' + id + (d.pos[2] != null ? '  ' + d.pos[2].toFixed(0) + ' m' : ''),
                  x + 10, y - 8);
   });
 }
@@ -1249,13 +1234,16 @@ function dibujar() {
 
 function pintarLista(pois) {
   const cont = document.getElementById('lista');
-  if (!pois.length) { cont.innerHTML = '<div class="vacio">Nada todavia.</div>'; return; }
+  if (!pois.length) { cont.innerHTML = '<div class="vacio">Nothing yet.</div>'; return; }
   cont.innerHTML = pois.map((p, i) => `
     <div class="poi ${p.mature ? 'ok' : 'duda'}"
          style="opacity:${Math.max(alfaDe(p), ALFA_TARJETA_MIN).toFixed(2)}">
       <div class="tit">#${i+1}
         ${vistoHace(p) ? `<span class="chip viejo">${vistoHace(p)}</span>` : ''}
-        <span class="chip ${p.mature ? 'ok' : 'duda'}">${p.mature ? 'CONFIRMED' : 'UNCONFIRMED'}</span>
+        <span class="chip ${p.mature ? 'ok' : 'duda'}" title="${p.mature
+          ? 'identity tracked this long enough to stand behind it'
+          : 'a track formed but never matured: a request to verify, not a finding'}"
+              >${p.mature ? 'CONFIRMED' : 'UNCONFIRMED'}</span>
         ${p.mobile ? '<span class="chip mobile">MOVING</span>' : ''}
         ${p.cls ? `<span class="chip clase">${p.cls}</span>` : ''}
         ${veredictoDe(p) === 'si' ? '<span class="chip ok">OPERATOR CONFIRMED</span>' : ''}
@@ -1309,7 +1297,7 @@ function bloqueSegunda(dron) {
   if (!d) return '';
   const clase = d.estado === 'error' ? 'fallo' : (d.estado === 'listo' && d.n ? 'hallazgo' : '');
   const viejo = d.estado === 'listo' && estado.ahora && (estado.ahora - d.t) > SEGUNDA_VIEJA_S
-    ? ` (hace ${Math.round(estado.ahora - d.t)} s)` : '';
+    ? ` (${Math.round(estado.ahora - d.t)} s ago)` : '';
   return `<div class="segunda ${clase}">${textoSegunda(d)}${viejo}</div>`
     + (d.estado === 'listo' && d.dibujo
        ? `<img class="mirada" src="/segunda.jpg?dron=${encodeURIComponent(dron)}&t=${d.t}"
@@ -1329,8 +1317,10 @@ function pintarFiltro(pois) {
   const cont = document.getElementById('filtro');
   // Nothing to choose between while only one class has ever arrived.
   if (clasesVistas.length < 2) { cont.innerHTML = ''; return; }
-  cont.innerHTML = clasesVistas.map(c =>
-    `<button data-c="${c}" class="${ocultas.has(c) ? 'off' : ''}">${c}</button>`).join('');
+  cont.innerHTML = '<span class="etq" title="these buttons only hide: the POI keeps arriving '
+    + 'and comes back with a click">showing</span>'
+    + clasesVistas.map(c =>
+      `<button data-c="${c}" class="${ocultas.has(c) ? 'off' : ''}">${c}</button>`).join('');
   for (const b of cont.querySelectorAll('button')) {
     b.onclick = () => {
       const c = b.dataset.c;
@@ -1417,20 +1407,20 @@ function pedirRodeo(p) {
       // Same reasoning as the clear button: one that says nothing when pressed reads as broken,
       // and this one is sending an aircraft somewhere, so it has to say which one went.
       aviso = (d && d.dron)
-        ? 'dron ' + d.dron + ' va a mirar (' + p.x + ', ' + p.y + ') desde otro lado'
-        : 'no hay dron a quien mandar: ' + ((d && d.error) || 'sin respuesta');
+        ? 'drone ' + d.dron + ' is going to look at (' + p.x + ', ' + p.y + ') from another side'
+        : 'no drone to send: ' + ((d && d.error) || 'no answer');
       pintar();
     }).catch(() => { aviso = 'no se pudo mandar la orden'; pintar(); });
 }
 
 function textoSegunda(d) {
   if (!d) return '';
-  if (d.estado === 'pedido') return 'pidiendole el cuadro al dron...';
-  if (d.estado === 'mirando') return 'RF-DETR mirando el cuadro...';
-  if (d.estado === 'error') return 'sin segunda opinion: ' + (d.error || 'fallo');
+  if (d.estado === 'pedido') return 'asking the drone for the frame...';
+  if (d.estado === 'mirando') return 'RF-DETR looking at the frame...';
+  if (d.estado === 'error') return 'no second opinion: ' + (d.error || 'it failed');
   if (d.estado === 'listo') {
-    return d.n + (d.n === 1 ? ' persona' : ' personas')
-      + ' en tierra, en ' + (d.espera != null ? d.espera.toFixed(2) : '?') + ' s';
+    return d.n + (d.n === 1 ? ' person' : ' people')
+      + ' on the ground, in ' + (d.espera != null ? d.espera.toFixed(2) : '?') + ' s';
   }
   return '';
 }
@@ -1454,8 +1444,8 @@ function pintar() {
   pintarFiltro(estado.pois);
   document.getElementById('cuenta').textContent = visibles.length + ' POI'
     + (visibles.length === estado.pois.length ? '' : ` de ${estado.pois.length}`)
-    + (descartados ? ` \u00b7 ${descartados} descartados` : '')
-    + (tapados ? ` \u00b7 ${tapados} ${verHistorial ? 'en historial' : 'ocultos'}` : '')
+    + (descartados ? ` \u00b7 ${descartados} discarded` : '')
+    + (tapados ? ` \u00b7 ${tapados} ${verHistorial ? 'in history' : 'hidden'}` : '')
     + (aviso ? ` \u00b7 ${aviso}` : '');
   ajustarVista(visibles);
   pintarLista(visibles);
@@ -1483,15 +1473,15 @@ async function refrescar() {
     pintarBuscar();
 
     document.getElementById('enlace').textContent = !drones.length
-      ? 'esperando al dron'
-      : (vivo ? `dron activo (hace ${edad.toFixed(0)} s)`
-              : `sin señal hace ${edad.toFixed(0)} s`);
+      ? 'waiting for a drone'
+      : (vivo ? `drone live (${edad.toFixed(0)} s ago)`
+              : `no signal for ${edad.toFixed(0)} s`);
     const al = document.getElementById('alarma');
     if (estado.desacuerdo) {
       // Silence here would be the expensive kind: every pin lands somewhere plausible and
       // wrong, and nothing on the page looks broken.
-      al.textContent = `El origen que declara el dron esta a ${estado.desacuerdo} m del que se `
-        + `paso en --origen. Manda el del dron; revisa el de tierra.`;
+      al.textContent = `The origin the drone declares is ${estado.desacuerdo} m from the one `
+        + `passed in --origen. The drone's wins; check the one on the ground.`;
       al.style.display = 'block';
     } else { al.style.display = 'none'; }
     // The rate the drone is actually managing. A saturated drone looks exactly like a
@@ -1576,9 +1566,9 @@ function pintarBotonFondo() {
   const hay = !!(estado && estado.tiene_fondo && estado.georef && estado.origen);
   b.hidden = !hay;
   b.className = verFondo ? 'on' : '';
-  b.textContent = verFondo ? 'satelite' : 'cuadricula';
-  b.title = verFondo ? 'quitar la imagen y volver a la cuadricula metrica'
-                     : 'poner la imagen de satelite de fondo';
+  b.textContent = verFondo ? 'satellite' : 'grid';
+  b.title = verFondo ? 'drop the image and go back to the metric grid'
+                     : 'put the satellite image behind the map';
 }
 
 lienzo.addEventListener('wheel', ev => {
@@ -1631,13 +1621,14 @@ function buscables(drones) {
 function estadoBusqueda(drones, ord) {
   return Object.entries(drones || {}).map(([id, d]) => {
     const b = d.buscando;
-    if (!b) return `dron ${id}: no informa que busca`;
+    if (!b) return `drone ${id}: does not say what it is looking for`;
     const pendiente = ord.v != null && ord.v > 0 && (b.v !== ord.v || b.epoca !== ord.epoca);
-    if (pendiente) return `dron ${id}: todavia no tomo la orden`;
-    // El motivo del rechazo trae la lista entera de lo que el detector conoce, que son ochenta
-    // nombres y tapan la pantalla. Se muestra lo que importa: que rechazo, y que pidio.
-    if (b.rechazo) return `dron ${id}: rechazo la orden (${String(b.rechazo).split(';')[0]})`;
-    return `dron ${id}: busca ${b.clases ? b.clases.join(', ') : 'lo de siempre'}`;
+    if (pendiente) return `drone ${id}: has not taken the order yet`;
+    // The reason for a refusal carries the whole list of what the detector knows, which is
+    // eighty names and buries the page. Only what matters is shown: that it refused, and what
+    // it was asked for.
+    if (b.rechazo) return `drone ${id}: refused the order (${String(b.rechazo).split(';')[0]})`;
+    return `drone ${id}: looking for ${b.clases ? b.clases.join(', ') : 'the usual'}`;
   });
 }
 
@@ -1656,12 +1647,13 @@ function pintarBuscar() {
   // card made the second opinion unreachable for exactly the drone an operator would wonder about.
   const ids = Object.keys(drones).sort();
   const lineas = estadoBusqueda(drones, orden);
-  cont.innerHTML = '<span class="etq">buscando</span>' + visibles.map(boton).join('')
+  cont.innerHTML = '<span class="etq" title="this travels to the drone and changes what it '
+    + 'detects, live, without reloading the model">searching</span>' + visibles.map(boton).join('')
     + (resto.length ? `<button data-todas="1" class="mas">${verTodas
-        ? 'menos' : '+ ' + resto.length + ' clases mas'}</button>` : '')
+        ? 'fewer' : '+ ' + resto.length + ' more classes'}</button>` : '')
     + lineas.map((t, i) => `<div class="acuse">${t}`
         + (ids[i] != null
-           ? ` <button class="vista" data-mirar-dron="${ids[i]}">segunda opinion</button>` : '')
+           ? ` <button class="vista" data-mirar-dron="${ids[i]}">second opinion</button>` : '')
         + (ids[i] != null ? bloqueSegunda(ids[i]) : '') + '</div>').join('');
   for (const b of cont.querySelectorAll('button[data-mirar-dron]')) {
     b.onclick = () => pedirSegunda(b.dataset.mirarDron);

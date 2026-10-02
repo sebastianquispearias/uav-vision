@@ -68,7 +68,7 @@ ok((lista().match(/data-v="no"/g) || []).length === 3, 'cada POI necesita su bot
 marcar(estado.pois[1], 'no');
 console.log('  descarto el de x=10    :', cuenta());
 ok(visibles.length === 2, 'el descartado sigue visible');
-ok(cuenta().indexOf('1 descartados') >= 0, 'la cabecera tiene que decir que hay un descarte');
+ok(cuenta().indexOf('1 discarded') >= 0, 'la cabecera tiene que decir que hay un descarte');
 
 // A new report: the same thing moved 2 m, and the list arrives in another order. A verdict kept
 // by index would now hide the wrong point and show the discarded one.

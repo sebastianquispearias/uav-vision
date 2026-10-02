@@ -115,7 +115,7 @@ ok(rodeos()[1].cuerpo.movil === true, 'un contacto movil tiene que viajar marcad
 // answer resolves.
 setTimeout(() => {
   console.log('  el aviso dice          :', aviso);
-  ok(/dron 2 va a mirar/.test(aviso), 'el boton no dice que dron salio: se lee como roto');
+  ok(/drone 2 is going to look/.test(aviso), 'el boton no dice que dron salio: se lee como roto');
   console.log();
   console.log('TODO OK');
 }, 5);

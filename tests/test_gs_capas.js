@@ -88,10 +88,10 @@ ok(alfaDe(estado.pois[1]) > 0 && alfaDe(estado.pois[1]) < 0.6, 'cerca del tope t
 ok(alfaDe(estado.pois[3]) === 1, 'un persistente no se desvanece');
 ok(tarjetas().length === 3, 'la lista tiene que seguir al mapa: ' + tarjetas().length + ' tarjetas');
 ok(lista().indexOf('x=20') < 0 && !tarjetas().some(t => t.indexOf('20 m E') >= 0), 'el oculto sigue en la lista');
-const hace = tarjetas().filter(t => /visto hace \\d+ s/.test(t));
-console.log('  tarjetas con "visto hace":', hace.map(t => /visto hace \\d+ s/.exec(t)[0]).join(' | '));
-ok(hace.length === 1 && hace[0].indexOf('30 m E') >= 0, 'solo el persistente pasado el tope dice visto hace');
-ok(hace[0].indexOf('visto hace ' + viejo + ' s') >= 0, 'visto hace tiene que dar la edad');
+const hace = tarjetas().filter(t => /seen \\d+ s ago/.test(t));
+console.log('  tarjetas con "seen ... ago":', hace.map(t => /seen \\d+ s ago/.exec(t)[0]).join(' | '));
+ok(hace.length === 1 && hace[0].indexOf('30 m E') >= 0, 'solo el persistente pasado el tope says seen ... ago');
+ok(hace[0].indexOf('seen ' + viejo + ' s ago') >= 0, 'seen ... ago tiene que dar la edad');
 console.log('  alfa de los circulos 95 % dibujados:', trazos.map(a => a.toFixed(2)).join(' '));
 ok(trazos.length === 3, 'el circulo de un POI oculto no puede dibujarse');
 ok(trazos.some(a => a > 0 && a < 0.6), 'el circulo del desvanecido tiene que desvanecerse con el');
@@ -105,7 +105,7 @@ marcar(poi(0, { age_s: 0 }), 'si');
 pintar();
 console.log('  viejo marcado "es lo que busco" -> visibles', visibles.length, '| alfa', alfaDe(estado.pois[0]));
 ok(visibles.length === 1 && alfaDe(estado.pois[0]) === 1, 'lo que el operador verifico no puede desaparecer');
-ok(/visto hace \\d+ s/.test(lista()), 'el verificado viejo tiene que decir hace cuanto se vio');
+ok(/seen \\d+ s ago/.test(lista()), 'el verificado viejo tiene que decir hace cuanto se vio');
 
 // 3. limpiar: hides live contacts on screen until a newer sighting.
 estado = { pois: [ poi(50, { age_s: 1 }), poi(70, { age_s: 1, mature: true }) ]};

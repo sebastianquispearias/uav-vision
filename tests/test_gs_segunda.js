@@ -96,11 +96,11 @@ ok(pedidos[pedidos.length - 1].ruta === '/mirar', 'el boton no pidio /mirar');
 ok(pedidos[pedidos.length - 1].cuerpo.dron === '2', 'pidio la opinion sobre el dron equivocado');
 
 // 3. every stage is visible, and none of them claims a result
-for (const [fase, esperado] of [['pedido', 'pidiendole el cuadro'], ['mirando', 'RF-DETR mirando']]) {
+for (const [fase, esperado] of [['pedido', 'asking the drone for the frame'], ['mirando', 'RF-DETR looking at the frame']]) {
   estado.segunda = { '1': { estado: fase, t: AHORA } };
   pintar();
   ok(lista().indexOf(esperado) >= 0, 'la fase ' + fase + ' no se ve en la tarjeta');
-  ok(lista().indexOf('personas en tierra') < 0, 'la fase ' + fase + ' ya afirma un resultado');
+  ok(lista().indexOf('people on the ground') < 0, 'la fase ' + fase + ' ya afirma un resultado');
 }
 console.log('  mientras espera        : se ven las dos fases y ninguna afirma un resultado');
 
@@ -108,21 +108,21 @@ console.log('  mientras espera        : se ven las dos fases y ninguna afirma un
 estado.segunda = { '1': { estado: 'listo', t: AHORA, n: 4, espera: 1.44, dibujo: 'x.jpg',
                           personas: [{ caja: [1, 2, 3, 4], conf: .83 }] } };
 pintar();
-console.log('  contesta               :', /4 personas en tierra, en [0-9.]+ s/.exec(lista())[0]);
-ok(lista().indexOf('4 personas en tierra, en 1.44 s') >= 0, 'no dice cuantas encontro ni cuanto tardo');
+console.log('  contesta               :', /4 people on the ground, in [0-9.]+ s/.exec(lista())[0]);
+ok(lista().indexOf('4 people on the ground, in 1.44 s') >= 0, 'no dice cuantas encontro ni cuanto tardo');
 ok(lista().indexOf('/segunda.jpg?dron=1') >= 0, 'no muestra el cuadro que RF-DETR miro');
 // The POI of drone 2 must not inherit it: the frame answers about a drone, not about a point.
 const tarjetas = lista().split('<div class="poi');
 ok(tarjetas.length === 3, 'se esperaban dos tarjetas, hay ' + (tarjetas.length - 1));
-ok(tarjetas[1].indexOf('personas en tierra') >= 0, 'la tarjeta del dron 1 perdio su respuesta');
-ok(tarjetas[2].indexOf('personas en tierra') < 0, 'el POI del dron 2 se apropio de la respuesta del dron 1');
+ok(tarjetas[1].indexOf('people on the ground') >= 0, 'la tarjeta del dron 1 perdio su respuesta');
+ok(tarjetas[2].indexOf('people on the ground') < 0, 'el POI del dron 2 se apropio de la respuesta del dron 1');
 console.log('  y solo al dron que miro: la tarjeta del dron 2 sigue sin respuesta');
 
 // 5. an old answer says how old, because the scene moves
 estado = Object.assign({}, estado, { ahora: AHORA + 300 });
 pintar();
-console.log('  cinco minutos despues  :', /\\(hace [0-9]+ s\\)/.exec(lista())[0]);
-ok(lista().indexOf('(hace 300 s)') >= 0, 'una respuesta vieja no dice que lo es');
+console.log('  cinco minutos despues  :', /\\([0-9]+ s ago\\)/.exec(lista())[0]);
+ok(lista().indexOf('(300 s ago)') >= 0, 'una respuesta vieja no dice que lo es');
 
 // 6. a drone with no points still has a button: it has a camera, and it is exactly the drone an
 // operator wonders about. With the button only inside a point's card, the second opinion was
@@ -146,8 +146,8 @@ ok(pedidos[pedidos.length - 1].cuerpo.dron === '7',
 estado = { ahora: AHORA + 300, pois: [poi(0, 0), poi(10, 0, { dron: 2 })],
            segunda: { '1': { estado: 'error', t: AHORA + 300, error: 'no existe el venv' } } };
 pintar();
-console.log('  sin detector en tierra :', /sin segunda opinion: [^<]*/.exec(lista())[0]);
-ok(lista().indexOf('sin segunda opinion: no existe el venv') >= 0, 'un fallo no dice por que');
+console.log('  sin detector en tierra :', /no second opinion: [^<]*/.exec(lista())[0]);
+ok(lista().indexOf('no second opinion: no existe el venv') >= 0, 'un fallo no dice por que');
 ok(lista().indexOf('/segunda.jpg') < 0, 'muestra una imagen que no existe');
 ok(visibles.length === 2, 'un fallo de la segunda opinion no puede tocar el mapa');
 `;

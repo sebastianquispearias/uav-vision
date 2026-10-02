@@ -77,18 +77,18 @@ ok(cortadoPrueba.resto.join(',') === 'banana,broccoli,teddy bear',
 const ordenPrueba = { v: 3, epoca: 'e1' };
 const lineasPrueba = estadoBusqueda(dronesPrueba, ordenPrueba);
 lineasPrueba.forEach(l => console.log('    ' + l));
-ok(lineasPrueba[0] === 'dron 1: busca car', 'un dron al dia tiene que decir que busca');
-ok(lineasPrueba[1] === 'dron 2: todavia no tomo la orden', 'un dron atrasado no puede verse al dia');
-ok(lineasPrueba[2] === 'dron 3: no informa que busca', 'un dron sin estado no puede inventarse uno');
+ok(lineasPrueba[0] === 'drone 1: looking for car', 'un dron al dia tiene que decir que busca');
+ok(lineasPrueba[1] === 'drone 2: has not taken the order yet', 'un dron atrasado no puede verse al dia');
+ok(lineasPrueba[2] === 'drone 3: does not say what it is looking for', 'un dron sin estado no puede inventarse uno');
 
 dronesPrueba['1'].buscando.rechazo = "the detector does not emit ['boat']";
-ok(estadoBusqueda(dronesPrueba, ordenPrueba)[0].startsWith('dron 1: rechazo la orden'),
+ok(estadoBusqueda(dronesPrueba, ordenPrueba)[0].startsWith('drone 1: refused the order'),
    'un rechazo tiene que verse como rechazo');
 dronesPrueba['1'].buscando.rechazo = null;
 
-ok(estadoBusqueda(dronesPrueba, { v: 3, epoca: 'e9' })[0] === 'dron 1: todavia no tomo la orden',
+ok(estadoBusqueda(dronesPrueba, { v: 3, epoca: 'e9' })[0] === 'drone 1: has not taken the order yet',
    'la misma version de otra sesion de la estacion no es la misma orden');
-ok(estadoBusqueda(dronesPrueba, { v: 0, epoca: 'e1' })[1] === 'dron 2: busca lo de siempre',
+ok(estadoBusqueda(dronesPrueba, { v: 0, epoca: 'e1' })[1] === 'drone 2: looking for the usual',
    'sin ninguna orden dada, nadie esta atrasado');
 console.log('  rechazo, sesion distinta y ninguna orden: correctos');
 `;

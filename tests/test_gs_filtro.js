@@ -67,7 +67,7 @@ pintar();
 const botones = () => document.getElementById('filtro').querySelectorAll().map(b => b.dataset.c);
 console.log('  sin filtro         :', document.getElementById('cuenta').textContent,
             '| botones:', botones().join(', '));
-ok(botones().join(',') === 'car,person,sin clase', 'los botones no son las clases recibidas');
+ok(botones().join(',') === 'car,no class,person', 'los botones no son las clases recibidas');
 ok(document.getElementById('lista').innerHTML.indexOf('chip clase">car<') >= 0,
    'la tarjeta del coche no lleva chip de clase');
 
