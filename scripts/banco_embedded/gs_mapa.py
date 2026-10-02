@@ -1731,8 +1731,23 @@ if __name__ == '__main__':
                     help='el interprete que tiene rfdetr (el venv de entrenamiento)')
     ap.add_argument('--clip-umbral', type=float, default=None,
                     help='umbral del puntaje CLIP (por defecto 1.496, fijado con los vuelos del 01ago)')
+    # Where an aircraft stands when it is sent to look from another side, and how many stops. All
+    # three are mission decisions and the layer that flies refuses to invent them, so they are
+    # arguments of the operator's instrument rather than numbers in the source.
+    ap.add_argument('--radio-rodeo', type=float, default=RODEO_RADIO_M,
+                    help='metros desde el objetivo al mirar desde otro lado (por defecto %.0f)'
+                         % RODEO_RADIO_M)
+    ap.add_argument('--altura-rodeo', type=float, default=RODEO_ALTURA_M,
+                    help='metros de altura al mirar desde otro lado (por defecto %.0f)'
+                         % RODEO_ALTURA_M)
+    ap.add_argument('--puntos-rodeo', type=int, default=RODEO_PUNTOS,
+                    help='paradas de la vuelta: 1 es una foto desde otro angulo, 12 es rodear '
+                         '(por defecto %d)' % RODEO_PUNTOS)
     args = ap.parse_args()
     DRON_CALLADO_S = args.callado_s
+    RODEO_RADIO_M = float(args.radio_rodeo)
+    RODEO_ALTURA_M = float(args.altura_rodeo)
+    RODEO_PUNTOS = max(1, int(args.puntos_rodeo))
     CLIP_DESCARTA = bool(args.clip_descarta)
     if args.clip:
         # Imported only when asked for: the station stays droppable anywhere without torch.
