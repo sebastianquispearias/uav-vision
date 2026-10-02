@@ -19,8 +19,13 @@
 # The node ids in the dictionary are the positions of the addresses given, starting at 1, so the
 # station is simply the last one. Example with three boards and the station:
 #   ssh pi@10.0.0.11 'bash -s' -- 1 0   10.0.0.11:8200 10.0.0.12:8200 10.0.0.13:8200 10.0.0.9:8300
+# The third argument is which mission to load. The one that replays the recording needs no camera
+# and gives the same scene every run, which is what a gate wants. mision_vision:ProtocoloVisionLAC
+# uses the REAL camera instead: live detection on whatever the board is pointed at. With it the
+# detection is real and the position is NOT, because a board on a desk has no autopilot, so the
+# metres on the map come from the fake one and mean nothing. Worth saying out loud in a demo.
 set -u
-N="$1"; DESDE="$2"; shift 2
+N="$1"; DESDE="$2"; MISION_CLASE="${3:-mision_banco_dos_drones:ProtocoloVisionBanco}"; shift 3
 DIRS=("$@")
 EST="${DIRS[${#DIRS[@]}-1]}"
 
@@ -33,6 +38,17 @@ done
 DICT="$DICT}"
 
 cd ~/banco
+# Whatever is left from a previous session goes first, and then we WAIT for the ports. A stub that
+# is still holding 8000 makes the new one die on bind, and the old one keeps answering with the old
+# configuration: the bench then runs on settings nobody passed and the only clue is a log that
+# prints waypoints in the wrong frame. Measured the hard way.
+pkill -f gradys_embedded.runner.cli 2>/dev/null || true
+pkill -f uav_api_stub 2>/dev/null || true
+pkill -f uav_api_falso 2>/dev/null || true
+for i in $(seq 1 20); do
+    ss -ltn 2>/dev/null | grep -qE ':(8000|8100|8200)' || break
+    sleep 1
+done
 printf 'node_id = %s\nuav_api_port = 8000\ncontrol_api_port = 8100\ndata_port = 8200\n' "$N" > runner_banco.toml
 
 # The fake autopilot FIRST, because the runner refuses to start without one answering on 8000.
@@ -54,7 +70,14 @@ setsid nohup env PYTHONPATH="$HOME/banco:$HOME/gradys-embedded:$HOME/gradys_prot
 for i in $(seq 1 90); do curl -s -o /dev/null localhost:8100/mission/status && break; sleep 1; done
 echo "dron $N: control API $(curl -s -o /dev/null -w %{http_code} localhost:8100/mission/status) tras ${i}s"
 
-MISION=$(printf '{"protocol":"mision_banco_dos_drones:ProtocoloVisionBanco","initial_position":[0,0,30],"origin_gps_coordinates":[-22.978029946,-43.23214256266666,0],"x_axis_degrees":0,"node_ip_dict":%s,"communication_protocol":"http","label":"banco_%s_nodos"}' "$DICT" "${#DIRS[@]}")
+# A runner that is already running a mission refuses to load another, and the refusal looks like a
+# launcher bug: 'Cannot load a mission while running'. Asking it to stop first is idempotent and
+# costs nothing when there is nothing to stop.
+curl -s -m 10 -X POST localhost:8100/mission/stop > /dev/null 2>&1 || true
+sleep 1
+
+echo "dron $N mision: $MISION_CLASE"
+MISION=$(printf '{"protocol":"%s","initial_position":[0,0,30],"origin_gps_coordinates":[-22.978029946,-43.23214256266666,0],"x_axis_degrees":0,"node_ip_dict":%s,"communication_protocol":"http","label":"banco_%s_nodos"}' "$MISION_CLASE" "$DICT" "${#DIRS[@]}")
 echo "dron $N load:  $(curl -s -X POST localhost:8100/mission/load -H 'Content-Type: application/json' -d "$MISION" | cut -c1-70)"
 echo "dron $N setup: $(curl -s -m 60 -X POST localhost:8100/mission/setup | cut -c1-70)"
 echo "dron $N ve la estacion: $(curl -s -m 4 -o /dev/null -w %{http_code} "http://$EST/buscar")"

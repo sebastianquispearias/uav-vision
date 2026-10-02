@@ -31,7 +31,12 @@ echo "== preparando $PI desde $RAIZ"
 mkdir -p "$STAGE/banco/datos" "$STAGE/gradys-embedded" "$STAGE/gradys_protocols"
 cp -r "$RAIZ/uav_vision" "$STAGE/banco/"
 cp -r "$LAC/gradys-embedded/gradys_embedded" "$STAGE/gradys-embedded/"
-cp "$AQUI/mision_banco_dos_drones.py" "$STAGE/gradys_protocols/"
+# Both missions: the one that replays the recording and the one that uses the real camera. Which
+# of the two runs is chosen when the mission is loaded, not when the board is provisioned, and a
+# board that only has one of them cannot be switched without another transfer.
+for m in mision_banco_dos_drones.py mision_vision.py mision_vision_2fps.py; do
+    [ -f "$AQUI/$m" ] && cp "$AQUI/$m" "$STAGE/gradys_protocols/"
+done
 cp "$AQUI/uav_api_stub.py" "$STAGE/uav_api_stub.py"
 for f in "$RAIZ/demo/data/examen_v3_datos.npz" "$RAIZ/demo/data/embs_osnet.npy" \
          "$RAIZ/demo/data/frames.csv" "$ENTREN/pistas_sustituto_02ago.npz"; do

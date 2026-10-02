@@ -27,6 +27,12 @@ DESDE_DEF="0 700 700 0 700"
 EST="$1"; shift
 PIS=("$@")
 read -r -a DESDE <<< "${BANCO_DESDE_S:-$DESDE_DEF}"
+# Which mission every board loads. The default replays the recording: no camera needed and the same
+# scene every run. For a demo on real cameras:
+#   BANCO_MISION=mision_vision:ProtocoloVisionLAC bash ...levantar_banco.sh ...
+# With that the detection is real and the position is not, because a board on a desk has no
+# autopilot: the metres come from the fake one. Say so rather than let anyone assume otherwise.
+MISION="${BANCO_MISION:-mision_banco_dos_drones:ProtocoloVisionBanco}"
 
 # The addresses the boards exchange reports on, plus the station last: this is node_ip_dict, and
 # the node ids are the positions in it.
@@ -36,6 +42,7 @@ DIRS+=("$EST")
 
 echo "=============================================================="
 echo "BANCO DE ${#PIS[@]} PLACAS   estacion $EST"
+echo "  mision: $MISION"
 echo "  node_ip_dict: ${DIRS[*]}"
 echo "=============================================================="
 
@@ -51,7 +58,7 @@ done
 #    processes does not return the prompt even when they are setsid-ed.
 for i in "${!PIS[@]}"; do
     echo "-- preparando ${PIS[$i]} como nodo $((i + 1)), desde ${DESDE[$i]:-0} s"
-    $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" "${DESDE[$i]:-0}" "${DIRS[@]}" \
+    $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" "${DESDE[$i]:-0}" "$MISION" "${DIRS[@]}" \
         < "$(dirname "$0")/lanzar_banco_nodo.sh" || echo "   FALLO ${PIS[$i]}"
 done
 
