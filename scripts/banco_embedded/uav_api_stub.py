@@ -20,11 +20,21 @@ the mission out.
 
 import json
 import math
+import os
 import time
 from http import server
 from urllib.parse import parse_qs, urlparse
 
-LAT, LON = -22.9793, -43.2325   # PUC-Rio, so the geo math runs on real numbers
+# The origin the local metres of this fake autopilot are measured from. It has to be the mission's
+# origin, or every waypoint this file logs is offset by the distance between the two and reads as a
+# wild number: commanded 30 m from a target, the log said 'llegado a (112.0, 51.1)' because the two
+# origins were 120 m apart. The default is PUC-Rio so the geo maths runs on real numbers when
+# nobody says otherwise; the bench launcher passes the mission's.
+_ORIGEN = os.environ.get("UAV_API_ORIGEN", "")
+try:
+    LAT, LON = (float(v) for v in _ORIGEN.split(",")[:2])
+except (ValueError, TypeError):
+    LAT, LON = -22.9793, -43.2325
 HEADING = 0.0                   # camera facing "north" of the local frame
 GROUND_ALT = 0.0                # relative_alt reported while landed
 

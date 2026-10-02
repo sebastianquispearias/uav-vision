@@ -106,6 +106,25 @@ class CamaraBanco:
         # it does in the protocol. The order is still taken and acknowledged in the report.
         self.classes = frozenset(classes) if classes else None
 
+    def ultimo_marco_jpeg(self, calidad: int = 85):
+        """The recorded frame this camera is on, if its picture was put on the board.
+
+        Without this the bench can fly a drone to another side of a target and has nothing to show
+        when it gets there, which is the whole point of having flown. The recording's pictures are
+        2.9 GB, so only the window each board replays is copied; outside it this returns None and
+        the station says there is no frame instead of showing a stale one.
+
+        The quality argument is ignored: the file is already a JPEG and re-encoding it would cost
+        time on the board to make the picture worse.
+        """
+        del calidad
+        ruta = os.path.join(DATOS, "frames", "frame_%04d.jpg" % int(self.frame))
+        try:
+            with open(ruta, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
     def detect(self, pos, yaw):
         del pos, yaw
         salida = []

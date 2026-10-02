@@ -40,7 +40,10 @@ printf 'node_id = %s\nuav_api_port = 8000\ncontrol_api_port = 8100\ndata_port = 
 # told to go and look from another side never arrives and the orbit times out.
 STUB=~/uav_api_stub.py
 [ -f "$STUB" ] || STUB=~/uav_api_falso.py
-setsid nohup python3 "$STUB" > ~/banco/uav_api.log 2>&1 < /dev/null &
+# The stub measures its local metres from this origin, and it has to be the mission's or every
+# waypoint it logs is offset by the distance between the two.
+ORIGEN="-22.978029946,-43.23214256266666"
+setsid nohup env UAV_API_ORIGEN="$ORIGEN" python3 "$STUB" > ~/banco/uav_api.log 2>&1 < /dev/null &
 echo "dron $N: piloto falso $(basename "$STUB")"
 
 setsid nohup env PYTHONPATH="$HOME/banco:$HOME/gradys-embedded:$HOME/gradys_protocols" \

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Puts everything one board of the bench needs on it, from the laptop, over the cable.
+# Puts everything one board of the bench needs on it, from the laptop, in ONE ssh connection.
 #
 # Written because provisioning by hand is how a board ends up running code from three weeks ago
-# while the other runs today's, and the only symptom is that the two disagree. Run it on every
-# board before a bench session and they are identical by construction.
+# while the other runs today's, and the only symptom is that the two disagree.
 #
 #   bash scripts/banco_embedded/preparar_placa.sh pi@192.168.1.126
 #
-# What it sends, and where each piece comes from:
+# One connection for the transfer and one for the check, and that is not a style choice: the Pi 5's
+# sshd gives up after three or four connections with 'Connection timed out during banner exchange'
+# and then needs two minutes to let go of the half-open ones. A script that opened eight could not
+# be run on it at all.
+#
+# What it sends:
 #   ~/banco/uav_vision      the package, from this working tree, which is the newest there is
 #   ~/banco/datos           the four files the recorded mission reads
 #   ~/gradys-embedded       the GrADyS runtime, from the repo next door
@@ -20,37 +24,32 @@ AQUI="$(cd "$(dirname "$0")" && pwd)"
 RAIZ="$(cd "$AQUI/../.." && pwd)"
 LAC="$(cd "$RAIZ/.." && pwd)"
 ENTREN="$LAC/drone-geolocation/entrenamiento"
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
 
 echo "== preparando $PI desde $RAIZ"
-ssh -n "$PI" 'mkdir -p ~/banco/datos ~/gradys-embedded ~/gradys_protocols'
-
-echo "-- el paquete uav_vision"
-tar -czf - -C "$RAIZ" --exclude='__pycache__' uav_vision \
-    | ssh "$PI" 'tar -xzf - -C ~/banco'
-
-echo "-- los datos de la mision grabada"
+mkdir -p "$STAGE/banco/datos" "$STAGE/gradys-embedded" "$STAGE/gradys_protocols"
+cp -r "$RAIZ/uav_vision" "$STAGE/banco/"
+cp -r "$LAC/gradys-embedded/gradys_embedded" "$STAGE/gradys-embedded/"
+cp "$AQUI/mision_banco_dos_drones.py" "$STAGE/gradys_protocols/"
+cp "$AQUI/uav_api_stub.py" "$STAGE/uav_api_stub.py"
 for f in "$RAIZ/demo/data/examen_v3_datos.npz" "$RAIZ/demo/data/embs_osnet.npy" \
          "$RAIZ/demo/data/frames.csv" "$ENTREN/pistas_sustituto_02ago.npz"; do
     [ -f "$f" ] || { echo "   FALTA $f"; exit 1; }
-    scp -q "$f" "$PI:~/banco/datos/"
-    echo "   $(basename "$f")"
+    cp "$f" "$STAGE/banco/datos/"
 done
+find "$STAGE" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+echo "-- $(du -sh "$STAGE" | cut -f1) a enviar en una sola conexion"
 
-echo "-- el runtime de GrADyS"
-tar -czf - -C "$LAC/gradys-embedded" --exclude='__pycache__' gradys_embedded \
-    | ssh "$PI" 'tar -xzf - -C ~/gradys-embedded'
+tar -czf - -C "$STAGE" . | ssh "$PI" 'tar -xzf - -C ~ && echo "   recibido"'
 
-echo "-- la mision y el piloto automatico falso"
-scp -q "$AQUI/mision_banco_dos_drones.py" "$PI:~/gradys_protocols/"
-scp -q "$AQUI/uav_api_stub.py" "$PI:~/uav_api_stub.py"
-scp -q "$AQUI/uav_api_proxy.py" "$PI:~/" 2>/dev/null || true
-
-echo "-- comprobando que la placa puede importar lo que le mandamos"
+echo "-- comprobando que la placa importa lo que se le mando"
 ssh -n "$PI" 'cd ~/banco && PYTHONPATH="$HOME/banco:$HOME/gradys-embedded:$HOME/gradys_protocols" \
     python3 -c "
-import uav_vision.vision_protocol as v
-import gradys_embedded.runner.cli
-print(\"  uav_vision y gradys_embedded importan\")
-print(\"  rodeo: tolerancia\", v.RODEO_TOLERANCIA_M, \"m, plazo\", v.RODEO_PLAZO_S, \"s\")
-"' || { echo "   LA PLACA NO PUEDE IMPORTAR: ver el error de arriba"; exit 1; }
+import numpy, uav_vision.vision_protocol as v, gradys_embedded.runner.cli
+import mision_banco_dos_drones
+print(\"   numpy\", numpy.__version__)
+print(\"   rodeo: tolerancia\", v.RODEO_TOLERANCIA_M, \"m, plazo\", v.RODEO_PLAZO_S, \"s\")
+print(\"   maniobra\", hasattr(v.VisionProtocol, \"rodear\"), \"descarte\", hasattr(v.VisionProtocol, \"descartar\"))
+"' || { echo "   LA PLACA NO IMPORTA: ver el error de arriba"; exit 1; }
 echo "== $PI listo"
