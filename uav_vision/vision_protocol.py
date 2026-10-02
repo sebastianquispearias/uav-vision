@@ -520,6 +520,17 @@ class VisionProtocol(IProtocol):
         self.provider.send_mobility_command(GotoCoordsMobilityCommand(*lista[0]))
         return True
 
+    def _posicion_para_vuelo(self):
+        """Where the aircraft actually IS, which on the bench is not where it is looking from.
+
+        Flying and seeing use different positions and only the bench makes that visible. A board on
+        a desk casts its rays from the pose the recording had, because that is where the pictures
+        were taken, and its own autopilot reports the desk. The orbit is about the aircraft, so it
+        asks here and the bench overrides this with what the autopilot says, leaving the ray
+        casting alone. In the air the two are the same position and this returns it.
+        """
+        return self._position
+
     def _llego_al_rodeo(self) -> None:
         """Sends the frame once the aircraft is standing where it was sent, and not before.
 
@@ -527,7 +538,8 @@ class VisionProtocol(IProtocol):
         point of having flown. The tolerance is a radius, not a coordinate match: an aircraft
         holding position drifts, and demanding a coordinate would mean never arriving.
         """
-        if self._rodeo is None or self._position is None:
+        aqui = self._posicion_para_vuelo()
+        if self._rodeo is None or aqui is None:
             return
         r = self._rodeo
         ahora = self.provider.current_time()
@@ -537,7 +549,7 @@ class VisionProtocol(IProtocol):
             self._rodeo = None
             return
         ir = r["ir_a"]
-        if math.hypot(self._position[0] - ir[0], self._position[1] - ir[1]) > RODEO_TOLERANCIA_M:
+        if math.hypot(aqui[0] - ir[0], aqui[1] - ir[1]) > RODEO_TOLERANCIA_M:
             return
         self.send_frame()
         r["i"] += 1

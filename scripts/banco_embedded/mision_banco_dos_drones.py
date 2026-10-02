@@ -119,10 +119,20 @@ class CamaraBanco:
 class ProtocoloBanco(VisionProtocol):
     """VisionProtocol whose pose and camera are driven by the recorded flight."""
 
+    _pose_placa = None
+
     def handle_telemetry(self, telemetry):
-        # The fake autopilot reports a pose hovering on the desk. Rays have to be cast from where
-        # the drone was when each frame was taken, so desk telemetry is deliberately ignored.
-        pass
+        # The fake autopilot's pose is deliberately kept out of the ray casting: rays have to be
+        # cast from where the drone was when each frame was taken, which is the recording's pose.
+        # But it IS where this board thinks it is flying, so the orbit needs it: without this the
+        # drone is told to go somewhere, the fake autopilot walks it there, and nothing ever
+        # notices it arrived.
+        self._pose_placa = telemetry.current_position
+        if self._rodeo is not None:
+            self._llego_al_rodeo()
+
+    def _posicion_para_vuelo(self):
+        return self._pose_placa
 
     def _see(self):
         for frame in VUELO.due(self.provider.current_time()):

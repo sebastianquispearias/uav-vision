@@ -267,4 +267,33 @@ assert z._rodeo is None, "pasado el plazo se abandona"
 assert len(z._marcos) == 0, "y no se manda una foto de un sitio al que no llego"
 
 print()
+print("=" * 76)
+print("10. VOLAR Y VER SON DOS POSICIONES, Y EN EL BANCO NO SON LA MISMA")
+print("=" * 76)
+# Una placa sobre un escritorio lanza sus rayos desde la pose que tenia la GRABACION, porque ahi se
+# tomaron las fotos, y su propio piloto automatico falso reporta el escritorio. La maniobra es sobre
+# la aeronave, asi que pregunta por la posicion de VUELO. Sin esta separacion el dron recibe la
+# orden, el piloto falso lo camina hasta el punto, y nadie se entera de que llego.
+b = protocolo()
+b.rodear(0.0, 0.0, RADIO, ALTURA)
+destino = b._rodeo["ir_a"]
+# Donde MIRA se queda donde estaba la grabacion, lejos del destino.
+b._position = (0.0, -30.0, ALTURA)
+# Donde VUELA es lo que diria el piloto automatico: ya llego.
+b._posicion_para_vuelo = lambda: destino
+b._llego_al_rodeo()
+print("  mira desde (%.0f,%.0f) y vuela en (%.0f,%.0f) -> %d cuadro"
+      % (b._position[0], b._position[1], destino[0], destino[1], len(b._marcos)))
+assert len(b._marcos) == 1,     "la llegada se mide con la posicion de VUELO, o en el banco la maniobra no cierra nunca"
+
+c = protocolo()
+c.rodear(0.0, 0.0, RADIO, ALTURA)
+d2 = c._rodeo["ir_a"]
+c._position = d2                      # donde mira coincide con el destino
+c._posicion_para_vuelo = lambda: (0.0, -30.0, ALTURA)   # pero todavia no llego
+c._llego_al_rodeo()
+print("  el contraste: mira en el destino pero vuela lejos -> %d cuadros" % len(c._marcos))
+assert c._marcos == [],     "si se midiera con la posicion de la camara, una placa quieta creeria haber llegado siempre"
+
+print()
 print("TODO OK")

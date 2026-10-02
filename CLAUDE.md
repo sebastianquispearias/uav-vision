@@ -33,6 +33,7 @@ python tests/test_plantilla_objetivo.py  # the operator's click keeps boxes that
 python tests/test_descarte_operador.py   # the operator's "no es" stops the drone reporting it
 python tests/test_rodear.py       # the aircraft flies to see a target from another side
 node tests/test_gs_rodear.js     # the one button on the page that makes something fly
+python tests/test_levantar_banco.py  # the bench comes up from one command, with no boards
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```
 
