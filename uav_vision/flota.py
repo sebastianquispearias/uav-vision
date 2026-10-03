@@ -185,6 +185,19 @@ def fundir(por_dron):
                 # biases down. Two aircraft have independent compasses, so the yaw half really is
                 # independent and sqrt(2) of it would be honest; their GPS error is partly common,
                 # so the gps half is not. Claiming the whole bias averages would invent precision.
+                # La apariencia del pin fundido: la del que la tenga. Un pin se queda con los
+                # campos del primer reporte que lo creo, y si ESE dron no calcula apariencia el
+                # pin queda sin vector aunque el otro si lo traiga. Eso no es cosmetico: el "no
+                # es" del operador solo sale de la estacion cuando hay una plantilla que mandar
+                # (gs_mapa.plantilla_para filtra por emb), asi que un pin fundido sin vector
+                # convierte el boton del operador en un boton que no hace nada.
+                # Medido el 3oct con una placa calculando apariencia y la otra no: el veredicto
+                # se registraba en disco y no llegaba a ningun dron.
+                # No se promedian los dos vectores: pertenecen a camaras distintas con
+                # exposiciones distintas, y la media de dos apariencias no es la apariencia de
+                # nada. Se conserva la que ya existe.
+                if ya.get('emb') is None and poi.get('emb') is not None:
+                    ya['emb'] = poi['emb']
                 ra, rb = ya.get('radius_m'), poi.get('radius_m')
                 if rb is not None and (ra is None or rb < ra):
                     ya['radius_m'] = rb

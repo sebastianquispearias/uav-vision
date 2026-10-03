@@ -146,4 +146,25 @@ assert abs(x - 12.7) < 0.05, (
 print('  -> se fundio en x=%.2f, que es el pin de 13.0 y no el de 10.0' % x)
 
 print()
+print('=' * 70)
+print('4. UN PIN FUNDIDO SE QUEDA CON LA APARIENCIA DEL QUE LA TENGA')
+print('=' * 70)
+# Las dos placas de este banco no calculan lo mismo: el modelo cuesta seis a ocho veces mas en la
+# Pi 4, asi que se enciende en una y se apaga en la otra. Entonces un pin fundido tiene un dron
+# con vector y otro sin el, y cual gana dependia de cual reporto primero.
+# No es cosmetico: gs_mapa.plantilla_para solo considera candidatos con emb, asi que un pin
+# fundido sin vector deja el "no es" del operador sin nada que mandar. Medido el 3oct: el
+# veredicto se escribia en disco y no llegaba a ninguna placa.
+v = np.zeros(512, dtype=np.float32); v[0] = 1.0
+for primero, etiqueta in ((None, 'el que reporta primero NO tiene vector'),
+                          (v, 'el que reporta primero SI tiene vector')):
+    segundo = v if primero is None else None
+    pines = fundir({'1': [poi(10.0, 10.0, primero)], '2': [poi(10.2, 10.0, segundo)]})
+    assert len(pines) == 1, 'el montaje tenia que fundir los dos: %r' % pines
+    tiene = pines[0].get('emb') is not None
+    print('  %-42s -> el pin fundido %s vector' % (etiqueta, 'SI tiene' if tiene else 'NO tiene'))
+    assert tiene, ('el pin fundido perdio la apariencia que uno de los dos drones si traia; '
+                   'con eso el "no es" del operador no tiene plantilla que mandar')
+
+print()
 print('test_misiones_operador OK')
