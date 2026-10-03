@@ -66,7 +66,11 @@ pkill -f gradys_embedded.runner.cli 2>/dev/null || true
 pkill -f uav_api_stub 2>/dev/null || true
 pkill -f uav_api_falso 2>/dev/null || true
 for i in $(seq 1 20); do
-    ss -ltn 2>/dev/null | grep -qE ':(8000|8100|8200)' || break
+    # El patron termina en un espacio y no en un limite de palabra: un \b escrito a traves de
+    # varias capas se convierte en un retroceso literal, el patron deja de coincidir nunca, y
+    # entonces este bucle sale en la primera vuelta y la espera no espera. Estuvo asi hasta el
+    # 3oct, cuando un barrido de caracteres de control lo encontro.
+    ss -ltn 2>/dev/null | grep -qE ':(8000|8100|8200)[[:space:]]' || break
     sleep 1
 done
 printf 'node_id = %s\nuav_api_port = 8000\ncontrol_api_port = 8100\ndata_port = 8200\n' "$N" > runner_banco.toml

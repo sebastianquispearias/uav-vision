@@ -164,5 +164,34 @@ for l in preparaciones:
     assert " " not in entorno, (
         "el entorno viaja con espacios y ssh lo va a partir, corriendo las direcciones: %s" % l)
 print("  -> ninguna lleva un argumento vacio")
+print("=" * 78)
+print("6. NINGUN ARCHIVO LLEVA CARACTERES DE CONTROL")
+print("=" * 78)
+# Escribir codigo a traves de capas que interpretan escapes convierte un \b en un RETROCESO
+# literal, y el resultado se ve bien en pantalla. Paso tres veces en octubre de 2026:
+#   una regex de test cuyo lookahead ya no coincidia nunca, asi que el test NO PODIA FALLAR;
+#   una ruta "Git\bin\bash.exe" que quedo como "Gitinash.exe" en el archivo de estado;
+#   y el patron de espera de puertos de lanzar_banco_nodo.sh, que al no coincidir nunca hacia
+#   que el bucle saliera en la primera vuelta y la espera no esperara.
+# Los tres son silenciosos: nada falla, solo deja de proteger. Por eso se barre el repo entero.
+import glob
+sospechosos = []
+for patron in ("tests/*.py", "tests/*.js", "uav_vision/*.py",
+               "scripts/*.py", "scripts/banco_embedded/*.py", "scripts/banco_embedded/*.sh",
+               "demo/*.py"):
+    for f in glob.glob(os.path.join(RAIZ, patron)):
+        texto = open(f, encoding="utf-8", errors="replace").read()
+        malos = sorted({c for c in texto if ord(c) < 32 and c not in "\n\t\r"})
+        if malos:
+            sospechosos.append((os.path.relpath(f, RAIZ), [hex(ord(c)) for c in malos]))
+print("  archivos revisados: %d" % sum(len(glob.glob(os.path.join(RAIZ, p))) for p in
+      ("tests/*.py", "tests/*.js", "uav_vision/*.py", "scripts/*.py",
+       "scripts/banco_embedded/*.py", "scripts/banco_embedded/*.sh", "demo/*.py")))
+for f, malos in sospechosos:
+    print("  CONTROL %s en %s" % (malos, f))
+assert not sospechosos, (
+    "hay caracteres de control en el fuente. Casi siempre es un escape que se convirtio en el "
+    "caracter que nombraba, y el sintoma es que algo deja de proteger sin fallar: %r" % sospechosos)
+print("  -> limpio")
 print()
 print("TODO OK")
