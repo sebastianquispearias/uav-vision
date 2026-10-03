@@ -16,9 +16,32 @@ So this is that mission with three things turned on and one lowered:
                             cost of being wrong is that somebody looks at a picture
     station_url             so the station's search orders reach the board
 
-No appearance model. OSNet costs about 33 ms a box on this hardware and what it buys is fusing two
-drones' reports by what the target looks like and the operator's appearance template. Neither is
-needed to show a person being found, and the model is not cached on the boards.
+    reid_model              OSNet, on: without it three of the operator's four actions are
+                            wired to nothing
+
+That last one was off until 2026-10-03, on the grounds that appearance was not needed to show a
+person being found. That was true and beside the point. What it leaves disconnected, measured
+rather than argued:
+
+    the station pairs the wrong targets across aircraft. Two people 3 m apart, seen by two
+    drones whose bias differs by 2.6 m, come out as two pins 20 cm apart instead of 2.8 m:
+    each drone's first person is fused with the other's second. mismo_objetivo says so in
+    prose ("two people three metres apart are two people and only their appearance says so");
+    the numbers are in the session notes.
+
+    the operator's "no es" never leaves the station. gs_mapa.plantilla_para only considers
+    candidates with an 'emb', so with none the refusal is written to disk and the drone goes
+    on reporting the same wrong point.
+
+    the operator's click cannot say WHO, only where.
+
+What it does NOT buy, also measured: nothing for track fragmentation and nothing for two people
+crossing paths. Position alone already resolves the first and the tracker's ids resolve the
+second. Inside one drone the embedding is a veto on merging two distinct objects that stand
+closer than fusion_radius_m, and that is all it is.
+
+It costs about 33 ms a box on this hardware, which on the Pi 4 (already at ~500 ms a frame) is
+the price of the three actions above.
 
     POST /mission/load {"protocol": "mision_banco_lab:ProtocoloLab", ...}
 """
@@ -38,6 +61,8 @@ ProtocoloLab = VisionProtocol.with_config(
         fps=FPS,
         # The picture of each detection, which is what the card shows and what the operator judges.
         crops=True,
+        # The appearance vector. Same path the sweep mission uses; the file has to be on the board.
+        reid_model="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
     ),
     # The camera is on a desk looking across the room, not hanging off an aircraft looking down.
     # Twenty degrees is a guess at how the board is propped up and it only affects where the point
