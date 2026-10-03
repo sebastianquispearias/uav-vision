@@ -34,6 +34,7 @@ python tests/test_descarte_operador.py   # the operator's "no es" stops the dron
 python tests/test_rodear.py       # the aircraft flies to see a target from another side
 node tests/test_gs_rodear.js     # the one button on the page that makes something fly
 python tests/test_levantar_banco.py  # the bench comes up from one command, with no boards
+python tests/test_misiones_operador.py   # a mission the operator acts on carries appearance
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```
 
