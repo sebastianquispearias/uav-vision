@@ -101,7 +101,16 @@ for nombre in sorted(os.listdir(MISIONES)):
     # explicar por que NO lo usa, y eso no es configuracion.
     codigo = re.sub(r'"""[\s\S]*?"""', '', texto)
     recortes = re.search(r'crops\s*=\s*True', codigo) is not None
-    reid = re.search(r'reid_model\s*=\s*["\']', codigo) is not None
+    # Dos formas valen: la ruta escrita ahi mismo, y un nombre que la mision resuelve (hoy
+    # mision_banco_lab lo lee del entorno, porque el modelo cuesta unos 30 ms por caja en la
+    # Pi 5 y entre 170 y 330 en la Pi 4, asi que la decision es por placa). Lo que NO vale es
+    # reid_model=None. La comprobacion es textual porque importar una mision pide el runtime
+    # de GrADyS y una camara; se le escapa una mision que nombre un modelo y lo resuelva a None
+    # en ejecucion, y para eso esta el arranque, que falla ruidosamente sin el archivo.
+    m_reid = re.search(r'reid_model\s*=\s*([^,\n]+)', codigo)
+    asignado = m_reid is not None and m_reid.group(1).strip() not in ('None', '')
+    hay_ruta = re.search(r'osnet\w*\.pt', codigo) is not None
+    reid = asignado and hay_ruta
     estado = ('recortes SI, modelo ' + ('SI' if reid else 'NO')) if recortes else 'sin recortes'
     print('  %-34s %s' % (nombre, estado))
     revisadas += 1

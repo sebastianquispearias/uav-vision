@@ -48,6 +48,18 @@ echo "-- $(du -sh "$STAGE" | cut -f1) a enviar en una sola conexion"
 
 tar -czf - -C "$STAGE" . | ssh "$PI" 'tar -xzf - -C ~ && echo "   recibido"'
 
+# Los modelos NO viajan aqui: pesan y viven en la placa. Pero su ausencia no se nota al
+# provisionar, se nota cuando la mision no arranca, y el error de entonces no nombra el archivo.
+# El 3oct la Pi 4 no tenia el de apariencia y hubo que copiarlo a mano desde la Pi 5.
+echo "-- comprobando los modelos que la placa ya tiene que tener"
+ssh -n "$PI" 'falta=0
+for m in /home/pi/yolov8n_ncnn_model /home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt; do
+    if [ -e "$m" ]; then echo "   hay  $m"; else echo "   FALTA $m"; falta=1; fi
+done
+[ "$falta" = 0 ] || echo "   una mision con recortes pide el de apariencia y NO ARRANCA sin el.
+   Se copia desde la otra placa:  scp pi@<otra>:/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt ."
+exit 0'
+
 echo "-- comprobando que la placa importa lo que se le mando"
 ssh -n "$PI" 'cd ~/banco && PYTHONPATH="$HOME/banco:$HOME/gradys-embedded:$HOME/gradys_protocols" \
     python3 -c "

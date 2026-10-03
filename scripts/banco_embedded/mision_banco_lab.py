@@ -40,8 +40,23 @@ crossing paths. Position alone already resolves the first and the tracker's ids 
 second. Inside one drone the embedding is a veto on merging two distinct objects that stand
 closer than fusion_radius_m, and that is all it is.
 
-It costs about 33 ms a box on this hardware, which on the Pi 4 (already at ~500 ms a frame) is
-the price of the three actions above.
+What it costs is NOT one number, and the one that was written here was wrong for half the
+fleet. Measured on 2026-10-03 with scripts/banco_embedded/medir_osnet.py, on a synthetic frame
+with pedestrian-sized boxes, milliseconds for the whole batch:
+
+                1 box     3 boxes    6 boxes
+    Pi 5         41.9        91.0      162.1
+    Pi 4        327.7       689.4     1044.6
+
+So about 30 ms a box on the Pi 5, which is where the "~33 ms" in camera.py came from, and six to
+eight times that on the Pi 4. Three people cost that board 689 ms on top of a frame that already
+takes around half a second, which takes it under one frame per second.
+
+That is why this is an environment variable and not a constant. It matters beyond throughput:
+the identity layer scales every maturity threshold by the DECLARED rate, so a board running
+slower than its mission claims silently stretches what "eight looks of evidence" means. Set
+BANCO_FPS to what the board actually does, or turn the model off there with BANCO_REID= (empty).
+
 
     POST /mission/load {"protocol": "mision_banco_lab:ProtocoloLab", ...}
 """
@@ -51,7 +66,10 @@ from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
 
-FPS = 4.0
+# What the board is asked to run at, and whether it computes appearance. Per board, because the
+# two in this bench are not the same machine: see the table above.
+FPS = float(os.environ.get("BANCO_FPS", "4.0"))
+REID = os.environ.get("BANCO_REID", "/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt") or None
 
 ProtocoloLab = VisionProtocol.with_config(
     camera=OnboardCamera(
@@ -61,8 +79,9 @@ ProtocoloLab = VisionProtocol.with_config(
         fps=FPS,
         # The picture of each detection, which is what the card shows and what the operator judges.
         crops=True,
-        # The appearance vector. Same path the sweep mission uses; the file has to be on the board.
-        reid_model="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
+        # The appearance vector. Without it the operator's "no es" never leaves the station,
+        # the click cannot say who, and the fusion between aircraft falls back to the weak path.
+        reid_model=REID,
     ),
     # The camera is on a desk looking across the room, not hanging off an aircraft looking down.
     # Twenty degrees is a guess at how the board is propped up and it only affects where the point

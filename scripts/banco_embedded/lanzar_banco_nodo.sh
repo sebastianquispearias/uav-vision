@@ -25,7 +25,13 @@
 # detection is real and the position is NOT, because a board on a desk has no autopilot, so the
 # metres on the map come from the fake one and mean nothing. Worth saying out loud in a demo.
 set -u
-N="$1"; DESDE="$2"; MISION_CLASE="${3:-mision_banco_dos_drones:ProtocoloVisionBanco}"; shift 3
+N="$1"; DESDE="$2"; MISION_CLASE="${3:-mision_banco_dos_drones:ProtocoloVisionBanco}"
+# Cuarto argumento: entorno extra para la mision, "CLAVE=valor CLAVE=valor" o vacio. Existe
+# porque las dos placas de este banco NO son la misma maquina: el modelo de apariencia cuesta
+# unos 30 ms por caja en la Pi 5 y entre 170 y 330 en la Pi 4 (medido el 3oct con
+# medir_osnet.py), asi que encenderlo en las dos al mismo ritmo no es una decision, es un
+# descuido. Lo que se pasa aqui llega a la mision como variables de entorno.
+EXTRA="${4:-}"; shift 4
 DIRS=("$@")
 EST="${DIRS[${#DIRS[@]}-1]}"
 
@@ -73,8 +79,10 @@ for i in $(seq 1 30); do
 done
 echo "dron $N: piloto falso responde tras ${i}s"
 
+[ -n "$EXTRA" ] && echo "dron $N entorno: $EXTRA"
+# shellcheck disable=SC2086  -- $EXTRA es una lista de asignaciones y debe partirse
 setsid nohup env PYTHONPATH="$HOME/banco:$HOME/gradys-embedded:$HOME/gradys_protocols" \
-    BANCO_DESDE_S="$DESDE" BANCO_ESTACION="http://$EST" \
+    BANCO_DESDE_S="$DESDE" BANCO_ESTACION="http://$EST" $EXTRA \
     python3 -m gradys_embedded.runner.cli --config "$HOME/banco/runner_banco.toml" \
     > ~/banco/runner.log 2>&1 < /dev/null &
 

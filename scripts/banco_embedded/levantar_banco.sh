@@ -37,6 +37,16 @@ read -r -a DESDE <<< "${BANCO_DESDE_S:-$DESDE_DEF}"
 # With that the detection is real and the position is not, because a board on a desk has no
 # autopilot: the metres come from the fake one. Say so rather than let anyone assume otherwise.
 MISION="${BANCO_MISION:-mision_banco_dos_drones:ProtocoloVisionBanco}"
+# Apariencia y ritmo, UNA ENTRADA POR PLACA, en el mismo orden que las direcciones.
+# BANCO_REID: "si" deja el valor por omision de la mision, "no" lo apaga en esa placa.
+# BANCO_FPS:  el ritmo declarado de esa placa, que tiene que parecerse al que de verdad
+#             alcanza: la capa de identidad escala TODOS sus umbrales de madurez por el ritmo
+#             declarado, asi que una placa mas lenta de lo que dice estira en silencio lo que
+#             significa "ocho miradas de evidencia".
+# Medido el 3oct: OSNet cuesta ~30 ms por caja en la Pi 5 y entre 170 y 330 en la Pi 4.
+#   BANCO_REID="si no" BANCO_FPS="4 2" bash ...levantar_banco.sh ...
+read -r -a REID <<< "${BANCO_REID:-}"
+read -r -a FPS <<< "${BANCO_FPS:-}"
 
 # The addresses the boards exchange reports on, plus the station last: this is node_ip_dict, and
 # the node ids are the positions in it.
@@ -106,7 +116,10 @@ done
 #    processes does not return the prompt even when they are setsid-ed.
 for i in "${!PIS[@]}"; do
     echo "-- preparando ${PIS[$i]} como nodo $((i + 1)), desde ${DESDE[$i]:-0} s"
-    $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" "${DESDE[$i]:-0}" "$MISION" "${DIRS[@]}" \
+    EXTRA=""
+    case "${REID[$i]:-}" in no|NO|off) EXTRA="BANCO_REID=" ;; esac
+    [ -n "${FPS[$i]:-}" ] && EXTRA="$EXTRA BANCO_FPS=${FPS[$i]}"
+    $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" "${DESDE[$i]:-0}" "$MISION" "$EXTRA" "${DIRS[@]}" \
         < "$(dirname "$0")/lanzar_banco_nodo.sh" || echo "   FALLO ${PIS[$i]}"
 done
 
