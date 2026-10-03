@@ -127,6 +127,8 @@ for i in "${!PIS[@]}"; do
     case "${REID[$i]:-}" in no|NO|off) EXTRA="BANCO_REID=" ;; esac
     [ -n "${FPS[$i]:-}" ] && EXTRA="$EXTRA BANCO_FPS=${FPS[$i]}"
     [ -n "${MODELO[$i]:-}" ] && EXTRA="$EXTRA BANCO_MODELO=${MODELO[$i]}"
+    # Nunca vacio: un argumento vacio no sobrevive a ssh (ver lanzar_banco_nodo.sh).
+    [ -z "$EXTRA" ] && EXTRA="-"
     $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" "${DESDE[$i]:-0}" "$MISION" "$EXTRA" "${DIRS[@]}" \
         < "$(dirname "$0")/lanzar_banco_nodo.sh" || echo "   FALLO ${PIS[$i]}"
 done

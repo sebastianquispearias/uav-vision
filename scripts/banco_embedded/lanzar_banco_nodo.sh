@@ -31,7 +31,14 @@ N="$1"; DESDE="$2"; MISION_CLASE="${3:-mision_banco_dos_drones:ProtocoloVisionBa
 # unos 30 ms por caja en la Pi 5 y entre 170 y 330 en la Pi 4 (medido el 3oct con
 # medir_osnet.py), asi que encenderlo en las dos al mismo ritmo no es una decision, es un
 # descuido. Lo que se pasa aqui llega a la mision como variables de entorno.
+# El centinela "-" significa "sin entorno extra". NO se puede pasar una cadena vacia por ssh:
+# ssh une sus argumentos en UNA orden y el shell remoto la vuelve a parsear, asi que un
+# argumento vacio desaparece y todos los siguientes se corren un lugar. Comprobado el 3oct
+# mandando 7 argumentos y recibiendo 6. El sintoma es env intentando ejecutar una direccion:
+#     env: 192.168.1.125:8200: No such file or directory
+# que parece un error de argumentos del lanzador y no dice nada del argumento vacio.
 EXTRA="${4:-}"; shift 4
+[ "$EXTRA" = "-" ] && EXTRA=""
 DIRS=("$@")
 EST="${DIRS[${#DIRS[@]}-1]}"
 

@@ -32,9 +32,15 @@ REGISTRO = os.path.join(TMP, "llamadas.txt").replace("\\", "/")
 # installed as an executable, because the x bit of a file Python creates on Windows is not
 # something Git Bash can be relied on to honour. It does not read stdin on purpose: the launcher
 # hands it the board script that way, and a cat here waits forever on the calls that carry -n.
+CRUDO = os.path.join(TMP, "ssh_crudo.txt").replace("\\", "/")
 STUB = os.path.join(TMP, "ssh_falso.sh").replace("\\", "/")
 with open(STUB, "w", newline="\n") as f:
     f.write('echo "ssh $*" >> %s\n' % REGISTRO)
+    # Y un segundo registro que SI distingue los argumentos. El de arriba usa $*, que los une con
+    # espacios, asi que un argumento VACIO es invisible en el. No es un detalle de formato: un
+    # argumento vacio no sobrevive a ssh de verdad, porque ssh une sus argumentos en UNA orden y
+    # el shell de la placa la vuelve a parsear.
+    f.write('{ for a in "$@"; do printf "[%s]" "$a"; done; echo; } >> ' + CRUDO + '\n')
 
 entorno = dict(os.environ)
 # Handed in by name and not won on the PATH: on Windows the PATH separator is not the one bash
@@ -128,5 +134,27 @@ print("  ultima preparacion en la llamada %d, primer arranque en la %d"
 assert primer_arrancar > ultimo_preparar, \
     "arrancar una placa antes de preparar las otras deja a cada dron en otro momento del vuelo"
 
+print("=" * 78)
+print("5. NINGUN ARGUMENTO VIAJA VACIO, PORQUE UN ARGUMENTO VACIO NO SOBREVIVE A SSH")
+print("=" * 78)
+# ssh no entrega una lista de argumentos: los une en UNA orden y el shell de la placa la vuelve a
+# parsear. Una cadena vacia no tiene representacion ahi, asi que desaparece y todo lo que venia
+# detras se corre un lugar. Comprobado el 3oct contra una placa de verdad: mandados 7 argumentos,
+# recibidos 6. El sintoma no nombra la causa:
+#     env: 192.168.1.125:8200: No such file or directory
+# que se lee como un error del lanzador y es una direccion ocupando el sitio del entorno. Por eso
+# el lanzador manda "-" cuando no hay entorno extra, y por eso esta seccion mira el registro
+# crudo: en el otro, el fallo es literalmente invisible.
+llamadas = [l.strip() for l in open(CRUDO, encoding="utf-8") if l.strip()]
+preparaciones = [l for l in llamadas if "[bash -s]" in l]
+print("  llamadas de preparacion registradas: %d" % len(preparaciones))
+assert preparaciones, "el stub no registro ninguna preparacion: %r" % llamadas[:3]
+for l in preparaciones:
+    print("    %s" % l[:104])
+    assert "[]" not in l, (
+        "un argumento viaja VACIO y ssh lo va a borrar, corriendo las direcciones un lugar: %s" % l)
+    assert l.count("[") >= 8, (
+        "la llamada lleva %d argumentos y se esperaban al menos 8: %s" % (l.count("["), l))
+print("  -> ninguna lleva un argumento vacio")
 print()
 print("TODO OK")
