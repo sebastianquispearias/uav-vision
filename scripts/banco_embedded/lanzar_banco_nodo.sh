@@ -39,6 +39,13 @@ N="$1"; DESDE="$2"; MISION_CLASE="${3:-mision_banco_dos_drones:ProtocoloVisionBa
 # que parece un error de argumentos del lanzador y no dice nada del argumento vacio.
 EXTRA="${4:-}"; shift 4
 [ "$EXTRA" = "-" ] && EXTRA=""
+# Las asignaciones vienen separadas por COMAS, no por espacios, y aqui se vuelven a separar.
+# Un argumento con espacios tampoco sobrevive a ssh: la orden se vuelve a parsear en la placa y
+# lo que era UN argumento llega como varios, asi que shift 4 se come una direccion y el
+# diccionario de nodos pierde una entrada. Con dos variables eso dejaba a la ESTACION fuera del
+# mapa, y entonces el dron difunde a sus vecinos y nunca a tierra: un sintoma que se lee como
+# "el protocolo no reporta" y es un argumento mal entregado.
+EXTRA="$(printf "%s" "$EXTRA" | tr "," " ")"
 DIRS=("$@")
 EST="${DIRS[${#DIRS[@]}-1]}"
 

@@ -155,6 +155,14 @@ for l in preparaciones:
         "un argumento viaja VACIO y ssh lo va a borrar, corriendo las direcciones un lugar: %s" % l)
     assert l.count("[") >= 8, (
         "la llamada lleva %d argumentos y se esperaban al menos 8: %s" % (l.count("["), l))
+    # Ni espacios: un argumento con espacios tampoco sobrevive, porque la placa vuelve a parsear
+    # la orden y lo que era UNO llega como VARIOS. Con dos variables de entorno eso corria las
+    # direcciones un lugar y dejaba a la ESTACION fuera del diccionario de nodos, asi que el dron
+    # difundia a sus vecinos y nunca a tierra. Eso se lee como "el protocolo no reporta" y es un
+    # argumento mal entregado. Por eso las asignaciones viajan separadas por comas.
+    entorno = l.split("][")[6] if l.count("][") > 6 else ""
+    assert " " not in entorno, (
+        "el entorno viaja con espacios y ssh lo va a partir, corriendo las direcciones: %s" % l)
 print("  -> ninguna lleva un argumento vacio")
 print()
 print("TODO OK")

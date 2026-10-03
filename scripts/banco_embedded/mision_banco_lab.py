@@ -94,6 +94,11 @@ DETECTORES = {"coco": "/home/pi/yolov8n_ncnn_model",
 MODELO = DETECTORES.get(os.environ.get("BANCO_MODELO", "coco").strip().lower(),
                         os.environ.get("BANCO_MODELO", "coco"))
 
+# Cada cuanto se mira, en segundos. Separado de fps porque son dos cosas distintas y que no
+# coincidan es como "ocho miradas de evidencia" deja de significar ocho segundos: fps es lo
+# que la capa de identidad CREE que corre, y esto es lo que de verdad dispara el lazo.
+SEE_S = float(os.environ.get("BANCO_SEE_S", "0.25"))
+
 ProtocoloLab = VisionProtocol.with_config(
     camera=OnboardCamera(
         model=MODELO,
@@ -110,6 +115,7 @@ ProtocoloLab = VisionProtocol.with_config(
     # Twenty degrees is a guess at how the board is propped up and it only affects where the point
     # lands on the map, which on a desk means nothing anyway: there is no autopilot, so the pose
     # comes from the fake one. The detection is real; the metres are not.
+    see_period_s=SEE_S,
     pitch_deg=-20.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
     identity=IncrementalIdentity(

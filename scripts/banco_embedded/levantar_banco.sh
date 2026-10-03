@@ -125,9 +125,10 @@ for i in "${!PIS[@]}"; do
     echo "-- preparando ${PIS[$i]} como nodo $((i + 1)), desde ${DESDE[$i]:-0} s"
     EXTRA=""
     case "${REID[$i]:-}" in no|NO|off) EXTRA="BANCO_REID=" ;; esac
-    [ -n "${FPS[$i]:-}" ] && EXTRA="$EXTRA BANCO_FPS=${FPS[$i]}"
-    [ -n "${MODELO[$i]:-}" ] && EXTRA="$EXTRA BANCO_MODELO=${MODELO[$i]}"
-    # Nunca vacio: un argumento vacio no sobrevive a ssh (ver lanzar_banco_nodo.sh).
+    [ -n "${FPS[$i]:-}" ] && EXTRA="${EXTRA:+$EXTRA,}BANCO_FPS=${FPS[$i]}"
+    [ -n "${MODELO[$i]:-}" ] && EXTRA="${EXTRA:+$EXTRA,}BANCO_MODELO=${MODELO[$i]}"
+    # Separadas por COMAS y nunca vacio: ni un argumento vacio ni uno con espacios sobreviven
+    # a ssh, que vuelve a parsear la orden en la placa (ver lanzar_banco_nodo.sh).
     [ -z "$EXTRA" ] && EXTRA="-"
     $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" "${DESDE[$i]:-0}" "$MISION" "$EXTRA" "${DIRS[@]}" \
         < "$(dirname "$0")/lanzar_banco_nodo.sh" || echo "   FALLO ${PIS[$i]}"
