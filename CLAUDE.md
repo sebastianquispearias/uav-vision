@@ -35,6 +35,7 @@ python tests/test_rodear.py       # the aircraft flies to see a target from anot
 node tests/test_gs_rodear.js     # the one button on the page that makes something fly
 python tests/test_levantar_banco.py  # the bench comes up from one command, with no boards
 python tests/test_misiones_operador.py   # a mission the operator acts on carries appearance
+python tests/test_reiniciar.py    # the clear that reaches the aircraft, and what it keeps
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```
 

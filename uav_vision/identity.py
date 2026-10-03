@@ -406,6 +406,24 @@ class IncrementalIdentity:
 
     # -- ingest ------------------------------------------------------------
 
+    def olvidar_todo(self) -> None:
+        """Drops every track and every candidate, as if the layer had just been built.
+
+        This is the only operation in this layer that loses information, and it exists for one
+        reason: nothing else could. Everything here grows monotonically, on purpose -- a
+        candidate is never forgotten, so a target lost a minute ago is still reported -- which
+        means a station that wants a clean slate has nowhere to ask for one. Hiding the pins on
+        the operator's screen only hides them: the next report brings them all back, because the
+        originals live here and not there.
+
+        What it deliberately does NOT touch is the operator's refusals, which the protocol keeps
+        separately. A refusal is a judgement about the world, not a drawing on a screen: clearing
+        the board should not make the drone start reporting again the point a person already
+        said was not a person.
+        """
+        self._tracks.clear()
+        self._frames_vistos.clear()
+
     def observe(
         self,
         frame: int,

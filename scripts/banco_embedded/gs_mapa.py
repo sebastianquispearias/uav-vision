@@ -630,6 +630,24 @@ class Handler(server.BaseHTTPRequestHandler):
             listo = SEGUNDA is not None and SEGUNDA.listo
             self._responder(json.dumps({'dron': dron, 'detector_listo': listo}).encode('utf-8'))
             return
+        if self.path.split('?')[0] == '/reiniciar':
+            # A clean board, for real. The clear button hides pins and a page reload brought them
+            # all back, because the candidates do not live here: they live in each aircraft's
+            # identity layer, which forgets nothing on purpose. So the only honest clear is one
+            # that travels. The station empties its own copy too, and says how many it dropped,
+            # because a button that clears and reports nothing reads as broken.
+            with CANDADO:
+                nodos = dict(ESTADO['nodos'])
+                cuantos = len(ESTADO['pois'])
+                ESTADO['pois'] = []
+                ESTADO['historia'] = []
+            empujar_mensaje(nodos, {'type': 'vision_reiniciar'})
+            print('[%s] reinicio pedido por el operador: %d POI borrados aqui y la orden sale a '
+                  '%d dron(es). Los "no es" NO se tocan.'
+                  % (datetime.now().strftime('%H:%M:%S'), cuantos, len(nodos)), flush=True)
+            self._responder(json.dumps({'status': 'ok', 'borrados': cuantos,
+                                        'drones': len(nodos)}).encode('utf-8'))
+            return
         if self.path.split('?')[0] == '/rodear':
             # The operator sends an aircraft to look at one target from a side nobody has looked
             # from. This is the only request in the station that makes something fly, so it says
@@ -919,6 +937,8 @@ PAGINA = r"""<!doctype html>
     <button id="btn-limpiar"
             title="hide every unconfirmed contact until it is seen again">clear</button>
     <button id="btn-historial" title="show, dimmed, what the layers hid">history</button>
+    <button id="btn-reiniciar"
+            title="tell every drone to forget what it has found and start over; the operator's verdicts are kept">reset all</button>
     <button id="btn-fondo" hidden>satellite</button>
   </div>
 </header>
@@ -1579,6 +1599,23 @@ lienzo.addEventListener('wheel', ev => {
 }, {passive: false});
 
 document.getElementById('btn-limpiar').onclick = limpiar;
+// clear hides; this one travels. The pins live in each aircraft's identity layer, so a board
+// cleared only here comes back with the next report, which is what a reload used to show.
+document.getElementById('btn-reiniciar').onclick = async () => {
+  const b = document.getElementById('btn-reiniciar');
+  b.disabled = true;
+  try {
+    const r = await fetch('/reiniciar', {method: 'POST', body: '{}'});
+    const d = await r.json();
+    aviso = `reset: ${d.borrados} contacts dropped, order sent to ${d.drones} drone(s)`;
+    limpiados = [];
+    verHistorial = false;
+  } catch (e) {
+    aviso = 'reset failed: ' + e;
+  }
+  b.disabled = false;
+  pintar();
+};
 document.getElementById('btn-historial').onclick = alternarHistorial;
 
 document.getElementById('btn-fondo').onclick = () => {

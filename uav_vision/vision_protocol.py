@@ -431,6 +431,9 @@ class VisionProtocol(IProtocol):
             self.rodear(m.get("x"), m.get("y"), m.get("radio_m"), m.get("altura_m"),
                         bool(m.get("movil")), int(m.get("puntos") or 1))
             return
+        if m.get("type") == "vision_reiniciar":
+            self.reiniciar()
+            return
         if m.get("type") == "vision_descarte":
             self.descartar(m.get("x"), m.get("y"), m.get("cls"), m.get("plantilla"))
             return
@@ -560,6 +563,21 @@ class VisionProtocol(IProtocol):
         r["ir_a"] = r["puntos"][r["i"]]
         r["t_tramo"] = ahora
         self.provider.send_mobility_command(GotoCoordsMobilityCommand(*r["ir_a"]))
+
+    def reiniciar(self) -> None:
+        """Forgets every candidate, because the operator asked for a clean board.
+
+        The station's clear button only ever hid pins, and a page reload brought them all back:
+        the candidates live in this layer, on this aircraft, and no message reached them. So the
+        button was telling the truth about the screen and a lie about the system.
+
+        The refusals survive. Those are the operator's judgements about the world and they cost
+        a person's attention to produce; the board is just how it is being drawn right now.
+        """
+        if self.identity is not None:
+            self.identity.olvidar_todo()
+        print("[vision] reinicio pedido por el operador: identidad vacia, %d descartes intactos"
+              % len(self._descartados), flush=True)
 
     def descartar(self, x=None, y=None, cls=None, plantilla=None) -> bool:
         """Records that the operator looked at this point and said it is not what we are after.
