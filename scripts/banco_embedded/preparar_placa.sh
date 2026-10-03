@@ -34,7 +34,11 @@ cp -r "$LAC/gradys-embedded/gradys_embedded" "$STAGE/gradys-embedded/"
 # Both missions: the one that replays the recording and the one that uses the real camera. Which
 # of the two runs is chosen when the mission is loaded, not when the board is provisioned, and a
 # board that only has one of them cannot be switched without another transfer.
-for m in mision_banco_dos_drones.py mision_vision.py mision_vision_2fps.py mision_banco_lab.py; do
+# mision_barrido.py es LA DE VUELO y hasta el 3oct no estaba en esta lista: la Pi 5 tenia una
+# copia puesta a mano en una fecha que nadie recuerda y la Pi 4 no la tenia en absoluto. Una
+# placa que no puede cargar la mision del vuelo no se descubre al provisionar, se descubre en el
+# campo, con el dron en la mano.
+for m in mision_banco_dos_drones.py mision_vision.py mision_vision_2fps.py mision_banco_lab.py          mision_barrido.py mision_banco_barrido.py; do
     [ -f "$AQUI/$m" ] && cp "$AQUI/$m" "$STAGE/gradys_protocols/"
 done
 cp "$AQUI/uav_api_stub.py" "$STAGE/uav_api_stub.py"
@@ -53,10 +57,11 @@ tar -czf - -C "$STAGE" . | ssh "$PI" 'tar -xzf - -C ~ && echo "   recibido"'
 # El 3oct la Pi 4 no tenia el de apariencia y hubo que copiarlo a mano desde la Pi 5.
 echo "-- comprobando los modelos que la placa ya tiene que tener"
 ssh -n "$PI" 'falta=0
-for m in /home/pi/yolov8n_ncnn_model /home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt; do
+for m in /home/pi/yolov8n_ncnn_model /home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt          /home/pi/modelos_visdrone/y960_ncnn_model; do
     if [ -e "$m" ]; then echo "   hay  $m"; else echo "   FALTA $m"; falta=1; fi
 done
-[ "$falta" = 0 ] || echo "   una mision con recortes pide el de apariencia y NO ARRANCA sin el.
+[ "$falta" = 0 ] || echo "   una mision con recortes pide el de apariencia, y la mision de VUELO pide
+   ademas el detector de VisDrone. Sin ellos la mision NO ARRANCA.
    Se copia desde la otra placa:  scp pi@<otra>:/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt ."
 exit 0'
 
