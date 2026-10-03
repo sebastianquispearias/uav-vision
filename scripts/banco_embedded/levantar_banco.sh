@@ -47,6 +47,13 @@ MISION="${BANCO_MISION:-mision_banco_dos_drones:ProtocoloVisionBanco}"
 #   BANCO_REID="si no" BANCO_FPS="4 2" bash ...levantar_banco.sh ...
 read -r -a REID <<< "${BANCO_REID:-}"
 read -r -a FPS <<< "${BANCO_FPS:-}"
+# BANCO_MODELO: que detector carga cada placa. "coco" (por omision) o "visdrone", o una ruta
+#             entera. La escena manda: el modelo aereo no ve NADA en interior, medido el 3oct,
+#             111 ms/cuadro con 1.0 cajas contra 196 ms con 0.0.
+#   BANCO_MODELO="coco visdrone" bash ...levantar_banco.sh ...
+# OJO: lo que va en EXTRA se parte por espacios al llegar a la placa, asi que una ruta CON
+#      espacios rompe el arranque y el error no nombra el espacio. Los alias no tienen.
+read -r -a MODELO <<< "${BANCO_MODELO:-}"
 
 # The addresses the boards exchange reports on, plus the station last: this is node_ip_dict, and
 # the node ids are the positions in it.
@@ -119,6 +126,7 @@ for i in "${!PIS[@]}"; do
     EXTRA=""
     case "${REID[$i]:-}" in no|NO|off) EXTRA="BANCO_REID=" ;; esac
     [ -n "${FPS[$i]:-}" ] && EXTRA="$EXTRA BANCO_FPS=${FPS[$i]}"
+    [ -n "${MODELO[$i]:-}" ] && EXTRA="$EXTRA BANCO_MODELO=${MODELO[$i]}"
     $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" "${DESDE[$i]:-0}" "$MISION" "$EXTRA" "${DIRS[@]}" \
         < "$(dirname "$0")/lanzar_banco_nodo.sh" || echo "   FALLO ${PIS[$i]}"
 done

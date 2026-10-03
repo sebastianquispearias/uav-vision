@@ -80,14 +80,23 @@ from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
 
-# What the board is asked to run at, and whether it computes appearance. Per board, because the
-# two in this bench are not the same machine: see the table above.
+# What the board is asked to run at, which detector it loads, and whether it computes
+# appearance. All three per board, because the two in this bench are not the same machine and
+# they are not always pointed at the same kind of scene: see the tables above.
 FPS = float(os.environ.get("BANCO_FPS", "4.0"))
 REID = os.environ.get("BANCO_REID", "/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt") or None
 
+# The detector. COCO by default BECAUSE THE SCENE IS INDOORS, not because it is the better model:
+# the aircraft flies the VisDrone one, and indoors that one returns nothing at all. Two short
+# names are accepted so a demonstration does not hinge on typing a path correctly twice.
+DETECTORES = {"coco": "/home/pi/yolov8n_ncnn_model",
+              "visdrone": "/home/pi/modelos_visdrone/y960_ncnn_model"}
+MODELO = DETECTORES.get(os.environ.get("BANCO_MODELO", "coco").strip().lower(),
+                        os.environ.get("BANCO_MODELO", "coco"))
+
 ProtocoloLab = VisionProtocol.with_config(
     camera=OnboardCamera(
-        model="/home/pi/yolov8n_ncnn_model",
+        model=MODELO,
         threshold=0.3,
         tracker=True,
         fps=FPS,

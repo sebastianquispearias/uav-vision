@@ -440,6 +440,44 @@ def plantilla_para(x, y, vigentes):
     return None
 
 
+def descartes_por_dron(x, y, ahora):
+    """Which drone to tell, and in ITS OWN coordinates, that the operator refused this point.
+
+    Until 2026-10-03 one refusal was built from the fused pin and pushed identically to every
+    aircraft. Two things made that not work, and the second is the subtle one.
+
+    A fused pin sits at the weighted mean of what each drone reported, so its position is not
+    any drone's own. The drone matches a refusal against its own candidates with
+    mismo_objetivo, which bounds by distance, so a refusal carrying the fused position can land
+    outside the radius of the very candidate it was meant to silence. Measured on the bench: the
+    refusal was delivered to both drones and neither one's POI count moved.
+
+    And the appearance has to be that drone's own too. Two aircraft photograph the same person
+    through different lenses at different exposures; handing drone 2 the vector drone 1 computed
+    asks it to match its own crops against somebody else's camera.
+
+    So this returns one refusal per drone, built from that drone's own report, and nothing at
+    all for a drone with no candidate near the click: it did not see what was refused, and
+    silencing a point it never reported would be silencing whatever it finds there next.
+    """
+    salida = {}
+    with CANDADO:
+        por_dron = {k: list(v) for k, v in ESTADO['pois_por_dron'].items()}
+        drones = dict(ESTADO['drones'])
+    for dron, pois in por_dron.items():
+        if ahora - drones.get(dron, {}).get('t', float('-inf')) > DRON_CALLADO_S:
+            continue
+        cerca = sorted(((math.hypot(p['x'] - x, p['y'] - y), p) for p in pois
+                        if p.get('emb') is not None
+                        and p.get('x') is not None and p.get('y') is not None),
+                       key=lambda par: par[0])
+        if cerca and cerca[0][0] <= OBJETIVO_RADIO_M:
+            p = cerca[0][1]
+            salida[dron] = {'x': p['x'], 'y': p['y'], 'cls': p.get('cls'),
+                            'plantilla': p['emb']}
+    return salida
+
+
 def pois_vigentes(ahora):
     """
     The fused targets of the drones that are still talking, with their coordinates.
@@ -728,12 +766,26 @@ class Handler(server.BaseHTTPRequestHandler):
             if d['v'] == 'no':
                 with CANDADO:
                     nodos = dict(ESTADO['nodos'])
-                    vigentes = pois_vigentes(time.time())
-                plantilla = plantilla_para(x, y, vigentes)
-                if plantilla is not None:
-                    empujar_mensaje(nodos, {'type': 'vision_descarte', 'x': x, 'y': y,
-                                            'cls': d.get('cls'), 'plantilla': plantilla})
-                    print('        y el dron deja de reportarlo', flush=True)
+                # Uno por dron, con la posicion y la apariencia que ESE dron reporto. El pin que
+                # el operador apunto puede ser la media de dos drones, y esa media no es de
+                # ninguno: mandada tal cual, cae fuera del radio del candidato que se queria
+                # callar. Medido en el banco antes de esto: el rechazo llegaba a los dos drones
+                # y el conteo de POIs de ninguno se movia.
+                rechazos = descartes_por_dron(x, y, time.time())
+                for dron, cuerpo in rechazos.items():
+                    if dron not in nodos:
+                        continue
+                    empujar_mensaje({dron: nodos[dron]}, dict(cuerpo, type='vision_descarte'))
+                if rechazos:
+                    print('        y deja de reportarlo en: %s'
+                          % ', '.join('dron %s (%.1f, %.1f)' % (k, v['x'], v['y'])
+                                      for k, v in sorted(rechazos.items())), flush=True)
+                else:
+                    # Decirlo, porque el caso existe y hasta hoy era silencio: una placa sin
+                    # modelo de apariencia no publica emb, y sin emb no hay nada que mandar.
+                    print('        PERO NINGUN DRON PUEDE OBEDECERLO: ninguno reporta ese punto '
+                          'con apariencia. Una placa sin reid_model no puede honrar un veredicto.',
+                          flush=True)
             self._responder(json.dumps({'status': 'ok', 'crop': archivo}).encode('utf-8'))
             return
         self._responder(b'{"status": "ok"}')
@@ -1665,7 +1717,9 @@ function estadoBusqueda(drones, ord) {
     // eighty names and buries the page. Only what matters is shown: that it refused, and what
     // it was asked for.
     if (b.rechazo) return `drone ${id}: refused the order (${String(b.rechazo).split(';')[0]})`;
-    return `drone ${id}: looking for ${b.clases ? b.clases.join(', ') : 'the usual'}`;
+    const sordo = b.apariencia === false
+      ? ' · cannot act on a verdict: no appearance model' : '';
+    return `drone ${id}: looking for ${b.clases ? b.clases.join(', ') : 'the usual'}${sordo}`;
   });
 }
 

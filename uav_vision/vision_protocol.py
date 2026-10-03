@@ -781,6 +781,12 @@ class VisionProtocol(IProtocol):
             "epoca": self._orden_epoca,
             "rechazo": self._orden_rechazo,
             "conocidas": sorted(conocidas) if conocidas else None,
+            # Whether this aircraft can honour a refusal at all. _fue_descartado needs the
+            # candidate's own appearance vector and returns False without one, so a board whose
+            # mission left reid_model unset is deaf to every verdict the operator gives. That
+            # used to be silent on the station, which makes a button that does nothing look
+            # broken rather than unavailable.
+            "apariencia": getattr(self.camera, "reid_model", None) is not None,
         }
 
     def _corroboracion(self, poi) -> List:

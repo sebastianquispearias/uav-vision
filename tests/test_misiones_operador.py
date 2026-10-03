@@ -111,7 +111,13 @@ for nombre in sorted(os.listdir(MISIONES)):
     asignado = m_reid is not None and m_reid.group(1).strip() not in ('None', '')
     hay_ruta = re.search(r'osnet\w*\.pt', codigo) is not None
     reid = asignado and hay_ruta
-    estado = ('recortes SI, modelo ' + ('SI' if reid else 'NO')) if recortes else 'sin recortes'
+    # Y el detector. Mismo razonamiento y mismo riesgo: una mision puede nombrar el modelo en
+    # una variable (mision_banco_lab lo lee de BANCO_MODELO desde el 3oct, porque el aereo no
+    # ve nada en interior y el de COCO no sirve volando), pero model=None o una mision sin
+    # detector no detecta nada y lo hace en silencio.
+    m_det = re.search(r'[^_]model\s*=\s*([^,\n]+)', codigo)
+    detector = m_det is not None and m_det.group(1).strip() not in ('None', '')
+    estado = ('recortes SI, modelo ' + ('SI' if reid else 'NO') + ', detector ' + ('SI' if detector else 'NO')) if recortes else 'sin recortes'
     print('  %-34s %s' % (nombre, estado))
     revisadas += 1
     assert not (recortes and not reid), (
@@ -119,6 +125,9 @@ for nombre in sorted(os.listdir(MISIONES)):
         'Entonces su "no es" no sale de la estacion, su clic no puede decir quien, y la '
         'fusion entre drones cae al camino debil. O enciende reid_model, o quita crops.'
         % nombre)
+    assert not (recortes and not detector), (
+        '%s manda recortes y no nombra detector. Un recorte es lo que una persona mira para '
+        'decidir, y sin detector no hay nada que recortar.' % nombre)
 assert revisadas >= 3, 'solo se revisaron %d misiones, el patron de busqueda esta mal' % revisadas
 print('  -> %d misiones revisadas' % revisadas)
 
