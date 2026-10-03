@@ -58,6 +58,20 @@ slower than its mission claims silently stretches what "eight looks of evidence"
 BANCO_FPS to what the board actually does, or turn the model off there with BANCO_REID= (empty).
 
 
+THE DETECTOR HERE IS COCO, NOT THE ONE THAT FLIES, and that is the right way round indoors.
+The aircraft carries YOLO26n fine-tuned on VisDrone (modelos_visdrone/y960_ncnn_model, which
+mision_barrido.py loads): aerial imagery, people a few dozen pixels tall seen from above. A desk
+camera looking across a room is the opposite domain. Measured on the Pi 5 with
+comparar_detectores.py, same camera, same scene, threshold 0.3, one after the other:
+
+    COCO yolov8n       111 ms/frame   1.0 boxes/frame   mean conf 0.55   {person: 7}
+    VisDrone y960      196 ms/frame   0.0 boxes/frame
+    VisDrone y1280     342 ms/frame   0.0 boxes/frame
+
+The aerial model sees NOTHING indoors, and costs two to three times more to see it. So the bench
+numbers are not the flight numbers and should not be quoted as if they were: the 46 % recall
+measured on real footage belongs to YOLO26 at 960 px, not to what runs here.
+
     POST /mission/load {"protocol": "mision_banco_lab:ProtocoloLab", ...}
 """
 import os
