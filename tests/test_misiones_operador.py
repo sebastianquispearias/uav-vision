@@ -35,20 +35,26 @@ print('=' * 70)
 print('1. SIN APARIENCIA, LA ESTACION CRUZA LOS EMPAREJAMIENTOS ENTRE AERONAVES')
 print('=' * 70)
 # Ana y Beto, quietos, a 3 m uno del otro. El dron 1 los ve donde estan. El dron 2 tiene su
-# propio sesgo de GPS y brujula, 2.6 m hacia el este, y los reporta en el orden en que los
-# encontro, que no tiene por que ser el mismo. Nada de esto es rebuscado: medido sobre los
-# candidatos del 02ago, el radio del 95 % de un objetivo quieto es 82 a 99.9 % SESGO, y el
-# sesgo es por aeronave. Dos drones no comparten el error, cada uno tiene el suyo.
+# propio sesgo de GPS y brujula, 2 m hacia el este, y los ve a los dos corridos.
+#
+# Con ese sesgo, la Ana del dron 2 (en 12.0) queda a 1 m del Beto del dron 1 (en 13.0) y a 2 m
+# de su propia Ana (en 10.0). El pin EQUIVOCADO esta mas cerca. Elegir por distancia, aunque se
+# elija el mejor y no el primero, se equivoca: hace falta mirar la apariencia.
+#
+# El sesgo de 2 m no es rebuscado. Medido sobre los candidatos del 02ago, entre el 82 % y el
+# 99.9 % del radio del 95 % de un objetivo quieto es SESGO del gps y la brujula de esa aeronave,
+# no dispersion. El sesgo no se promedia a lo largo del vuelo y no se comparte entre aviones.
 ana = np.zeros(512, dtype=np.float32); ana[0] = 1.0
 beto = np.zeros(512, dtype=np.float32); beto[9] = 1.0
 
-VERDAD = ((10.0, 10.0), (13.0, 10.0))
+SEPARACION_REAL = 3.0
+SESGO = 2.0
 
 
 def escena(con_emb):
     ea, eb = (ana, beto) if con_emb else (None, None)
     return fundir({'1': [poi(10.0, 10.0, ea), poi(13.0, 10.0, eb)],
-                   '2': [poi(12.0, 10.0, eb), poi(9.4, 10.0, ea)]})
+                   '2': [poi(10.0 + SESGO, 10.0, ea), poi(13.0 + SESGO, 10.0, eb)]})
 
 
 def separacion(pines):
@@ -58,21 +64,23 @@ def separacion(pines):
 
 sin_v, con_v = escena(False), escena(True)
 d_sin, d_con = separacion(sin_v), separacion(con_v)
-print('  verdad de terreno: dos personas a %.1f m' % (VERDAD[1][0] - VERDAD[0][0]))
+print('  verdad de terreno: dos personas a %.1f m, y %.1f m de sesgo entre aeronaves'
+      % (SEPARACION_REAL, SESGO))
 print('  sin vector: %d pines, separados %.2f m   %s'
       % (len(sin_v), d_sin, [round(p['x'], 2) for p in sin_v]))
 print('  con vector: %d pines, separados %.2f m   %s'
       % (len(con_v), d_con, [round(p['x'], 2) for p in con_v]))
 
-# Los dos casos dan DOS pines, asi que contarlos no detecta nada: el fallo no es que falte un
-# contacto, es que los dos quedan encima uno del otro. En el mapa del operador son dos personas
-# a 20 cm, cuando estan a 3 m. Eso no se lee como un error, se lee como dos personas juntas.
+# Contar los pines no detecta nada: los dos casos dan DOS. El fallo no es que falte un contacto,
+# es que los dos quedan en el MISMO sitio. En el mapa del operador eso no se lee como un error.
 assert len(sin_v) == len(con_v) == 2, 'el numero de pines no es lo que distingue los dos casos'
-assert d_sin < 1.0, ('sin apariencia los dos pines tendrian que colapsar; dieron %.2f m. '
-                     'Si esto deja de pasar, el emparejamiento ya no depende del orden '
-                     'de llegada y esta seccion hay que rehacerla, no borrarla.' % d_sin)
-assert d_con > 2.0, 'con apariencia los pines tienen que quedar separados, dieron %.2f m' % d_con
-print('  -> sin vector el mapa pone a 20 cm a dos personas que estan a 3 m, y no parece un error')
+assert d_sin < 0.5, ('sin apariencia los dos pines tendrian que colapsar; dieron %.2f m. '
+                     'Si esto deja de pasar, la geometria sola ya resuelve este caso y hay que '
+                     'buscar el sesgo al que vuelve a fallar, no borrar la seccion.' % d_sin)
+assert abs(d_con - SEPARACION_REAL) < 0.5, (
+    'con apariencia los pines tienen que reproducir la separacion real de %.1f m, dieron %.2f m'
+    % (SEPARACION_REAL, d_con))
+print('  -> sin vector los dos contactos caen encima; con vector reproducen los 3 m reales')
 
 print()
 print('=' * 70)
@@ -104,6 +112,29 @@ for nombre in sorted(os.listdir(MISIONES)):
         % nombre)
 assert revisadas >= 3, 'solo se revisaron %d misiones, el patron de busqueda esta mal' % revisadas
 print('  -> %d misiones revisadas' % revisadas)
+
+print()
+print('=' * 70)
+print('3. LA ESTACION SE FUNDE CON EL PIN MAS CERCANO, NO CON EL PRIMERO')
+print('=' * 70)
+# Sin vectores, para que decida solo la geometria. El dron 1 reporta dos objetivos y crea dos
+# pines, en ese orden. El dron 2 reporta uno que cae a 2.4 m del primer pin y a 0.6 m del
+# segundo. La version voraz, que se quedaba con el primero que encajara, lo metia en el pin de
+# la izquierda; con dos aeronaves eso casi nunca se nota, porque el unico pin al alcance suele
+# ser el correcto. Con tres empieza a notarse, y lo que decide pasa a ser el orden de llegada
+# de los reportes, que no significa nada.
+pines = fundir({'1': [poi(10.0, 10.0, None), poi(13.0, 10.0, None)],
+                '2': [poi(12.4, 10.0, None)]})
+fundidos = [p for p in pines if len(p['drones']) > 1]
+print('  pines del dron 1 en x=10.0 y x=13.0; el dron 2 reporta x=12.4')
+print('  resultado: %s' % [(round(p['x'], 2), p.get('dron', '+'.join(p['drones']))) for p in pines])
+assert len(fundidos) == 1, 'el reporte del dron 2 tenia que fundirse con alguno: %r' % pines
+x = fundidos[0]['x']
+# Primero: (10.0 + 12.4) / 2 = 11.2.   Mas cercano: (13.0 + 12.4) / 2 = 12.7.
+assert abs(x - 12.7) < 0.05, (
+    'se fundio en x=%.2f. 11.2 significa que eligio el PRIMER pin que encajaba en vez del mas '
+    'cercano, que es la asignacion voraz que se quito el 3oct.' % x)
+print('  -> se fundio en x=%.2f, que es el pin de 13.0 y no el de 10.0' % x)
 
 print()
 print('test_misiones_operador OK')

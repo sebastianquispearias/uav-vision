@@ -98,6 +98,38 @@ def mismo_objetivo(a, b):
     return float(np.linalg.norm(va - vb)) <= EMB_DIST_MAX_MEDIDO
 
 
+def _mejor_pin(salida, dron, poi):
+    """The pin this report belongs to, or None, choosing by distance and not by arrival order.
+
+    Until 2026-10-03 this was the FIRST pin that passed mismo_objetivo, which is a greedy
+    assignment. With two aircraft it is almost always the same answer, because the only pin a
+    report can reach is usually its own target's. With three it stops being: the pins are built
+    in the order the reports arrive, so which aircraft reported first could decide who gets
+    paired with whom.
+
+    That matters here more than it would elsewhere, because the error between two aircraft is
+    mostly BIAS and not scatter: measured on the 02ago candidates, 82 to 99.9 % of a static
+    target's 95 % radius is the gps and compass offset of that airframe. Bias does not average
+    out over a flight and it is not shared, so one drone's whole picture can sit metres away
+    from another's, and two targets standing closer than that offset are exactly the case where
+    first-match and best-match disagree.
+
+    Still greedy across reports: each one takes its best pin without reconsidering earlier
+    choices. A joint assignment over the whole frame would be the next step and needs an
+    argument of its own, because it would also have to decide what to do when the appearance
+    says one thing and the geometry another.
+    """
+    mejor, mejor_d = None, None
+    for ya in salida:
+        if dron in ya['drones'] or not mismo_objetivo(ya, poi):
+            continue
+        d = math.hypot((ya.get('x') or 0.0) - (poi.get('x') or 0.0),
+                       (ya.get('y') or 0.0) - (poi.get('y') or 0.0))
+        if mejor_d is None or d < mejor_d:
+            mejor, mejor_d = ya, d
+    return mejor
+
+
 def fundir(por_dron):
     """
     One pin per target, across drones.
@@ -113,9 +145,12 @@ def fundir(por_dron):
     salida = []
     for dron, lista in por_dron.items():
         for poi in lista:
-            for ya in salida:
-                if str(dron) in ya['drones'] or not mismo_objetivo(ya, poi):
-                    continue
+            ya = _mejor_pin(salida, str(dron), poi)
+            if ya is None:
+                nuevo = dict(poi)
+                nuevo['drones'] = [str(dron)]
+                salida.append(nuevo)
+            else:
                 na, nb = ya.get('n_obs') or 1, poi.get('n_obs') or 1
                 ya['x'] = round((ya['x'] * na + poi['x'] * nb) / (na + nb), 2)
                 ya['y'] = round((ya['y'] * na + poi['y'] * nb) / (na + nb), 2)
@@ -155,11 +190,6 @@ def fundir(por_dron):
                     ya['radius_m'] = rb
                 ya['drones'].append(str(dron))
                 ya['dron'] = '+'.join(ya['drones'])
-                break
-            else:
-                nuevo = dict(poi)
-                nuevo['drones'] = [str(dron)]
-                salida.append(nuevo)
     return salida
 
 
