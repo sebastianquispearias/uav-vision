@@ -2,6 +2,12 @@
 # One command for a flight day: provision the boards, bring up the station, start the mission on
 # every aircraft, and REFUSE TO SAY IT IS READY until it has checked that each drone is reporting.
 #
+#   bash scripts/banco_embedded/volar.sh auto pi@rpanion.local pi@drone4.local
+#
+# "auto" averigua la direccion de la estacion preguntandosela a la primera placa, y los
+# nombres .local funcionan en cualquier red. Con esos dos, la orden del dia de vuelo se
+# escribe IGUAL con cable y con hotspot, que es lo unico que hace que se pueda memorizar.
+# Tambien acepta todo a mano:
 #   bash scripts/banco_embedded/volar.sh 192.168.1.121:8300 pi@192.168.1.125 pi@192.168.1.126
 #
 # From PowerShell, which is where this is actually typed, the wrapper beside it does the same:
@@ -44,18 +50,53 @@ PIS=("$@")
 AQUI="$(cd "$(dirname "$0")" && pwd)"
 RAIZ="$(cd "$AQUI/../.." && pwd)"
 
-# Nothing starts until every argument looks like a board. A line pasted twice arrives as six
-# boards, and the old launcher gave each of them a node id and started the real ones twice.
+# Nada arranca hasta que cada argumento parezca una placa. Lo que se exige es el usuario@ y no una
+# direccion numerica: SIN CABLE las IP las reparte el hotspot y cambian cada vez, mientras que los
+# nombres no. Las dos placas corren avahi, asi que rpanion.local y drone4.local funcionan en
+# cualquier red y son la unica forma de tener una orden que se escriba igual todos los dias.
+# El usuario@ es ademas el filtro que importa: una linea pegada dos veces trae nombres de archivo
+# y direcciones sueltas, y ninguno lleva arroba.
 for host in "${PIS[@]}"; do
+    case "$host" in
+        *@*) ;;
+        *) echo "NO ARRANCO: '$host' no parece una placa."
+           echo "Se espera  usuario@nombre  o  usuario@A.B.C.D  por cada placa."
+           echo "Con el hotspot conviene el nombre: pi@rpanion.local, pi@drone4.local."
+           exit 1 ;;
+    esac
     case "${host#*@}" in
-        *[!0-9.]*|*..*|"") echo "NO ARRANCO: '$host' no parece una placa."
-                           echo "Se espera  usuario@A.B.C.D  por cada placa, y nada mas."
-                           exit 1 ;;
+        ""|*' '*) echo "NO ARRANCO: '$host' no tiene host despues del arroba."; exit 1 ;;
     esac
 done
+
 if [ "$(printf '%s\n' "${PIS[@]}" | sort | uniq -d | wc -l)" -gt 0 ]; then
     echo "NO ARRANCO: hay una placa repetida."
     exit 1
+fi
+
+# La direccion de la estacion puede venir dada, o pedirse con "auto". Sin cable la reparte el
+# hotspot y cambia cada vez, asi que escribirla a mano es la parte de la orden que se escribe mal
+# justo el dia que importa.
+#
+# Se averigua preguntandole a la PLACA, que es quien tiene la respuesta correcta por definicion:
+# SSH_CLIENT trae la IP desde la que llego esta conexion, o sea la de la laptop vista desde la red
+# que las dos comparten. Una laptop con Wi-Fi y Ethernet a la vez tiene varias IP y solo una sirve;
+# esta es siempre esa, sin adivinar interfaces.
+if [ "${EST%%:*}" = "auto" ] || [ "$EST" = "auto" ]; then
+    PUERTO_PEDIDO="8300"
+    case "$EST" in auto:*) PUERTO_PEDIDO="${EST#auto:}" ;; esac
+    echo "-- 0/5 averiguando con que direccion me ve la primera placa"
+    # -4 a proposito: sin el, ssh puede negociar IPv6 y SSH_CLIENT devuelve una direccion
+    # link-local como fe80::7521:dd77:1bc1:6e38%eth0, que es correcta y no sirve para construir
+    # una URL ni para que la otra placa alcance la estacion. Medido el 3oct sobre el cable.
+    MIA="$($SSH -4 -n -o ConnectTimeout=15 "${PIS[0]}" 'echo $SSH_CLIENT' 2>/dev/null | awk '{print $1}')"
+    case "$MIA" in
+        *[!0-9.]*|"") echo "NO ARRANCO: ${PIS[0]} no supo decirme mi direccion (dijo '$MIA')."
+                      echo "Pasar la direccion a mano:  <ip de la laptop>:$PUERTO_PEDIDO"
+                      exit 1 ;;
+    esac
+    EST="$MIA:$PUERTO_PEDIDO"
+    echo "   la placa me ve como $MIA, asi que la estacion va en $EST"
 fi
 
 echo "=============================================================="
