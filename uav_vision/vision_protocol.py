@@ -181,6 +181,41 @@ def _ransac_consensus(
     return estimate, best_inliers
 
 
+# The board's own power and thermal complaints, straight from the firmware.
+#
+# This exists because on 2026-10-03 a board browned out for four hours and nothing showed it. The
+# kernel had been logging "Undervoltage detected!" since 21:56; the station, the operator and the
+# logs we were reading all said the aircraft was healthy, and at 01:58 it stopped mid-line and
+# never came back. The cause was found the next day by moving its SD card to another board and
+# reading its journal. In the air that is a drone that disappears with no explanation.
+#
+# The file is read rather than vcgencmd called: 3 ms against spawning a process every report.
+# The firmware returns a bitmask, and the two halves mean different things. The low bits are NOW:
+# acting on it means the aircraft is in trouble this second. The high bits are EVER SINCE BOOT:
+# they stay set after the dip passes, which is what makes them useful on the ground, because the
+# dips are brief and nobody is watching at that moment.
+THROTTLED = "/sys/devices/platform/soc/soc:firmware/get_throttled"
+BITS_AHORA = (("bajo_voltaje", 0x1), ("frecuencia_limitada", 0x2),
+              ("acelerador", 0x4), ("limite_termico", 0x8))
+BITS_ALGUNA_VEZ = (("bajo_voltaje", 0x10000), ("frecuencia_limitada", 0x20000),
+                   ("acelerador", 0x40000), ("limite_termico", 0x80000))
+
+
+def salud_electrica(ruta: str = THROTTLED) -> Optional[dict]:
+    """What the firmware says about power and heat, or None where there is no such firmware.
+
+    None is not a failure: a laptop running the replay has no Raspberry firmware to ask, and a
+    station that drew a warning from a missing file would cry wolf on every desk run.
+    """
+    try:
+        with open(ruta) as fh:
+            crudo = int(fh.read().strip(), 0)
+    except Exception:
+        return None
+    return {"crudo": crudo,
+            "ahora": [n for n, b in BITS_AHORA if crudo & b],
+            "alguna_vez": [n for n, b in BITS_ALGUNA_VEZ if crudo & b]}
+
 class UavApiYaw:
     """
     Yaw source for the real drone: polls the uav_api service on localhost.
@@ -1005,6 +1040,10 @@ class VisionProtocol(IProtocol):
                     round(float(self._position[1]), 2),
                     round(float(self._position[2]), 2)] if self._position is not None else None,
             "buscando": self._estado_busqueda(),
+            # Lo que la propia placa dice de su corriente y su temperatura. Va en cada
+            # reporte y no en uno de cada diez: una caida de tension dura un instante y el
+            # reporte siguiente puede no existir.
+            "salud": salud_electrica(),
             "pois": pois,
         }
         self.provider.send_communication_command(

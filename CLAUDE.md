@@ -38,6 +38,7 @@ python tests/test_misiones_operador.py   # a mission the operator acts on carrie
 python tests/test_reiniciar.py    # the clear that reaches the aircraft, and what it keeps
 python tests/test_veredicto_dirigido.py  # the operator's "not it" reaches each drone in its own frame
 python tests/test_volar.py        # the flight-day command refuses to say ready on a silent drone
+python tests/test_salud_electrica.py  # a board browning out warns on the station instead of vanishing
 python demo/demo.py --sin-mapa   # the flight-3 replay: must print 2.39 m
 ```
 

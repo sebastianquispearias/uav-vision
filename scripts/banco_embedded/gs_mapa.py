@@ -267,6 +267,12 @@ def ficha(ahora, mensaje):
         'fps_real': mensaje.get('fps_real'),
         'slots_perdidos': mensaje.get('slots_perdidos'),
         'slots_perdidos_total': mensaje.get('slots_perdidos_total'),
+        # Lo que la placa dice de su propia corriente. Se guarda junto a fps_real y
+        # slots_perdidos porque es lo mismo: salud del avion, no hallazgos. El 3oct una placa
+        # estuvo cuatro horas con bajo voltaje y nada en esta pantalla lo mostraba; murio a mitad
+        # de una linea de log y la causa se encontro al dia siguiente, leyendo su tarjeta desde
+        # otra placa. En el aire eso es un dron que desaparece sin explicacion.
+        'salud': mensaje.get('salud'),
         # What the camera is really searching for, and whether it took the last order. The
         # station's own record of the request says nothing about a drone out of range.
         'buscando': mensaje.get('buscando'),
@@ -1549,7 +1555,22 @@ async function refrescar() {
       : (vivo ? `drone live (${edad.toFixed(0)} s ago)`
               : `no signal for ${edad.toFixed(0)} s`);
     const al = document.getElementById('alarma');
-    if (estado.desacuerdo) {
+    // La corriente va PRIMERO, antes que el origen, porque es lo unico en esta pantalla que
+    // predice que una aeronave va a desaparecer. El 3oct una placa alimentada por bateria estuvo
+    // cuatro horas avisando de bajo voltaje en su propio kernel; nada aqui lo mostraba, y murio a
+    // mitad de una linea. "alguna vez" y no solo "ahora": una caida de tension dura un instante y
+    // el bit de ahora ya se apago cuando el operador mira.
+    const flacos = Object.entries(estado.drones || {})
+      .filter(([, d]) => d.salud && (d.salud.alguna_vez || []).length)
+      .map(([id, d]) => {
+        const ahora = (d.salud.ahora || []).length ? ' AHORA MISMO' : '';
+        return `drone ${id}: ${d.salud.alguna_vez.join(', ')}${ahora}`;
+      });
+    if (flacos.length) {
+      al.textContent = 'POWER: ' + flacos.join(' \u00b7 ')
+        + ' \u00b7 a board that browns out does not warn, it disappears. Check its supply.';
+      al.style.display = 'block';
+    } else if (estado.desacuerdo) {
       // Silence here would be the expensive kind: every pin lands somewhere plausible and
       // wrong, and nothing on the page looks broken.
       al.textContent = `The origin the drone declares is ${estado.desacuerdo} m from the one `
