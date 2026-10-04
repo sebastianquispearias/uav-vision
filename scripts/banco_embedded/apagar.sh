@@ -14,10 +14,25 @@ set -u
 SSH="${SSH:-ssh}"
 [ "$#" -ge 1 ] || { echo "uso: bash $0 <usuario@placa> [usuario@placa ...]"; exit 2; }
 
+# En DOS pasos, y no por prolijidad. El apagado corta la conexion, asi que ssh devuelve error
+# aunque haya funcionado: su estado no sirve para saber si la orden llego. El que si sirve es el
+# del primer paso, que para la mision y vuelve normalmente.
+# Y se recuerda a cuales llego, porque sin eso una placa cuyo ssh fallo y que ademas no contesta
+# al ping salia informada como "APAGADA, ya se puede desenchufar" y no lo estaba: podia estar
+# colgada, con el sistema vivo y escribiendo. Desenchufar una Raspberry asi es la forma mas facil
+# de romper una SD sana, y el 3oct esa era justo la tarjeta cuya salud acabábamos de probar.
+ORDENADAS=""
 for host in "$@"; do
     printf '%s: ' "$host"
-    $SSH -n "$host" 'curl -s -m 15 -X POST localhost:8100/mission/stop | cut -c1-48; echo; \
-        sleep 2; sudo sync; sudo shutdown -h now' 2>&1 | head -1
+    if salida="$($SSH -n "$host" 'curl -s -m 15 -X POST localhost:8100/mission/stop | cut -c1-48; sleep 2; sudo sync' 2>&1)"; then
+        echo "$salida" | head -1
+        ORDENADAS="$ORDENADAS $host"
+        # Y ahora si el apagado, cuyo estado se ignora a proposito.
+        $SSH -n "$host" 'sudo shutdown -h now' > /dev/null 2>&1 || true
+    else
+        echo "$(echo "$salida" | head -1)"
+        echo "   NO SE LE PUDO DAR LA ORDEN. No la desenchufes sin mirar su LED verde."
+    fi
 done
 
 echo "-- esperando a que dejen de responder"
@@ -34,9 +49,14 @@ done
 for host in "$@"; do
     ip="${host#*@}"
     printf '  %s: ' "$ip"
-    if ping -n 1 -w 1500 "$ip" > /dev/null 2>&1 || ping -c 1 -W 2 "$ip" > /dev/null 2>&1; then
+    # El TEXTO del ping y no su codigo de salida: en Windows ping devuelve EXITO cuando la
+    # respuesta es "Destination host unreachable", que la manda la propia laptop y no el destino.
+    if ping -n 1 -w 1500 "$ip" 2>&1 | grep -qiE "bytes=|TTL="; then
         echo "TODAVIA responde, esperar unos segundos mas antes de desenchufar"
+    elif echo "$ORDENADAS" | grep -q -- "$host"; then
+        echo "APAGADA limpiamente, ya se puede desenchufar"
     else
-        echo "APAGADA, ya se puede desenchufar"
+        echo "sin red Y SIN ORDEN DE APAGADO: puede estar viva y colgada."
+        echo "        Mira su LED verde: si parpadea, sigue escribiendo en la SD. No la saques."
     fi
 done
