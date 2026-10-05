@@ -16,3 +16,42 @@ dron = ["ultralytics", "boxmot"]
 
 [tool.setuptools.packages.find]
 include = ["uav_vision*"]
+
+# Las reglas estan elegidas, no tomadas por omision, y la eleccion se defiende asi: se activa lo
+# que atrapa un ERROR y se deja fuera lo que es una PREFERENCIA que este repo ya tomo.
+#
+# Fuera a proposito, con el numero de avisos que daria cada una medido el 4oct:
+#   UP031 (732)  formateo con % en vez de f-strings. Es una preferencia, y el repo usa % en todas
+#                sus 732 apariciones: cambiarlas seria un diff de mil lineas sin un bug detras.
+#   UP006 (222), UP045 (75), UP035 (34), FA100 (5)   typing.Dict en vez de dict. El paquete
+#                declara requires-python >= 3.9 y usa `from __future__ import annotations`, asi
+#                que las dos formas son correctas.
+#   SIM115 (97)  open() sin context manager, casi todo en scripts de medicion de un solo uso.
+#   BLE001 (63)  except Exception a secas. En varios sitios es la decision: una linea mala no
+#                puede matar al worker de la segunda opinion, y eso esta documentado donde pasa.
+#   S110 (8), DTZ005 (11), PLW1510 (11)  mismo caso: deliberado y documentado.
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+extend-exclude = [".history", ".vscode", "__pycache__", "venv"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "I", "RUF100", "UP009", "PIE", "C4"]
+ignore = [
+    "E741",     # nombres de una letra: en la geometria, x/y/d/R son los nombres del dominio
+    "B008",     # llamada en un valor por omision: CameraConfig es un dataclass congelado
+    "B905",     # zip() sin strict=: strict llego en 3.10 y el objetivo es 3.9
+    "E402",     # import que no esta arriba: ESTRUCTURAL en este repo. Los gates y los scripts
+                # tienen que meter la raiz en sys.path ANTES de importar uav_vision, porque al
+                # clonar el paquete no esta instalado. Son 85 casos y ninguno es un descuido.
+    "E701",     # guarda en una linea: "if px is None: continue". Son 6 casos y los 6 se leen
+    "E702",     # mejor asi que en tres lineas. E702 son 27 pares que se leen juntos, casi todos
+                # en los gates: "a = poi(...); a['radius_m'] = x". Arreglarlos seria churn que
+                # EMPEORA la lectura, que es lo contrario de para que esta el linter.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Los gates son guiones: imprimen sus numeros y terminan en TODO OK. Un import que solo esta para
+# comprobar que se puede importar es el gate mismo, no un descuido.
+"tests/*" = ["F401"]
+"examples/*" = ["F401"]

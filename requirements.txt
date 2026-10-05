@@ -1,0 +1,33 @@
+# What this repository needs, measured from the imports of its own source.
+#
+# The package itself (uav_vision/) needs only numpy. Everything below it is needed by the
+# scripts, the tests and the ground station, which is why they are not dependencies of the
+# package: `pip install -e .` installs the library, and this file installs the workbench.
+#
+#   pip install -r requirements.txt
+#
+# THE GrADyS RUNTIME IS A SEPARATE PUBLIC REPOSITORY and it is not on PyPI. Without it,
+# vision_protocol.py cannot be imported, so demo/demo.py and 12 of the 50 tests do not run.
+# It is listed here because the first command in the README depends on it.
+numpy>=1.24
+opencv-python>=4.8
+scipy>=1.10
+
+# The GrADyS embedded runtime: the protocol interface, and the message types a protocol sends.
+gradys_embedded @ git+https://github.com/Project-GrADyS/gradys-embedded.git
+
+# ---------------------------------------------------------------------------------------------
+# NOT HERE ON PURPOSE, and what stops working without each one:
+#
+#   ultralytics, boxmot      the detector and the tracker. Needed by OnboardCamera, which only
+#                            runs on the aircraft; `pip install -e ".[dron]"` installs them.
+#   picamera2, libcamera     the camera. They ship with Raspberry Pi OS and do not install on a
+#                            laptop at all.
+#   torch, open_clip         the CLIP second opinion of the ground station (--clip). The station
+#                            runs without it and says so.
+#   rfdetr                   the heavy detector of the ground station's second opinion
+#                            (--segunda-opinion). It lives in its own virtualenv on purpose.
+#   scikit-learn             the appearance clustering of the labelling tool.
+#   selenium, psutil         one browser test and one measuring probe.
+#
+# None of those is needed to reproduce the numbers of docs/RESULTADOS.md.
