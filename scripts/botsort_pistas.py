@@ -58,9 +58,14 @@ UMBRALES_CALIBRADOS = {"track_high_thresh": CONF_MIN, "new_track_thresh": CONF_M
 
 
 def main():
-    from boxmot.trackers.bbox.botsort import BotSort
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from uav_vision.trackers import catalogo, construir
 
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--tracker", default="botsort",
+                    help="cual de los de boxmot: %s" % ", ".join(catalogo()))
+    ap.add_argument("--hasta", type=int, default=0,
+                    help="parar tras N cuadros, para un smoke test antes de la corrida larga")
     ap.add_argument("--calibrado", action="store_true")
     ap.add_argument("--piso", type=float, default=CONF_MIN,
                     help="confidence floor of the detections fed in (default %.2f)" % CONF_MIN)
@@ -69,6 +74,10 @@ def main():
     salida = SALIDA.replace(".npz", "_calibrado.npz") if args.calibrado else SALIDA
     if args.piso != CONF_MIN:
         salida = salida.replace(".npz", "_piso%03d.npz" % round(args.piso * 100))
+    if args.tracker != "botsort":
+        salida = salida.replace("botsort_pistas", args.tracker + "_pistas")
+    if args.hasta:
+        salida = salida.replace(".npz", "_hasta%d.npz" % args.hasta)
 
     D = np.load(os.path.join(DATOS, "examen_v3_datos.npz"))
     dets_all = D["dets"]
@@ -95,9 +104,10 @@ def main():
     print(f"{n} detections | {len(aire)} airborne frames | fed at {fps:.2f} fps "
           f"-> track_buffer {buffer_frames} frames ({TRACK_BUFFER_S} s)", flush=True)
 
-    tracker = BotSort(
-        reid_model=None,
-        with_reid=True,
+    usa_apariencia = catalogo()[args.tracker]
+    tracker, honra, ignora, aprox = construir(
+        args.tracker,
+        embs_propias=usa_apariencia,
         use_cmc=False,
         track_high_thresh=umbrales["track_high_thresh"],
         track_low_thresh=0.2,
@@ -105,9 +115,16 @@ def main():
         track_buffer=buffer_frames,
         match_thresh=0.85,
     )
+    print("%s: apariencia %s | honra %d ajustes%s%s"
+          % (args.tracker, "si" if usa_apariencia else "no", len(honra),
+             " | NO RECIBE %s" % sorted(ignora) if ignora else "",
+             " | renombrados solo por rol: %s" % aprox if aprox else ""), flush=True)
 
     track = -np.ones(n, dtype=np.int64)
     t0 = time.time()
+    if args.hasta:
+        aire = aire[:args.hasta]
+        print("  SMOKE TEST: solo los primeros %d cuadros" % len(aire), flush=True)
     for k, f in enumerate(aire):
         img = cv2.imread(os.path.join(FR, "frames", f"frame_{f:04d}.jpg"))
         if img is None:
@@ -118,7 +135,8 @@ def main():
             ee = embs[idx]
         else:
             dts, ee = np.empty((0, 6), dtype=np.float32), None
-        for fila in np.asarray(tracker.update(dts, img, embs=ee)):
+        for fila in np.asarray(tracker.update(dts, img,
+                                              embs=ee if usa_apariencia else None)):
             di = int(fila[7])
             if 0 <= di < len(idx):
                 track[idx[di]] = int(fila[4])
@@ -127,11 +145,12 @@ def main():
                   f"{time.time() - t0:.0f} s", flush=True)
 
     ids, cuenta = np.unique(track[track >= 0], return_counts=True)
-    print(f"BoT-SORT: {len(ids)} tracks | {int((track >= 0).sum())}/{n} detections assigned | "
+    print(f"{args.tracker}: {len(ids)} tracks | {int((track >= 0).sum())}/{n} detections assigned | "
           f"boxes per track: median {int(np.median(cuenta))}, max {int(cuenta.max())} | "
           f"tracks with >=10 boxes: {int((cuenta >= 10).sum())}", flush=True)
     np.savez(salida, track=track, fps=fps, track_buffer=buffer_frames, conf_min=args.piso,
-             **umbrales)
+             tracker=args.tracker, honra=sorted(honra), ignora=sorted(ignora),
+             aproximados=aprox, **umbrales)
     print("saved", salida, umbrales)
 
 
