@@ -23,6 +23,14 @@ silent:
      is the condition for the flight's numbers to stay comparable.
   6. An approximate rename is DECLARED. Same role is not the same quantity, and a comparison
      that hides the difference is the quiet version of the mistake this module prevents.
+  7. A RENAME THAT RUNS IN THE OPPOSITE SENSE IS CONVERTED, not merely declared. BoT-SORT's
+     match_thresh caps a cost of 1 - IoU and boxmot's iou_threshold floors an IoU, so the same
+     number is the most permissive setting on one side and the strictest on the other. Passing
+     0.85 straight through made five trackers demand an 0.85 overlap, and a published table
+     scored one of them 0 of 7 people for it.
+  8. CAMERA-MOTION COMPENSATION REACHES FOUR DIFFERENT MECHANISMS, and what RAN is not what was
+     asked. boxmot defaults it on, two trackers honour it under a name no rename reaches, and
+     one compensates on every frame with no parameter to stop it.
 
 Needs boxmot, so on a machine without it the gate skips itself rather than failing.
 
@@ -127,7 +135,7 @@ print("  los %d ajustes llegan con su propio nombre: %s" % (len(ap), ", ".join(s
 
 print()
 print("=" * 78)
-print("6. UNA TRADUCCION APROXIMADA SE DECLARA, no se esconde")
+print("6. UN RENOMBRE QUE NO ES EXACTO SE DECLARA, no se esconde")
 print("=" * 78)
 con_aprox = {}
 for nombre in cat:
@@ -140,7 +148,7 @@ seguridades = {s for pares in TRADUCCION.values() for _, s in pares}
 assert seguridades == {"exacta", "aproximada"}, "etiquetas de seguridad inesperadas: %s" % seguridades
 for nombre, aprox in sorted(con_aprox.items()):
     print("  %-12s %s" % (nombre, ", ".join(aprox)))
-print("  %d de %d trackers reciben al menos un ajuste renombrado SOLO por rol"
+print("  %d de %d trackers reciben al menos un renombre que hay que declarar"
       % (len(con_aprox), len(cat)))
 
 print()
@@ -200,6 +208,86 @@ finally:
     T.hay_registro = original
 print("  el camino de respaldo da el MISMO tracker, y el resto se niega nombrando el motivo")
 print("  (boxmot movio sus modulos entre la version de una placa y la de la otra: por eso existe)")
+
+print()
+print("=" * 78)
+print("9. EL RENOMBRE INVERTIDO SE CONVIERTE: match_thresh y iou_threshold van al reves")
+print("=" * 78)
+# El contraste no necesita el vuelo: la regla de cada uno se evalua sobre un IoU concreto.
+# boxmot asocia con IoU > iou_threshold (stages.py:152, boost.py:196, hybrid.py:343);
+# BoT-SORT asocia con 1 - IoU <= match_thresh (matching.py:79 y :35).
+NUESTRO = 0.85
+
+
+
+def acepta_botsort(iou):
+    """BoT-SORT's rule: lap.lapjv caps the cost 1 - IoU at match_thresh (matching.py:35, :79)."""
+    return (1.0 - iou) <= NUESTRO
+
+
+def acepta_boxmot(iou, umbral):
+    """boxmot's rule everywhere else: the IoU has to EXCEED the threshold (stages.py:152)."""
+    return iou > umbral
+
+
+print("  nuestro match_thresh=%.2f, o sea que BoT-SORT asocia desde IoU >= %.2f"
+      % (NUESTRO, 1.0 - NUESTRO))
+print("  %6s | %-18s | %-22s | %-22s" % ("IoU", "BoT-SORT 0.85", "boxmot SIN convertir", "boxmot convertido"))
+discrepan = 0
+for iou in (0.9, 0.5, 0.3, 0.2, 0.1):
+    a, b, c = acepta_botsort(iou), acepta_boxmot(iou, NUESTRO), acepta_boxmot(iou, 1.0 - NUESTRO)
+    discrepan += a != b
+    print("  %6.2f | %-18s | %-22s | %-22s"
+          % (iou, "asocia" if a else "rechaza", "asocia" if b else "RECHAZA",
+             "asocia" if c else "rechaza"))
+    assert a == c, "la conversion no reproduce la regla de BoT-SORT en IoU=%.2f" % iou
+assert discrepan >= 3, (
+    "sin convertir las dos reglas coinciden, asi que este contraste no prueba nada y la "
+    "conversion no estaria justificada")
+print("  pasar 0.85 crudo cambia la decision en %d de los 5 IoU probados; convertido, en 0"
+      % discrepan)
+
+for nombre in ("ocsort", "deepocsort", "hybridsort", "boosttrack", "occluboost"):
+    t, _, _, apx = construir(nombre, embs_propias=cat[nombre], **CAL)
+    assert abs(t.iou_threshold - (1.0 - CAL["match_thresh"])) < 1e-9, (
+        "%s recibio iou_threshold=%s en vez de %s: el umbral mas permisivo de la calibracion "
+        "se convirtio en el mas estricto posible" % (nombre, t.iou_threshold, 1.0 - CAL["match_thresh"]))
+    assert any("opuesto" in a for a in apx), (
+        "%s recibe el valor convertido pero no lo declara, y una tabla no puede perderlo" % nombre)
+print("  los 5 trackers que USAN iou_threshold reciben %.2f y lo declaran"
+      % (1.0 - CAL["match_thresh"]))
+
+print()
+print("=" * 78)
+print("10. LA CMC QUE CORRE NO ES LA QUE SE PIDE, y la diferencia se lee de la instancia")
+print("=" * 78)
+from uav_vision.trackers import cmc_real
+
+estados = {}
+for nombre in cat:
+    apagado, _, _, _ = construir(nombre, embs_propias=cat[nombre], use_cmc=False,
+                                 cmc_method="sof", **CAL)
+    encendido, _, _, _ = construir(nombre, embs_propias=cat[nombre], use_cmc=True,
+                                   cmc_method="sof", **CAL)
+    estados[nombre] = (cmc_real(apagado), cmc_real(encendido))
+    print("  %-12s pedida off -> %-7s | pedida on -> %-7s" % (nombre, *estados[nombre]))
+
+conmutables = {n for n, (a, b) in estados.items() if (a, b) == ("off", "on")}
+sin_mecanismo = {n for n, (a, b) in estados.items() if (a, b) == ("ninguno", "ninguno")}
+siempre = {n for n, (a, b) in estados.items() if (a, b) == ("on", "on")}
+assert conmutables and sin_mecanismo and siempre, (
+    "el desbalance de CMC desaparecio: conmutables=%s sin_mecanismo=%s siempre=%s. Si de verdad "
+    "todos se comportan igual, esta seccion ya no prueba nada y hay que rehacerla."
+    % (sorted(conmutables), sorted(sin_mecanismo), sorted(siempre)))
+assert conmutables | sin_mecanismo | siempre == set(cat), (
+    "algun tracker no cae en ninguno de los tres grupos: %s"
+    % sorted(set(cat) - (conmutables | sin_mecanismo | siempre)))
+print("  %d conmutables (%s)" % (len(conmutables), ", ".join(sorted(conmutables))))
+print("  %d sin mecanismo (%s)" % (len(sin_mecanismo), ", ".join(sorted(sin_mecanismo))))
+print("  %d compensan SIEMPRE, no hay parametro que lo apague (%s)"
+      % (len(siempre), ", ".join(sorted(siempre))))
+print("  y 'ninguno' NO es 'off': juntarlos cuenta a un tracker sin mecanismo como prueba de")
+print("  que apagarla no hizo dano")
 
 print()
 print("TODO OK")

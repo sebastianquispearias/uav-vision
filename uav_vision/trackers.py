@@ -59,6 +59,147 @@ them as identical is the quiet version of the mistake this whole module exists t
 """
 
 
+MECANISMOS_CMC = ("use_cmc", "cmc_off", "cmc_method")
+"""The parameter names through which boxmot's trackers expose camera-motion compensation.
+
+CMC is the one setting that cannot be handled by renaming, and it is worth saying why, because
+a comparison across trackers was already published on the wrong side of this. Measured on
+boxmot 19.0.0 by walking every tracker's MRO and then reading the built instance's ``cmc``:
+
+    use_cmc        botsort, boosttrack, occluboost     a boolean, DEFAULT True
+    cmc_off        deepocsort                          the same boolean INVERTED, default False
+    cmc_method     hybridsort                          no boolean at all; the factory returns
+                                                       None for a method of None, so the method
+                                                       IS the switch
+    nothing        bytetrack, ocsort, sfsort, sam2mot  no compensation anywhere
+    nothing        strongsort                          create_cmc("ecc") hardwired in __init__
+                                                       and applied with no guard: ALWAYS ON
+
+So ``use_cmc=False`` passed blindly reaches three of the ten. On deepocsort and hybridsort it
+falls into 'ignored' while their compensation keeps running, and on strongsort there is no
+parameter to reach at all. A table built that way says "no tracker used CMC" while three of its
+rows did, which is not a milder version of the error: CMC is the single biggest confounder
+measured on this flight, worth 36 track ids against 114 and two people on the scoreboard.
+
+The defaults being ON is the other half. A tracker that silently ignores the request is not left
+in the requested state, it is left in boxmot's, which is the opposite of what was asked.
+"""
+
+
+def _resolver_cmc(acepta: List[str], pedido: Any, metodo: Any, traducir: bool = True):
+    """Camera-motion compensation translated to whichever mechanism the target actually has.
+
+    Returns (aplicados, ignorados, notas). The notes are renames that CHANGE THE VALUE and not
+    only the spelling, which is why they do not live in TRADUCCION: inverting a boolean or
+    turning a switch into a method name cannot be expressed as a pair of names, and the safety
+    labels there would not describe it.
+
+    traducir off means no renaming here either, so a tracker that spells it differently receives
+    nothing and the request lands in 'ignored'. That is what the flag is for: it measures how
+    much of the calibration survives WITHOUT the adapter, and a CMC rename slipping through
+    would flatter that measurement.
+    """
+    aplicados: Dict[str, Any] = {}
+    ignorados: Dict[str, Any] = {}
+    notas: List[str] = []
+
+    if not traducir:
+        for clave, valor in (("use_cmc", pedido), ("cmc_method", metodo)):
+            if valor is None:
+                continue
+            (aplicados if clave in acepta else ignorados)[clave] = valor
+        return aplicados, ignorados, notas
+
+    if "use_cmc" in acepta:
+        if pedido is not None:
+            aplicados["use_cmc"] = bool(pedido)
+        if metodo is not None and "cmc_method" in acepta:
+            aplicados["cmc_method"] = metodo
+        elif metodo is not None:
+            ignorados["cmc_method"] = metodo
+        return aplicados, ignorados, notas
+
+    if "cmc_off" in acepta:
+        if pedido is not None:
+            aplicados["cmc_off"] = not bool(pedido)
+            notas.append("use_cmc=%s->cmc_off=%s (invertida)" % (bool(pedido), not bool(pedido)))
+        if metodo is not None:
+            ignorados["cmc_method"] = metodo
+        return aplicados, ignorados, notas
+
+    if "cmc_method" in acepta:
+        if pedido is False:
+            aplicados["cmc_method"] = None
+            notas.append("use_cmc=False->cmc_method=None (el metodo ES el interruptor)")
+        elif metodo is not None:
+            aplicados["cmc_method"] = metodo
+        return aplicados, ignorados, notas
+
+    if pedido is not None:
+        ignorados["use_cmc"] = pedido
+    if metodo is not None:
+        ignorados["cmc_method"] = metodo
+    return aplicados, ignorados, notas
+
+
+def cmc_real(tracker: Any) -> str:
+    """Whether camera-motion compensation is running on a BUILT tracker, read off the instance.
+
+    This exists because what was asked for and what is running are different questions, and the
+    gap between them is invisible in the settings report. A tracker whose request landed in
+    'ignored' is not therefore uncompensated: strongsort ignores every CMC setting there is and
+    compensates on every frame.
+
+    The signal is boxmot's own ``self.cmc``, which its base helper checks for None before doing
+    any work, so it is the same thing the library tests. Three answers, and the third is not the
+    second: 'ninguno' means the tracker has no compensation to run, 'off' means it has one and
+    it is disabled. Collapsing those two is how a tracker with no mechanism ends up counted as
+    evidence that disabling it was harmless.
+    """
+    if not hasattr(tracker, "cmc"):
+        return "ninguno"
+    return "on" if tracker.cmc is not None else "off"
+
+
+CONVERSIONES: Dict[Tuple[str, str], Tuple[Any, str]] = {
+    ("match_thresh", "iou_threshold"): (lambda v: round(1.0 - v, 10), "exacta"),
+}
+"""The renames that must also change the VALUE, because the two settings run in opposite senses.
+
+There is one, and finding it cost a whole published table. BoT-SORT's match_thresh is a limit on
+a COST and boxmot's iou_threshold is a floor on an IoU, so the same number means opposite things.
+Traced in boxmot 19.0.0:
+
+    matching.py:79   cost_matrix = 1 - ious          BoT-SORT associates on 1 - IoU
+    matching.py:35   lap.lapjv(..., cost_limit=thresh)   accepts cost <= match_thresh
+                     => a match needs IoU >= 1 - match_thresh
+    stages.py:152    if iou_matrix.max(...) <= threshold: return   no match at all
+    boost.py:196     conf[iou_matrix < iou_threshold] = 0
+    hybrid.py:343    a = (iou_matrix > iou_threshold).astype(np.int32)
+    hybrid.py:363    if iou_matrix[m[0], m[1]] < iou_threshold: continue
+    occluboost.py:956  cost[iou < self.iou_threshold] = 1e6
+                     => a match needs IoU > iou_threshold
+
+So match_thresh = 0.85, which is the most PERMISSIVE value this calibration carries (any pair
+overlapping by 0.15 may associate), arrived at ocsort, deepocsort, boosttrack, occluboost and
+hybridsort as the STRICTEST value possible: boxes had to overlap by 0.85 to be the same track.
+For a person a few dozen pixels tall seen from 25 m, that essentially never happens. Measured on
+400 frames of the 02-ago flight, ocsort went from 6 detections with a track id to 239 by undoing
+nothing but this, and to 487 of 764 once its output gate was also accounted for -- against
+BoT-SORT's 454 on the same frames. The first nine-tracker table scored that configuration 0 of 7
+people and would have published "OC-SORT does not work for this case".
+
+The conversion is 1 - v and it is DERIVED, not fitted: it is the value at which both expressions
+admit the same pairs. The labels stay honest about the one gap left -- BoT-SORT's bound is
+inclusive and boxmot's is strict, so a pair at exactly IoU = 1 - match_thresh is associated by
+one and refused by the other, which is a single point and not a tuning difference.
+
+TRADUCCION stays a table of NAMES on purpose. A conversion cannot be expressed as a pair of
+names, and a safety label on a rename would not describe it, so it lives here where a reader
+looking for "what did the adapter change" finds it in one place with its derivation.
+"""
+
+
 RUTAS_DE_RESPALDO = {
     "botsort": ("boxmot.trackers.bbox.botsort", "boxmot.trackers.box.botsort",
                 "boxmot", "BotSort"),
@@ -183,6 +324,14 @@ def construir(nombre: str, embs_propias: bool = True, traducir: bool = True,
     acepta = _acepta(clase)
     aplicados: Dict[str, Any] = {}
     ignorados: Dict[str, Any] = {}
+
+    # CMC va aparte del lazo porque es el unico ajuste cuyo destino cambia el VALOR y no solo
+    # el nombre, y porque dos trackers lo honran bajo un nombre que ningun renombre alcanza.
+    cmc_ap, cmc_ig, cmc_notas = _resolver_cmc(
+        acepta, ajustes.pop("use_cmc", None), ajustes.pop("cmc_method", None), traducir)
+    aplicados.update(cmc_ap)
+    ignorados.update(cmc_ig)
+
     for clave, valor in ajustes.items():
         if clave in acepta:
             aplicados[clave] = valor
@@ -194,11 +343,15 @@ def construir(nombre: str, embs_propias: bool = True, traducir: bool = True,
             ignorados[clave] = valor
         else:
             otro, seguridad = destino
-            aplicados[otro] = valor
-            if seguridad != "exacta":
+            convertir, seguridad = CONVERSIONES.get((clave, otro), (None, seguridad))
+            aplicados[otro] = convertir(valor) if convertir else valor
+            if convertir:
+                aplicados.setdefault("_aproximados", []).append(
+                    "%s=%s->%s=%s (sentido opuesto)" % (clave, valor, otro, aplicados[otro]))
+            elif seguridad != "exacta":
                 aplicados.setdefault("_aproximados", []).append("%s->%s" % (clave, otro))
 
-    aproximados = aplicados.pop("_aproximados", [])
+    aproximados = aplicados.pop("_aproximados", []) + cmc_notas
 
     # El cableado del adaptador, aparte de la calibracion del llamador: no se cuenta como
     # "honrado" porque nadie lo pidio. Un informe que los sumara diria "7 de 5" y el numero
