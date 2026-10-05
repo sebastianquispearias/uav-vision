@@ -2,10 +2,19 @@
 
 The replay stands in for the tracker with nearest-centre continuity, which splits this flight
 into 614 short tracks. Scoring identity against that would score the stand-in, not the system.
-This runs the tracker the camera flies -- boxmot's BotSort, configured exactly as
+This runs the tracker the camera flies -- boxmot's BotSort, configured as
 ``OnboardCamera._build_tracker`` builds it for the flight mission (appearance on, camera-motion
-compensation off, an 8 s buffer) -- over the frames the chain processed, and stores one track id
-per detection, aligned row for row with ``examen_v3_datos.npz`` filtered at conf >= 0.25.
+compensation ON through the 'sof' method, an 8 s buffer) -- over the frames the chain processed,
+and stores one track id per detection, aligned row for row with ``examen_v3_datos.npz`` filtered
+at conf >= 0.25.
+
+THE CMC DEFAULT IS ON AND THAT IS NOT A PREFERENCE. An earlier version of this file hardwired
+``use_cmc=False`` while claiming in this same paragraph to configure the tracker exactly as the
+flight does, and the flight has it on (``camera.py``: ``use_cmc=self.compensate_motion`` with
+``compensate_motion: bool = True``, ``cmc_method="sof"``). That one line is why the nine-tracker
+table scored BoT-SORT at 3 of 7 people while the repository's own front page says 5 of 7: without
+compensation the same 2637 detections carry 114 track ids instead of 36, 852 of them get an id
+instead of 1608, and two people fall off the scoreboard. --cmc=off still reproduces that run.
 
 Only the processed frames, never every recorded one. The camera recorded 8.7 frames per second
 and the chain detected on roughly one in five; feeding the frames in between hands the tracker
@@ -52,6 +61,7 @@ DATOS = os.path.join(LAC, "uav_vision", "demo", "data")
 FR = os.path.join(LAC, "drone-geolocation", "data", "flight_02ago", "20260802_133309")
 SALIDA = os.path.join(LAC, "drone-geolocation", "entrenamiento", "botsort_pistas_02ago.npz")
 UMBRALES_VUELO = {"track_high_thresh": 0.35, "new_track_thresh": 0.4}
+CMC_METODO = "sof"
 CONF_MIN = 0.25
 TRACK_BUFFER_S = 8.0
 UMBRALES_CALIBRADOS = {"track_high_thresh": CONF_MIN, "new_track_thresh": CONF_MIN}
@@ -59,13 +69,17 @@ UMBRALES_CALIBRADOS = {"track_high_thresh": CONF_MIN, "new_track_thresh": CONF_M
 
 def main():
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from uav_vision.trackers import catalogo, construir
+    from uav_vision.trackers import catalogo, cmc_real, construir
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tracker", default="botsort",
                     help="cual de los de boxmot: %s" % ", ".join(catalogo()))
     ap.add_argument("--hasta", type=int, default=0,
                     help="parar tras N cuadros, para un smoke test antes de la corrida larga")
+    ap.add_argument("--cmc", choices=("on", "off"), default="on",
+                    help="camera-motion compensation, as the flight has it (default on, '%s'). "
+                         "'off' is the state the preliminary nine-tracker table ran in."
+                         % CMC_METODO)
     ap.add_argument("--calibrado", action="store_true")
     ap.add_argument("--piso", type=float, default=CONF_MIN,
                     help="confidence floor of the detections fed in (default %.2f)" % CONF_MIN)
@@ -76,6 +90,7 @@ def main():
         salida = salida.replace(".npz", "_piso%03d.npz" % round(args.piso * 100))
     if args.tracker != "botsort":
         salida = salida.replace("botsort_pistas", args.tracker + "_pistas")
+    salida = salida.replace(".npz", "_cmc%s.npz" % args.cmc)
     if args.hasta:
         salida = salida.replace(".npz", "_hasta%d.npz" % args.hasta)
 
@@ -108,17 +123,25 @@ def main():
     tracker, honra, ignora, aprox = construir(
         args.tracker,
         embs_propias=usa_apariencia,
-        use_cmc=False,
+        use_cmc=(args.cmc == "on"),
+        cmc_method=CMC_METODO,
         track_high_thresh=umbrales["track_high_thresh"],
         track_low_thresh=0.2,
         new_track_thresh=umbrales["new_track_thresh"],
         track_buffer=buffer_frames,
         match_thresh=0.85,
     )
-    print("%s: apariencia %s | honra %d ajustes%s%s"
-          % (args.tracker, "si" if usa_apariencia else "no", len(honra),
+    # Lo PEDIDO y lo que QUEDO CORRIENDO son dos preguntas, y la tabla preliminar las
+    # confundio: strongsort ignora todo ajuste de CMC y compensa en cada cuadro igual.
+    real = cmc_real(tracker)
+    print("%s: apariencia %s | CMC pedida %s -> corriendo %s | honra %d ajustes%s%s"
+          % (args.tracker, "si" if usa_apariencia else "no", args.cmc, real.upper(), len(honra),
              " | NO RECIBE %s" % sorted(ignora) if ignora else "",
-             " | renombrados solo por rol: %s" % aprox if aprox else ""), flush=True)
+             " | renombrados cambiando el valor o solo el rol: %s" % aprox if aprox else ""),
+          flush=True)
+    if real != args.cmc and real != "ninguno":
+        print("  OJO: %s corre con CMC %s aunque se pidio %s, y no hay parametro para cambiarlo"
+              % (args.tracker, real.upper(), args.cmc.upper()), flush=True)
 
     track = -np.ones(n, dtype=np.int64)
     t0 = time.time()
@@ -150,7 +173,8 @@ def main():
           f"tracks with >=10 boxes: {int((cuenta >= 10).sum())}", flush=True)
     np.savez(salida, track=track, fps=fps, track_buffer=buffer_frames, conf_min=args.piso,
              tracker=args.tracker, honra=sorted(honra), ignora=sorted(ignora),
-             aproximados=aprox, **umbrales)
+             aproximados=aprox, cmc_pedida=args.cmc, cmc_real=real, cmc_method=CMC_METODO,
+             **umbrales)
     print("saved", salida, umbrales)
 
 
