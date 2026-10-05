@@ -26,12 +26,27 @@ Contract of detect(pos, yaw):
         - 'track_id': stable integer identity assigned by the tracker. Present only when the
           camera runs one. The identity layer (identity.py) requires it.
 
+CONSTANTS THAT ARE DECISIONS
+    EMB_DIST_OBJETIVO
+        Appearance distance under which a box the detector doubted is kept because it looks
+        like the target the operator pointed at. No weight is retrained and nothing is adapted:
+        the template is the embedding of the crop the operator clicked, so switching this off
+        returns the system to exactly what it was. THE NUMBER IS NOT SAFE YET, for the same
+        reason EMB_DIST_REUNE is not: it was chosen by looking at the stretch it is judged on,
+        so the gate stays shut unless a caller asks for it by passing a distance.
+
+    BANDA_BAJA
+        Floor of the BYTE band: the lowest score the detector is asked for when a tracker is
+        running. It is BoT-SORT's own track_low_thresh, because a box under the tracker's floor
+        is discarded before association, so asking for it is paying the appearance model for
+        something nobody will look at.
+
 Design notes and measured values behind the defaults are collected in NOTES.md.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -50,27 +65,8 @@ def dentro_del_foco(det, foco) -> bool:
             and abs(det["py"] - foco["cy"]) <= foco["radio"])
 
 
-# Appearance distance under which a box the detector doubted is kept because it looks like the
-# target the operator pointed at. Measured over 773 frames of the 02ago mission (2746-3700),
-# 1673 boxes of people and 484 of the target, by keeping the boxes scored between 0.10 and 0.25
-# that today are thrown away:
-#     only conf >= 0.25, as it flies      target 91.1 %   all 48.3 %   precision 57.9 %
-#     + the doubtful ones that LOOK alike target 94.4 %   all 50.1 %   precision 55.6 %   <- 0.85
-#     the same at 1.00                    target 97.7 %   all 52.5 %   precision 52.3 %
-#     the same at 1.20                    target 97.7 %   all 61.1 %   precision 40.3 %
-# No weight is retrained and nothing is adapted: the template is the embedding of the crop the
-# operator clicked, so switching this off returns the system to exactly what it was.
-#
-# THE NUMBER IS NOT SAFE YET, FOR THE SAME REASON EMB_DIST_REUNE IS NOT: it was chosen by looking
-# at the stretch it is judged on. It has to be re-chosen on the 01ago flights before it can be
-# defended, and until then the gate stays off unless a caller asks for it by passing a distance.
 EMB_DIST_OBJETIVO = 0.85
 
-# Floor of the BYTE band: the lowest score the detector is asked for when a tracker is running.
-# It is 0.2 because that is BoT-SORT's own track_low_thresh, and a box under the tracker's floor is
-# discarded before association, so asking for it is paying OSNet (~33 ms a box) for something
-# nobody will look at. Measured on the 02ago flight: of 2443 boxes between 0.10 and 0.20, exactly
-# zero ever received a track id; between 0.20 and 0.25, 30 of 628 did.
 BANDA_BAJA = 0.2
 
 
@@ -105,8 +101,8 @@ def solo_confirmadas(detections, threshold, foco=None):
     is far more likely to be them than to be a new invention, and a false one lands where the
     tracker will attach it to the track that is already running instead of opening a point of
     its own. Measured over the balcony window of the 02ago flight, lowering the threshold to
-    0.10 inside it takes recall on the target from 43.9 % to 60.7 % at no computing cost at
-    all: the detector had already scored those boxes and was throwing them away.
+    0.10 inside it costs no computing at all, because the detector had already scored those
+    boxes and was throwing them away; what it buys and what it costs are in NOTES.md.
 
     The second exception does not look at position at all: a box the detector doubted is kept if
     its appearance matches the template of the target the operator pointed at. See
@@ -144,16 +140,8 @@ class SimulatedCamera:
         self.pitch_deg = pitch_deg
         self.camera = camera
         self.rng = rng if rng is not None else np.random.default_rng()
-        # A real detector does not return the exact pixel. Pixel noise follows
-        # sigma = C / confidence, so low-confidence detections are noisier. Disable only for
-        # pure-geometry tests: without noise the fusion stage has nothing to reject and
-        # simulation results become meaningless.
         self.pixel_noise = pixel_noise
-        # Noise model name, resolved by confidence.confidence_to_pixel_sigma_model.
         self.noise_model = noise_model
-        # What the simulated target is. The real camera always names its detections, so a
-        # simulated one that stayed silent would let class-dependent code pass in simulation
-        # and fail in the air -- which is the one thing this pair of classes exists to prevent.
         self.cls = cls
 
     def detect(self, pos: Sequence[float], yaw: float) -> List[Detection]:
@@ -167,7 +155,7 @@ class SimulatedCamera:
             self.camera.image_height,
             self.camera.principal_point,
         )
-        if pixel is None:  # out of frame or behind the camera
+        if pixel is None:
             return []
 
         conf = simulate_confidence(
@@ -209,21 +197,64 @@ class OnboardCamera:
           the declared rate makes a buffer duration meaningful.
         - crops: attach a small JPEG of each detection ('crop' field), for the ground
           station to verify what the onboard detector could not settle by itself.
+
+    CLASES_PERSONA is the set of names that count as a person. Detection models trained on
+    different datasets spell the class differently (COCO: 'person'; VisDrone: 'pedestrian',
+    'people'), and filtering on a single name silently drops every detection when the model
+    changes.
+
+    The constructor arguments that are not self-explanatory:
+
+    low_band
+        The BYTE band. With a tracker running, the detector is asked for boxes down to this
+        score, but only those the tracker attached to an existing track are reported. A person
+        the detector merely doubted keeps their track alive; a box out of nowhere does not
+        become a target, because new_track_thresh still guards that. None disables the band.
+
+    rot180
+        When the camera is mounted upside-down the ISP un-flips the image at capture time
+        (hflip+vflip). That remapping moves the calibrated principal point, so the effective
+        config must be the reflected one; see CameraConfig.rotated_180().
+
+    compensate_motion
+        Camera-motion compensation. The drone moves, so every box shifts in the image between
+        frames and the tracker's prediction misses the next box unless the background motion is
+        removed first. On by default, and both what it recovers and what it costs are measured
+        in NOTES.md.
+
+    startup_pause_s
+        Seconds to sit idle between the heavy start-up steps. Default 0, which is no change for
+        anything on mains. On battery it is the only lever software has against a board that
+        dies while opening the camera and loading the models back to back: what kills it is the
+        step, not the level, and this pulls the steps apart.
+
+    crops, crop_side_px, crop_quality, crop_margin
+        A crop is the cheapest thing the drone can say that the ground can check. The link
+        budget is the constraint the whole architecture was built around, since video off the
+        drone is not affordable, so these are sized in kilobytes and not megabytes: one small
+        packet per detection rather than a stream. The margin is there because a box drawn
+        tight on a person at altitude cuts off the context that makes the verifier's job
+        possible, and it buys that back for almost no bytes.
+
+    tile_every, tile_side, tile_conf
+        A second pass over tiles of the frame at native resolution, every Nth frame; 0 turns it
+        off. The frame is downscaled to the model's input before inference, so a person at the
+        size limit disappears, and a tiled pass skips that reduction. It costs six times the
+        inference, which is why it does not run on every frame and does not need to: the
+        identity layer asks for a tenth of the frames. NOTES.md has what it recovers.
+
+    The window the operator's verdict opens lives in self.foco, in pixels of the current frame,
+    or None. It is set once per frame by whoever knows the geometry, which is the protocol,
+    because it can project the target's ground position; never by the camera, which has no idea
+    where anything is.
     """
 
-    # Class names that count as a person. Detection models trained on different datasets name
-    # the class differently (COCO: 'person'; VisDrone: 'pedestrian', 'people'); filtering on a
-    # single name silently drops every detection when the model changes.
     CLASES_PERSONA = frozenset({"person", "pedestrian", "people"})
 
     def __init__(
         self,
         model: str,
         threshold: float = 0.3,
-        # The BYTE band. With a tracker running, the detector is asked for boxes down to this
-        # score, but only those the tracker attached to an existing track are reported. A person
-        # the detector merely doubted keeps her track alive; a box out of nowhere does not become
-        # a target, because new_track_thresh still guards that. None disables the band.
         low_band: Optional[float] = BANDA_BAJA,
         classes: Optional[Sequence[str]] = None,
         camera: CameraConfig = ARDUCAM_MODULE_3,
@@ -243,14 +274,6 @@ class OnboardCamera:
         tile_conf: float = 0.55,
     ) -> None:
         self.model = model
-        # A second pass over tiles of the frame at native resolution, every Nth frame; 0 turns it off.
-        # The frame is downscaled to the model's input before inference, so a person 55 px tall arrives
-        # as 28 and the ones already at the limit disappear. Slicing skips that reduction. It costs six
-        # times the inference, which is why it is not run on every frame and does not need to be: the
-        # identity layer asks for eleven sightings in thirty six seconds, a tenth of the frames, so one
-        # tiled pass in five keeps the average near the budget while the cheap pass still runs always.
-        # Measured on the 02ago flight with the tile threshold chosen on the 01ago flights: recall
-        # 55.0 -> 57.3 % overall and 39.5 -> 42.4 % where the drone is high, at the same precision.
         self.tile_every = int(tile_every)
         self.tile_side = int(tile_side)
         self.tile_conf = float(tile_conf)
@@ -258,14 +281,8 @@ class OnboardCamera:
         self._ultimo_frame = None
         self.threshold = threshold
         self.low_band = low_band
-        # The window the operator's verdict opens, in pixels of the current frame, or None. It is
-        # set once per frame by whoever knows the geometry -- the protocol, which can project the
-        # target's ground position -- and never by the camera, which has no idea where anything is.
         self.foco = None
         self.classes = frozenset(classes) if classes is not None else self.CLASES_PERSONA
-        # When the camera is mounted upside-down the ISP un-flips the image at capture time
-        # (hflip+vflip). That remapping moves the calibrated principal point, so the effective
-        # config must be the reflected one; see CameraConfig.rotated_180().
         self.camera = camera.rotated_180() if rot180 else camera
         self.rot180 = rot180
         self.reid_model = reid_model
@@ -276,38 +293,16 @@ class OnboardCamera:
         self.rastreador_habilitado = tracker
         self.fps = fps
         self.track_buffer_s = track_buffer_s
-        # Camera-motion compensation: the drone moves, so every box shifts in the image between frames
-        # and the tracker's prediction misses the next box unless the background motion is removed
-        # first. Measured with the flight's tracker settings and hand labels: without it the standing
-        # operator got 32 track ids in the labelled windows of flight 02ago, with sparse optical flow
-        # 5; on flights 2a / 2b of another day the ids over people halved (10 -> 6, 22 -> 11) with no
-        # non-person box absorbed. Cost on the Raspberry Pi 5 at boxmot's default 0.15 image scale:
-        # +8.1 ms median per frame (1.0 -> 9.1 ms), about 4 % of the chain's 206 ms, no throttling.
         self.compensate_motion = compensate_motion
-        # A crop is the cheapest thing the drone can say that the ground can check. The link
-        # budget is the constraint the whole architecture was built around -- video off the
-        # drone is not affordable -- so these are sized in kilobytes, not megabytes: a 128 px
-        # JPEG at quality 70 lands around 2-5 KB, which is one small packet per detection
-        # rather than a stream.
-        # Seconds to sit idle between the heavy start-up steps. Default 0: no change for
-        # anything on mains. On battery it is the only lever software has against the failure
-        # measured on 2026-08-25 -- the board died 3 s into opening the camera and loading the two
-        # models, on a FULL pack, drawing 3.47 W. That is nowhere near saturating a 5 A UBEC,
-        # so what kills it is the step itself, not the level. Opening the camera and loading
-        # the models back to back stacks those steps; this pulls them apart.
         self.startup_pause_s = startup_pause_s
         self.crops = crops
         self.crop_side_px = crop_side_px
         self.crop_quality = crop_quality
-        # A box drawn tight on a person at altitude cuts off the context that makes the
-        # verifier's job possible; a margin buys that back for almost no bytes.
         self.crop_margin = crop_margin
         self._picam: Any = None
         self._yolo: Any = None
         self._reid: Any = None
         self._tracker: Any = None
-
-    # -- what counts as a target ------------------------------------------
 
     def set_classes(self, classes: Optional[Sequence[str]] = None) -> None:
         """Changes what counts as a target, mid-flight.
@@ -323,6 +318,12 @@ class OnboardCamera:
 
         Pass None to go back to people. Names must be names the model emits --
         see known_classes -- because a typo would silently report nothing.
+
+        "person" is translated rather than looked up, because it is the name an operator uses
+        and not the name every model emits: a COCO model says 'person', a VisDrone one
+        'pedestrian' and 'people'. Any of the three asks for people and is answered with the
+        names THIS model uses for them. Without that, the station's person button raises on the
+        model that actually flies.
         """
         if classes is None:
             self.classes = self.CLASES_PERSONA
@@ -330,10 +331,6 @@ class OnboardCamera:
         pedidas = frozenset(classes)
         conocidas = self.known_classes
         if conocidas:
-            # "person" is the name an operator uses, not the name every model emits: a COCO
-            # model says 'person', a VisDrone one 'pedestrian' and 'people'. Any of the three
-            # asks for people, and is answered with the names THIS model uses for them.
-            # Without it, the station's person button raises on the model that actually flies.
             nombres_persona = self.CLASES_PERSONA & set(conocidas)
             if pedidas & self.CLASES_PERSONA and nombres_persona:
                 pedidas = (pedidas - self.CLASES_PERSONA) | nombres_persona
@@ -351,10 +348,12 @@ class OnboardCamera:
             return []
         return sorted(self._yolo.names.values())
 
-    # -- hardware ---------------------------------------------------------
-
     def _power_on(self) -> None:
-        """Starts the camera and loads the models. Called automatically on the first capture."""
+        """Starts the camera and loads the models. Called automatically on the first capture.
+
+        The two-second sleep after start() is the sensor stabilising its exposure, and the
+        capture that follows is a warm-up, not a frame anybody uses.
+        """
         if self._picam is not None:
             return
 
@@ -373,7 +372,7 @@ class OnboardCamera:
             )
         )
         picam.start()
-        time.sleep(2)  # the sensor needs time to stabilize exposure
+        time.sleep(2)
         self._picam = picam
         self._first_frame(picam)
 
@@ -388,15 +387,6 @@ class OnboardCamera:
         if self.rastreador_habilitado:
             self._build_tracker()
 
-    # The sensor is detected over I2C and enumerated long before it will actually stream, and
-    # sometimes it does not stream at all: libcamera reports "Camera frontend has timed out"
-    # and the capture call never returns. Observed on 2026-08-25 -- five failures in a row within a
-    # minute of boot and right after a process was killed mid-capture, then five successes out
-    # of five once the board had been up a few minutes. Nothing in the configuration changed.
-    #
-    # Without this, that failure mode is a mission lost with no diagnosis: the Pi alive, the
-    # protocol running its timer, and zero detections forever, because the first capture never
-    # returned. Better to spend a few seconds retrying, and to fail loudly if it will not come.
     def _settle(self, tras: str) -> None:
         """Lets the supply recover before the next heavy step, when asked to."""
         if self.startup_pause_s <= 0:
@@ -410,21 +400,37 @@ class OnboardCamera:
     INTENTOS_ENCENDIDO = 3
 
     def _first_frame(self, picam) -> None:
-        """Warm-up capture with a watchdog: retries the camera instead of hanging on it."""
+        """Warm-up capture with a watchdog: retries the camera instead of hanging on it.
+
+        The sensor is detected over I2C and enumerated long before it will actually stream, and
+        sometimes it does not stream at all: libcamera reports "Camera frontend has timed out"
+        and the capture call never returns. Without a watchdog, that failure mode is a mission
+        lost with no diagnosis: the board alive, the protocol running its timer, and zero
+        detections forever, because the first capture never returned. Better to spend a few
+        seconds retrying, and to fail loudly if it will not come. NOTES.md has when it was seen.
+
+        The capture runs on a DAEMON thread, because a capture wedged inside the driver may
+        never return and must not keep the process alive. Between attempts the device is both
+        stopped and closed: stop() alone keeps it acquired, and the reopen fails too.
+
+        The event is bound PER ATTEMPT, as a default argument, and that is not a style choice.
+        Closing over it would share one cell across every attempt, so a thread left wedged by
+        attempt 1 would, on unwedging, set the event of attempt 2 -- and this method would
+        return as though the camera had delivered a frame when it had not. That is reachable
+        exactly in the failure this watchdog exists for.
+        """
         import threading
         import time
 
         for intento in range(1, self.INTENTOS_ENCENDIDO + 1):
             listo = threading.Event()
 
-            def capture():
+            def capture(ev=listo):
                 try:
                     picam.capture_array()
                 finally:
-                    listo.set()
+                    ev.set()
 
-            # A daemon thread, because if the capture is wedged inside the driver it may never
-            # return and must not keep the process alive.
             threading.Thread(target=capture, daemon=True).start()
             if listo.wait(self.ESPERA_PRIMER_FRAME_S):
                 return
@@ -434,7 +440,6 @@ class OnboardCamera:
                     "responde por I2C pero no transmite: probar de nuevo en unos segundos, y "
                     "si persiste revisar el cable plano (I2C tolera un contacto marginal, las "
                     "lineas CSI no)." % (self.INTENTOS_ENCENDIDO, self.ESPERA_PRIMER_FRAME_S))
-            # stop() alone keeps the device acquired; without close() the reopen fails too.
             try:
                 picam.stop()
                 picam.close()
@@ -453,6 +458,12 @@ class OnboardCamera:
         which is what the Pi 4 has. Both versions export the class at the top level, so that is the
         path used, and the old one is kept first because it is what flies today and a silent change
         of tracker implementation is not something to discover in the air.
+
+        Two of the settings are not boxmot's defaults. reid_model stays None because the
+        embeddings are supplied externally through embs=, while with_reid still has to be on
+        for appearance matching, since BotSort demands embeddings when it is and must run
+        motion-only when there is no ReID model at all. cmc_method is 'sof' and not boxmot's
+        default 'ecc', which is worse on both axes; the measurement is in NOTES.md.
         """
         try:
             from boxmot.trackers.bbox.botsort import BotSort
@@ -460,14 +471,9 @@ class OnboardCamera:
             from boxmot import BotSort
 
         self._tracker = BotSort(
-            reid_model=None,  # embeddings are supplied externally via embs=
-            # BotSort requires embeddings when appearance matching is on; without a ReID model
-            # it must run motion-only.
+            reid_model=None,
             with_reid=self.reid_model is not None,
             use_cmc=self.compensate_motion,
-            # boxmot's default method is 'ecc': on the same flight and the same calibrated thresholds it
-            # recovered far fewer ids (IDF1 0.376 against 0.656 with 'sof') and cost more on the Pi
-            # (p90 20.5 ms against 10.4 ms).
             cmc_method="sof",
             track_high_thresh=0.35,
             track_low_thresh=0.2,
@@ -477,14 +483,15 @@ class OnboardCamera:
         )
 
     def close(self) -> None:
+        """Releases the camera device, both stopped and closed.
+
+        stop() alone keeps the device acquired, and then no other Picamera2 instance can open
+        it, a later OnboardCamera included.
+        """
         if self._picam is not None:
             self._picam.stop()
-            # stop() alone keeps the device acquired; without close() no other
-            # Picamera2 instance (a later OnboardCamera included) can open it.
             self._picam.close()
             self._picam = None
-
-    # -- contract ---------------------------------------------------------
 
     def ultimo_marco_jpeg(self, calidad: int = 85) -> Optional[bytes]:
         """The last frame the detector looked at, encoded, for whoever asks to look at it themselves.
@@ -496,7 +503,7 @@ class OnboardCamera:
         """
         if self._ultimo_frame is None:
             return None
-        import cv2          # kept lazy like the rest of the file: the station imports this module too
+        import cv2
         ok, buf = cv2.imencode(".jpg", self._ultimo_frame, [cv2.IMWRITE_JPEG_QUALITY, int(calidad)])
         return buf.tobytes() if ok else None
 
@@ -535,33 +542,36 @@ class OnboardCamera:
         return salida
 
     def detect(self, pos: Sequence[float], yaw: float) -> List[Detection]:
-        # pos and yaw are unused: the real photo already contains what it contains. They are in
-        # the signature so the contract matches the simulated camera.
+        """One capture, detected, tracked and described, as the detect() contract promises.
+
+        pos and yaw are unused and deleted at once: the real photograph already contains what it
+        contains. They are in the signature so the contract matches the simulated camera, which
+        does need them.
+
+        THE CHANNELS ARRIVE RGB. picamera2 labels this configuration "BGR888", but that name is
+        libcamera's and lists the components in the opposite order to the one the array actually
+        arrives in. Everything downstream is OpenCV-shaped and expects BGR: ultralytics assumes
+        it for a raw array, the ReID model assumes it, and cv2.imencode assumes it when the crop
+        is written. Left alone, red and blue are swapped for all three at once. Converting the
+        whole frame once, here, is what keeps the three consumers agreeing, and NOTES.md has
+        what it costs and what it was hiding.
+
+        The floor handed to the detector drops below the reporting threshold whenever a tracker
+        or a focus window is running. That costs no extra inference, because the detector had
+        already scored those boxes and was discarding them, and the band is filtered back out
+        by solo_confirmadas unless the tracker claimed the box.
+
+        Each detection carries 'py' as the BOTTOM edge of the box, which is the point touching
+        the ground, and the class name the model emitted, so a report can say WHAT it found and
+        not just where: with more than one class enabled, a coordinate with no name is not
+        actionable, because the ground station cannot tell a person from a car.
+        """
         del pos, yaw
 
         import cv2
 
         self._power_on()
-        # picamera2 labels this configuration "BGR888", but that name is libcamera's and lists
-        # the components in the opposite order to the one the array actually arrives in: what
-        # comes back is R,G,B. Everything downstream is OpenCV-shaped and expects B,G,R --
-        # ultralytics assumes it for a raw array, the ReID model assumes it, and cv2.imencode
-        # assumes it when the crop is written. Left alone, red and blue are swapped for all
-        # three at once.
-        #
-        # Measured on the real board (2026-08-25): a person the detector found at 0.887 with the
-        # channels swapped scores 0.909 once corrected -- small, and not the reason the
-        # VisDrone weights find nothing indoors, which is a domain gap. The reason to fix it
-        # is the crop: it is the photograph an operator looks at to decide whether to send
-        # someone to that point, and it was arriving with blue skin.
-        #
-        # Converting the whole frame once, here, is what keeps the three consumers agreeing.
-        # It costs 1.70 ms against 184 ms of inference on the Pi 5 -- 0.9% of the frame.
         frame = cv2.cvtColor(self._picam.capture_array(), cv2.COLOR_RGB2BGR)
-        # Asking below the reporting threshold costs no extra inference: the detector already
-        # scored these boxes and was discarding them. Measured on the 02ago flight, the 0.2-0.3
-        # band closes 77 of the 226 gaps where a person is present in a frame and absent from
-        # the next one. The band is filtered back out below unless the tracker claimed it.
         piso = self.threshold
         if self._tracker is not None and self.low_band is not None:
             piso = min(self.threshold, self.low_band)
@@ -581,11 +591,8 @@ class OnboardCamera:
             x1, _y1, x2, y2 = xyxy
             detections.append({
                 "px": float((x1 + x2) / 2),
-                "py": float(y2),  # bottom edge: the point touching the ground
+                "py": float(y2),
                 "conf": round(float(caja.conf[0]), 3),
-                # Carried from here so a report can say WHAT it found, not just where.
-                # With more than one class enabled, a coordinate without a class name is
-                # not actionable: the ground station cannot tell a person from a car.
                 "cls": self._yolo.names[int(caja.cls[0])],
             })
             cajas.append(xyxy)
@@ -621,14 +628,15 @@ class OnboardCamera:
         took recall from 43.9 % to 11.2 %, and enlarging further to 2.3 %, because the detector was
         trained on VisDrone and only recognises people of about 28 pixels. Making the target bigger
         stops it looking like a person. Lowering the threshold there costs nothing and works.
+
+        plantilla and emb_dist are the appearance of the target and how far a doubted box may be
+        from it and still be kept. Both None leaves that gate shut and the behaviour unchanged.
         """
         if cx is None:
             self.foco = None
             return
         self.foco = {"cx": float(cx), "cy": float(cy), "radio": float(radio_px),
                      "umbral": float(umbral),
-                     # The appearance of the target, and how far a doubted box may be from it and
-                     # still be kept. Both None leaves the gate shut and the behaviour unchanged.
                      "plantilla": (np.asarray(plantilla, dtype=np.float32)
                                    if plantilla is not None else None),
                      "emb_dist": float(emb_dist) if emb_dist is not None else None}
@@ -646,7 +654,6 @@ class OnboardCamera:
         x1, y1, x2, y2 = [float(v) for v in caja]
         cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
         lado = max(x2 - x1, y2 - y1) * (1.0 + 2.0 * self.crop_margin)
-        # Clamped to the frame: a detection at the edge yields a smaller crop, not a crash.
         a = max(0, int(cx - lado / 2)), max(0, int(cy - lado / 2))
         b = min(w, int(cx + lado / 2)), min(h, int(cy + lado / 2))
         parche = frame[a[1]:b[1], a[0]:b[0]]
