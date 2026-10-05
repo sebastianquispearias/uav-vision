@@ -34,7 +34,7 @@ def como_estaba(picam):
             try:
                 picam.capture_array()
             finally:
-                listo.set()
+                listo.set()  # noqa: B023 -- EL BUG, a proposito: arreglarlo borra la prueba
 
         threading.Thread(target=capture, daemon=True).start()
         if listo.wait(ESPERA):
