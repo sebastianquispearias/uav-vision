@@ -607,6 +607,61 @@ vuelo hasta hoy se midió con el borde inferior.
   siguiente moviendo su SD a otra placa y leyendo su journal. En el aire
   eso es un dron que desaparece sin explicación.
 
+## 5-oct-2026: el YAML de boxmot movia dos compuertas de apariencia en silencio
+
+Al meter el adaptador de trackers (`uav_vision/trackers.py`) en
+`camera._build_tracker`, la puerta de equivalencia -- construir el tracker de
+las dos formas y comparar atributo por atributo -- atrapo esto **antes** de que
+el cambio entrara:
+
+| | como estaba | por create_tracker |
+|---|---|---|
+| `appearance_thresh` | **0.25** | 0.6188818853936099 |
+| `proximity_thresh` | **0.5** | 0.6084297894561342 |
+
+`create_tracker` de boxmot mezcla los ajustes del llamador **sobre un YAML por
+tracker**, y esos archivos traen el resultado de una busqueda de
+hiperparametros sobre MOT (de ahi los dieciseis decimales). Son dos compuertas
+de **apariencia** que este vuelo nunca calibro, para parametros que nadie aqui
+fija. `appearance_thresh` es el coseno con el que el ReID decide que dos cajas
+son la misma persona: de 0.25 a 0.62 cambia el seguimiento de verdad.
+
+**Y no lo habria visto el gate de 2.39 m**, porque el replay usa sus propias
+pistas de un `.npz` y no construye el tracker de la camara. Se habria
+descubierto volando.
+
+Por eso `construir()` instancia la clase **directo** y el YAML no se carga
+nunca: los unicos valores que no son defecto de la clase son los que se pasan.
+
+**Y es lo mismo que hace que comparar trackers signifique algo.** Si el YAML
+entrara, cada tracker del zoo correria con el tuning de otro para peatones a
+nivel del suelo, y la tabla mediria eso y no los trackers.
+
+## 5-oct-2026: "cambiar el tracker" no es una comparacion
+
+boxmot trae diez trackers y **solo BoT-SORT llama a las cosas como nosotros**.
+Las diez clases declaran `**kwargs`, que se come el nombre desconocido sin una
+palabra y deja al tracker con sus propios defaults. Medido con nuestra
+calibracion de cinco numeros:
+
+| tracker | sin traducir | con traducir | sin equivalente |
+|---|---|---|---|
+| botsort | 5 de 5 | 5 de 5 | — |
+| bytetrack | 2 de 5 | 4 de 5 | `new_track_thresh` |
+| ocsort | 0 de 5 | 4 de 5 | `new_track_thresh` |
+| sfsort | 0 de 5 | 5 de 5 | — |
+| strongsort | 1 de 5 | 5 de 5 | `new_track_thresh` |
+| boosttrack / deepocsort / hybridsort | 1-2 de 5 | 4-5 de 5 | `new_track_thresh`, `track_low_thresh` |
+
+La traduccion mejora **9 de los 10**, y **7 de 10** reciben al menos un
+renombre que es el mismo PAPEL y no la misma cantidad
+(`match_thresh → iou_threshold`, `track_high_thresh → det_thresh`). Por eso
+`construir()` devuelve las listas de ignorados y aproximados: una tabla que no
+las lleve al lado no se puede leer.
+
+**`new_track_thresh` no tiene equivalente en seis de los diez.** Eso no se
+traduce: se declara.
+
 ## Rastreador (BoT-SORT)
 
 - Parámetros validados offline: high 0.35 / low 0.2 / new 0.4 /
