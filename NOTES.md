@@ -637,6 +637,51 @@ nunca: los unicos valores que no son defecto de la clase son los que se pasan.
 entrara, cada tracker del zoo correria con el tuning de otro para peatones a
 nivel del suelo, y la tabla mediria eso y no los trackers.
 
+## 5-oct-2026: los nueve trackers sobre el vuelo 02-ago. PRELIMINAR, NO ES UN RESULTADO
+
+Primera corrida de los nueve de boxmot sobre las **mismas 2637 detecciones** del
+vuelo, con `scripts/botsort_pistas.py --tracker=<nombre>` y puntuadas por
+`personas_encontradas.py`:
+
+| tracker | personas | fantasmas | con id / 2637 | pistas | mediana/max cajas |
+|---|---|---|---|---|---|
+| strongsort | 4 de 7 | 5 | 1576 | 106 | 5 / 190 |
+| occluboost | 4 de 7 | **1** | 1359 | 5 | 202 / 739 |
+| hybridsort | 4 de 7 | 2 | 924 | 16 | 5 / 404 |
+| botsort | 3 de 7 | 1 | 852 | 114 | 4 / 130 |
+| bytetrack | 3 de 7 | 0 | 728 | 109 | 4 / 84 |
+| sfsort | 1 de 7 | 0 | 1549 | 704 | 1 / 109 |
+| boosttrack | 1 de 7 | 0 | 199 | 53 | 2 / 42 |
+| ocsort | 0 de 7 | 0 | **6** | 6 | 1 / 1 |
+| deepocsort | 0 de 7 | 0 | **31** | 12 | 2 / 7 |
+
+**TRES COSAS QUE ESTA TABLA NO AUTORIZA A CONCLUIR, y por eso dice PRELIMINAR:**
+
+**1. Ninguna fila corrio con CMC**, porque el script cablea `use_cmc=False`. Es
+el confundidor mas grande que hay: sin compensacion de movimiento son 852 ids
+contra 1608, y **dos personas menos**. El `botsort` de esta tabla da 3 de 7 con
+1 fantasma, y la portada del repo dice 5 de 7 con 6; no es una contradiccion,
+es exactamente el efecto ya registrado mas abajo en este archivo. **Ninguna
+fila es comparable al 5 de 7.**
+
+**2. `ocsort` y `deepocsort` no estan "trackeando peor": estan rotos para este
+caso.** 6 y 31 detecciones con id de 2637 no es una diferencia de calidad, es
+una configuracion que no funciona. Reportarlos como peores seria el error que
+`docs/DESCARTADO.md` existe para no repetir. OC-SORT es solo movimiento y
+necesita detecciones consecutivas, y aqui un objetivo en vista se detecta en el
+4,6-38 % de los cuadros, a rafagas: hay una hipotesis que medir, no una
+conclusion.
+
+**3. "Mas detecciones con id" NO es mejor.** `sfsort` asigna 1549 y encuentra
+UNA persona, porque las parte en 704 pistas de mediana 1 caja. `occluboost`
+asigna 1359 en **5 pistas** de mediana 202: esta fusionando identidades, que es
+el fallo peligroso, porque una persona fusionada DESAPARECE del mapa.
+
+**LA SIGUIENTE MEDICION, en este orden:** encender CMC en los que lo aceptan
+(`use_cmc` esta en la firma de botsort, boosttrack, hybridsort y occluboost,
+y NO en ocsort, bytetrack ni sfsort, lo cual ya es un desbalance que hay que
+declarar); y diagnosticar `ocsort` y `deepocsort` antes de puntuarlos.
+
 ## 5-oct-2026: "cambiar el tracker" no es una comparacion
 
 boxmot trae diez trackers y **solo BoT-SORT llama a las cosas como nosotros**.
