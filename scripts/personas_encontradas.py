@@ -26,6 +26,28 @@ score always describes the identity layer as it stands today:
 
 The labels live in the flight archive next to this repo (../drone-geolocation/entrenamiento), the
 same place the rest of the flight's ground truth lives.
+
+TWO DIFFERENT THINGS LIVE IN THE LABELS, AND CONFUSING THEM WAS AN ERROR WORTH SPELLING OUT.
+The REVIEW says which boxes are people: it is complete, it includes the ones the user drew, and
+it is what the detector is scored against. The LETTERS say WHICH person a box is, and they were
+assigned earlier, only over the boxes the detectors had proposed, so two thirds of the balcony's
+people carry no letter. Judging "is this anybody" by the LETTERS therefore turns real people
+into phantoms. So the review decides personhood here, and the letters only put a name on it when
+they can.
+
+The letters are keyed BY POSITION in the flight's original detection cache, not by frame and
+box, so they are always read against demo/data even when another cache is being scored. Reading
+them against a cache holding a different number of detections shifts every letter and hands the
+score to the wrong person: it once reported the walking woman's candidate as the operator.
+
+THE LETTERS WERE ASSIGNED WINDOW BY WINDOW. Between the windows there are frames whose boxes
+carry no letter simply because nobody looked, and scoring a candidate there marks a real person
+as a phantom. So only the windows are judged, and everything else is counted as not judgeable.
+
+'piso' is the confidence the TRACKS were computed at, not a taste: the track array has one row
+per detection above it, and reading it against a different cut shifts every id by one. The
+fixed-target mode is the case that needs another value, because there the tracker was also shown
+the band the detector was discarding.
 """
 import argparse
 import csv
@@ -37,24 +59,22 @@ import numpy as np
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LAC = os.path.dirname(_HERE)
-ENT = os.environ.get("UAV_VISION_ETIQUETAS",
-                     os.path.join(_LAC, "drone-geolocation", "entrenamiento"))
+_ETIQUETAS_EN_EL_REPO = os.path.join(_HERE, "demo", "etiquetas")
+ENT = os.environ.get(
+    "UAV_VISION_ETIQUETAS",
+    _ETIQUETAS_EN_EL_REPO if os.path.isdir(_ETIQUETAS_EN_EL_REPO)
+    else os.path.join(_LAC, "drone-geolocation", "entrenamiento"))
 DATOS = os.environ.get("UAV_VISION_DATOS", os.path.join(_HERE, "demo", "data"))
 REALES = set("ABCDEGH")
 
-# Two different things live here and confusing them was an error worth spelling out. The REVIEW says
-# which boxes are people: it is complete, includes the ones the user drew, and is what the detector is
-# scored against. The LETTERS say WHICH person a box is, and they were assigned earlier, only over the
-# boxes the detectors had proposed, so two thirds of the balcony's people carry no letter. Judging "is
-# this anybody" by the letters therefore turns real people into phantoms. The review decides personhood
-# here; the letters only put a name on it when they can.
 _filas = list(csv.DictReader(open(os.path.join(ENT, "candidatas_02ago.csv"), encoding="utf-8")))
 _g = json.load(open(os.path.join(ENT, "etiquetas_detector_02ago.json"), encoding="utf-8"))["etiquetas"]
 _r = json.load(open(os.path.join(ENT, "etiquetas_detector_02ago_frames.json"), encoding="utf-8"))
-_final = lambda i: _r["correcciones"].get(str(i), _g.get(str(i)))
+def _final(i):
+    return _r["correcciones"].get(str(i), _g.get(str(i)))
 _aj = {int(i): c for i, c in _r["ajustes"].items()}
-REVISADOS = set(int(x) for x in _r["revisados"])
-personas_de_frame = defaultdict(list)                 # frame -> [box] : everybody the review says is there
+REVISADOS = {int(x) for x in _r["revisados"]}
+personas_de_frame = defaultdict(list)
 for _i, _fila in enumerate(_filas):
     if _final(_i) == "persona":
         personas_de_frame[int(_fila["frame"])].append(
@@ -65,13 +85,9 @@ for _k, _cs in _r.get("nuevas", {}).items():
             personas_de_frame[int(_k)].append([float(x) for x in _c[:4]])
 
 g = json.load(open(os.path.join(ENT, "identidad_gt_02ago.json"), encoding="utf-8"))["etiquetas"]
-# The letters are keyed by POSITION in the flight's original detection cache, not by frame and box,
-# so they are always read against demo/data even when another cache is being scored. Reading them
-# against a cache holding a different number of detections shifts every letter and hands the score
-# to the wrong person: it reported the walking woman's candidate as the operator.
 base = np.load(os.path.join(_HERE, "demo", "data", "examen_v3_datos.npz"))["dets"]
 base = base[base[:, 1] >= 0.25]
-letra_de_caja = defaultdict(list)          # frame -> [(box, letra)]
+letra_de_caja = defaultdict(list)
 for i, l in g.items():
     i = int(i)
     if i < len(base):
@@ -88,10 +104,6 @@ def iou(a, B):
     return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (B[:, 2] - B[:, 0]) * (B[:, 3] - B[:, 1]) - inter)
 
 
-# The identity letters were assigned WINDOW BY WINDOW. Between the windows there are frames whose
-# boxes carry no letter simply because nobody looked, and scoring a candidate there marks a real
-# person as a phantom: frames 2971-2999 hold one, boxed 21 times and labelled X by omission. So only
-# the windows are judged, and everything else is counted as not judgeable.
 VENTANAS = [(2551, 2641), (2746, 2952), (3000, 3700)]
 
 
@@ -112,18 +124,29 @@ def letra_de(det):
                 m = int(np.argmax(w))
                 if w[m] >= 0.3 and con_letra[m][1] in REALES:
                     return con_letra[m][1]
-            return "PERSONA"                # real, but nobody assigned a letter to this box
+            return "PERSONA"
     return "X"
 
 
 def evaluar(nombre, datos, pistas, candidatos, piso=0.25):
-    # piso is the confidence the TRACKS were computed at, not a taste: the track array has one row
-    # per detection above it, and reading it against a different cut shifts every id by one. The
-    # fixed-target mode is the case that needs another value, because there the tracker was also
-    # shown the band the detector was discarding.
+    """Scores one run of the chain by PERSON, against the hand labels of the flight.
+
+    'candidatos' is a file that replay_vuelo3.py --candidatos wrote. It is NOT recomputed here,
+    so a file left over from an older version of the chain would be scored as though it were
+    today's. tests/test_personas_encontradas.py is the gate that regenerates it from the live
+    code and asserts these numbers; this entry point scores whatever it is pointed at, and says
+    which file that was.
+    """
     dets = np.load(os.path.join(datos, "examen_v3_datos.npz"))["dets"]
     dets = dets[dets[:, 1] >= piso]
     track = np.load(pistas)["track"]
+    if not os.path.exists(candidatos):
+        raise SystemExit(
+            "falta %s, que lo escribe el replay. Regeneralo con:\n"
+            "    UAV_VISION_DATOS=demo/data python scripts/replay_vuelo3.py "
+            "--pistas=demo/data/pistas_bot_cmc_sof.npz --candidatos=%s\n"
+            "Eso necesita gradys_embedded:  pip install -r requirements.txt"
+            % (candidatos, candidatos))
     cands = json.load(open(candidatos))
     idx_de_pista = defaultdict(list)
     for i, t in enumerate(track):
