@@ -5,6 +5,9 @@ They live here because the answers are decisions: the numbers below changed what
 
 | Probe | Where it runs | What it answered |
 |---|---|---|
+| `clon_pelado.py` | any machine | **The first command of the README did not work.** Runs anything as if this repository had just been cloned alone, by BLOCKING the sibling runtime's import rather than moving directories -- `mv` failed with "Device or resource busy" and the loop around it reported 50 of 50 passing while the siblings were still there. |
+| `cierre_de_bucle.py` | any machine | **A wedged camera retry could report a frame that never arrived.** Reproduces the closure bug ruff found in `OnboardCamera._first_frame`, and the fix, side by side. |
+| `sin_comentarios.py` | any machine | Strips loose comments BY TOKENIZER. A regex over `gs_mapa.py` destroys all 33 of its CSS colours and the file still compiles. |
 | `probar_pi4.py` | a board | Does this board detect, or only capture? Six frames through the real camera |
 | `medir_vuelo.py` | a board | What one frame of the FLIGHT configuration costs. Pi 5: 199 ms, 5.04 FPS |
 | `medir_reid.py` | a board | What the appearance model costs per frame. Useless with an empty room: zero boxes means it never runs |
