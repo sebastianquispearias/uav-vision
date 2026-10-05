@@ -60,6 +60,14 @@
 # fleet where two aircraft answer to one name and the dictionary is nonsense, and the only sign is
 # a few lines of 'Name or service not known' scrolling past.
 #
+# BANCO_SIN_ESTACION=1 skips step 0, and it is a seam for the gate, like SSH is. On a laptop there
+# is usually a station already answering, so the curl below finds it and launches nothing; on a
+# clean machine the launcher starts a REAL one and leaves it running, which is the difference
+# between a gate that passes on the desk and one that hangs in CI. What the gate is about is the
+# ORCHESTRATION -- which board gets which dictionary, which node id, which replay offset, the
+# clock before any of it, and every board set up before any is started -- and none of that needs a
+# station to exist.
+#
 # 0. The station, unless one is already answering. Here and not in a second command because the
 #    arguments are easy to get wrong in a way that is hard to see: without --nodos the station
 #    cannot send anything and answers 'ningun dron conectado', and two stations can hold the same
@@ -113,7 +121,9 @@ echo "  node_ip_dict: ${DIRS[*]}"
 echo "=============================================================="
 
 PUERTO="${EST##*:}"
-if curl -s -m 3 -o /dev/null "http://127.0.0.1:$PUERTO/estado"; then
+if [ "${BANCO_SIN_ESTACION:-0}" = 1 ]; then
+    echo "-- estacion SALTADA por BANCO_SIN_ESTACION=1"
+elif curl -s -m 3 -o /dev/null "http://127.0.0.1:$PUERTO/estado"; then
     echo "-- ya hay una estacion viva en $PUERTO, se usa esa"
 else
     echo "-- levantando la estacion en $PUERTO"

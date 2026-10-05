@@ -86,6 +86,7 @@ with open(STUB, "w", newline="\n") as f:
 entorno = dict(os.environ)
 entorno["SSH"] = "bash " + STUB
 entorno["BANCO_DESDE_S"] = "0 700 700"
+entorno["BANCO_SIN_ESTACION"] = "1"
 
 BASH = next((r for r in (r"C:\Program Files\Git\bin\bash.exe",
                          r"C:\Program Files (x86)\Git\bin\bash.exe",

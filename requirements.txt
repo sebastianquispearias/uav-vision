@@ -10,7 +10,11 @@
 # vision_protocol.py cannot be imported, so demo/demo.py and 12 of the 50 tests do not run.
 # It is listed here because the first command in the README depends on it.
 numpy>=1.24
-opencv-python>=4.8
+# HEADLESS and not opencv-python: nothing in this repository opens a window -- no imshow, no
+# namedWindow, no waitKey -- because the station and the labelling tool draw to JPEG. The normal
+# wheel wants libGL.so.1, which a machine with no desktop does not have, and then the import
+# fails with an error that never mentions the desktop.
+opencv-python-headless>=4.8
 scipy>=1.10
 
 # The GrADyS embedded runtime: the protocol interface, and the message types a protocol sends.
