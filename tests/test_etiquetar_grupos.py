@@ -108,16 +108,32 @@ def contar(jpg, color):
 
 
 def arrancar(dirt, grupos, salida='etiquetas.json', extra=()):
-    p = subprocess.Popen([sys.executable, HERRAMIENTA, '--cajas', os.path.join(dirt, 'cajas.csv'),
-                          '--embs', os.path.join(dirt, 'embs.npy'), '--frames', dirt,
-                          '--salida', os.path.join(dirt, salida), '--grupos', str(grupos),
-                          '--puerto', str(P), *extra], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    """Starts the tool and waits for it to answer, and SAYS WHY when it does not.
+
+    The tool's stderr used to go to DEVNULL and the failure was reported as "la herramienta no
+    arranco", which names nothing. It cost a CI run to find out that the real cause was a
+    missing scikit-learn: the message was the same whether the tool was slow, crashed on an
+    import, or could not bind the port. Now the output is kept and its tail travels with the
+    error, which is the difference between a failure and a diagnosis.
+    """
+    registro = os.path.join(dirt, 'herramienta.log')
+    with open(registro, 'wb') as log:
+        p = subprocess.Popen([sys.executable, HERRAMIENTA, '--cajas', os.path.join(dirt, 'cajas.csv'),
+                              '--embs', os.path.join(dirt, 'embs.npy'), '--frames', dirt,
+                              '--salida', os.path.join(dirt, salida), '--grupos', str(grupos),
+                              '--puerto', str(P), *extra], stdout=log, stderr=subprocess.STDOUT)
     for _ in range(80):
         try:
             pedir('/estado'); return p
         except Exception:
+            if p.poll() is not None:
+                break
             time.sleep(0.25)
-    p.terminate(); raise RuntimeError('la herramienta no arranco')
+    p.terminate()
+    with open(registro, encoding='utf-8', errors='replace') as f:
+        dijo = f.read().strip().splitlines()[-12:]
+    raise RuntimeError('la herramienta no arranco (codigo %s). Dijo:\n    %s'
+                       % (p.poll(), '\n    '.join(dijo) or '(nada)'))
 
 
 dirt = tempfile.mkdtemp(prefix='grupos_')

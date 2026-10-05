@@ -17,6 +17,11 @@ numpy>=1.24
 opencv-python-headless>=4.8
 scipy>=1.10
 
+# The appearance clustering of the labelling tool. It is here and not in the "not needed" list
+# below because that tool has a gate among the 50, so it is part of the workbench the test suite
+# exercises, and leaving it out made that gate fail with an error that named nothing.
+scikit-learn>=1.3
+
 # The GrADyS embedded runtime: the protocol interface, and the message types a protocol sends.
 gradys_embedded @ git+https://github.com/Project-GrADyS/gradys-embedded.git
 
@@ -31,7 +36,6 @@ gradys_embedded @ git+https://github.com/Project-GrADyS/gradys-embedded.git
 #                            runs without it and says so.
 #   rfdetr                   the heavy detector of the ground station's second opinion
 #                            (--segunda-opinion). It lives in its own virtualenv on purpose.
-#   scikit-learn             the appearance clustering of the labelling tool.
 #   selenium, psutil         one browser test and one measuring probe.
 #
 # None of those is needed to reproduce the numbers of docs/RESULTADOS.md.
