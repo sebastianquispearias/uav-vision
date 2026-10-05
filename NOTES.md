@@ -778,8 +778,14 @@ La fila de una tabla se regenera con dos órdenes:
   buffer 40 frames / match 0.85, con huellas externas y CMC.
 - El buffer se declara en segundos porque 40 frames son 24 s a la
   cadencia del vuelo 02-ago pero solo 8 s a los 5 Hz del dron.
-- CMC (compensación de movimiento de cámara) apagado por defecto en el
-  dron: su costo de CPU en la Raspberry no está medido.
+- CMC (compensación de movimiento de cámara) **ENCENDIDA por defecto en el
+  dron**, método `sof` y no el `ecc` de boxmot (`camera.py:267` y `:479`).
+  Nada la apaga: `compensate_motion` no se pone en `False` en ninguna misión
+  ni en ningún script. Su coste YA está dentro de los 199 ms / 5,04 FPS que
+  `scripts/medir/medir_vuelo.py` mide en la Pi 5, porque esa sonda construye
+  la cámara sin tocar el interruptor; lo que no está medido es su parte
+  aislada. Vale +2 personas y +5 fantasmas sobre el vuelo 02-ago (tabla de
+  los diez trackers, más arriba).
 - BotSort con `with_reid=True` exige huellas; sin ReID configurado el
   módulo lo crea en modo solo-movimiento.
 
