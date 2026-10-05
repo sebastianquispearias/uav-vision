@@ -87,6 +87,11 @@
 set -u
 SSH="${SSH:-ssh}"
 DESDE_DEF="0 700 700 0 700"
+if [ "$#" -lt 2 ]; then
+    echo "uso: bash $0 <estacion ip:puerto> <usuario@placa> [usuario@placa ...]"
+    echo "  e.g. bash $0 192.168.1.121:8300 pi@192.168.1.125 pi@192.168.1.126"
+    exit 2
+fi
 EST="$1"; shift
 PIS=("$@")
 read -r -a DESDE <<< "${BANCO_DESDE_S:-$DESDE_DEF}"
