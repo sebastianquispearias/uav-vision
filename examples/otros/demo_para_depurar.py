@@ -21,49 +21,56 @@ linea, sale un punto rojo). Los cuatro que ensenan mas:
        al protocolo. Con F11 (Step Into) entras dentro de tu codigo.
     4. dentro de uav_vision/vision_protocol.py, en _see() -> ves como
        un pixel se convierte en un punto del suelo.
+
+The path juggling at the top is so the imports work with ANY interpreter, whether or not
+anything was installed with pip. Without it, pressing F5 in an editor can pick a different
+Python and fail with "No module named 'uav_vision'".
+
+THE RUNNER, DISTILLED TO THIRTY LINES
+    On the Raspberry, the runner of gradys_embedded is a large program: it speaks HTTP to
+    uav_api, drives the radio and serves a web panel. But what it essentially does to a protocol
+    is only this: keep a clock, keep a diary of alarms, and call the protocol when one is due.
+    Seeing that in thirty lines is the fastest way to understand what a runner is.
+
+    The fake provider keeps the pending alarms with the nearest first, and whatever the protocol
+    broadcast. Its mobility command raises ON PURPOSE: the vision protocol is observe-only, so
+    if it ever tried to move the drone this blows up and the mistake is visible.
+
+    The line that instantiates the protocol and hands it the provider is LITERALLY what the
+    Raspberry's runner does.
+
+THE CONFIGURATION is the same with_config() as the real mission. The only change is the camera:
+SimulatedCamera here instead of OnboardCamera, with the person and the hovering drone placed by
+hand, the yaw fixed instead of read from UavApiYaw, and short maturity thresholds so the demo
+reports something within its own runtime. The JPEG crop is unreadable here and is left out.
 """
 
+import heapq
+import json
 import os
 import sys
-import json
-import heapq
 
-# Que los imports funcionen con CUALQUIER interprete, este o no instalado
-# nada con pip. Sin esto, F5 en VS Code puede usar otro Python y fallar con
-# "No module named 'uav_vision'".
-_AQUI = os.path.dirname(os.path.abspath(__file__))          # .../uav_vision/examples
-_UAV_VISION = os.path.dirname(_AQUI)                        # .../uav_vision   (el repo)
-_LAC = os.path.dirname(_UAV_VISION)                         # .../lac
-sys.path.insert(0, _UAV_VISION)                             # para uav_vision
-sys.path.insert(0, os.path.join(_LAC, "gradys-embedded"))   # para gradys_embedded
+_AQUI = os.path.dirname(os.path.abspath(__file__))
+_UAV_VISION = os.path.dirname(_AQUI)
+_LAC = os.path.dirname(_UAV_VISION)
+sys.path.insert(0, _UAV_VISION)
+sys.path.insert(0, os.path.join(_LAC, "gradys-embedded"))
 
-from gradys_embedded.protocol.interface import IProvider          # del grupo
-from gradys_embedded.protocol.messages.telemetry import Telemetry  # del grupo
-from uav_vision.camera import SimulatedCamera                      # tuyo
-from uav_vision.identity import IncrementalIdentity                # tuyo
-from uav_vision.vision_protocol import VisionProtocol              # tuyo
+from gradys_embedded.protocol.interface import IProvider
+from gradys_embedded.protocol.messages.telemetry import Telemetry
 
+from uav_vision.camera import SimulatedCamera
+from uav_vision.identity import IncrementalIdentity
+from uav_vision.vision_protocol import VisionProtocol
 
-# ===================================================================
-# EL RUNNER, DESTILADO A 30 LINEAS
-#
-# En la Raspberry, el runner de gradys_embedded es un programa grande:
-# habla HTTP con uav_api, maneja la radio, expone un panel web. Pero lo
-# esencial que le hace a tu protocolo es SOLO esto: llevar un reloj,
-# una agenda de alarmas, y llamarte cuando toca.
-#
-# Ver esto en 30 lineas es la forma mas rapida de entender que es un
-# runner.
-# ===================================================================
 
 class MiniRunner(IProvider):
 
     def __init__(self):
         self.reloj = 0.0
-        self.agenda = []        # alarmas pendientes, la mas cercana primero
-        self.transmitido = []   # lo que el protocolo emitio por radio
+        self.agenda = []
+        self.transmitido = []
 
-    # ---- lo que el protocolo le PIDE al mundo ----
 
     def schedule_timer(self, timer, timestamp):
         """El protocolo pide: 'despertame en el instante X'."""
@@ -79,11 +86,9 @@ class MiniRunner(IProvider):
         return self.reloj
 
     def get_id(self):
-        return 1                # el numero de este dron
+        return 1
 
     def send_mobility_command(self, command):
-        # TRAMPA A PROPOSITO: el protocolo de vision es observe-only.
-        # Si alguna vez intentara mover el dron, esto revienta y lo ves.
         raise AssertionError("observe-only violado: el protocolo quiso mover el dron")
 
     def send_communication_command(self, command):
@@ -92,7 +97,6 @@ class MiniRunner(IProvider):
         print("    [runner] el protocolo TRANSMITE (mensaje %d)"
               % len(self.transmitido))
 
-    # ---- el bucle: entregar posicion y disparar alarmas ----
 
     def volar(self, protocolo, segundos, posicion_dron):
         proxima_telemetria = 0.0
@@ -100,34 +104,29 @@ class MiniRunner(IProvider):
             hay_alarma = self.agenda and self.agenda[0][0] <= proxima_telemetria
             if hay_alarma:
                 self.reloj, nombre = heapq.heappop(self.agenda)
-                protocolo.handle_timer(nombre)          # <-- EL RUNNER TE LLAMA
+                protocolo.handle_timer(nombre)
             else:
                 self.reloj = proxima_telemetria
-                protocolo.handle_telemetry(             # <-- Y TAMBIEN AQUI
+                protocolo.handle_telemetry(
                     Telemetry(current_position=posicion_dron))
                 proxima_telemetria += 0.5
 
 
-# ===================================================================
-# LA CONFIGURACION
-# Es el mismo with_config() de la mision real. Solo cambia la camara:
-# aca es SimulatedCamera en vez de OnboardCamera.
-# ===================================================================
 
-PERSONA = (40.0, -12.0, 0.0)      # donde esta la persona, en metros
-DRON    = (25.0, -12.0, 35.0)     # donde esta el dron, quieto, a 35 m
+PERSONA = (40.0, -12.0, 0.0)
+DRON    = (25.0, -12.0, 35.0)
 
 ProtocoloDemo = VisionProtocol.with_config(
     camera=SimulatedCamera(target=PERSONA, pitch_deg=-55.0),
     pitch_deg=-55.0,
-    yaw_source=lambda: 90.0,      # mirando al Este. En el dron esto es UavApiYaw
-    see_period_s=0.25,            # mirar 4 veces por segundo
-    report_period_s=2.0,          # transmitir cada 2 segundos
+    yaw_source=lambda: 90.0,
+    see_period_s=0.25,
+    report_period_s=2.0,
     identity=IncrementalIdentity(
         fusion_radius_m=1.0,
         fps=4.0,
         track_dur_s=2.0,
-        report_dur_s=6.0,         # 6 s de evidencia para reportar algo
+        report_dur_s=6.0,
     ),
 )
 
@@ -140,8 +139,6 @@ def main():
 
     runner = MiniRunner()
 
-    # Esta linea es TEXTUALMENTE lo que hace el runner de la Raspberry:
-    # crear una instancia del protocolo y darle el proveedor.
     protocolo = ProtocoloDemo.instantiate(runner)
 
     print("\n--- initialize(): el protocolo se prepara y pide sus alarmas ---")
@@ -157,7 +154,7 @@ def main():
     for i, m in enumerate(runner.transmitido, 1):
         pois = m.get("pois", [])
         for p in pois:
-            p.pop("crop", None)      # el recorte JPEG es ilegible aqui
+            p.pop("crop", None)
             p.pop("recorte", None)
         print("\nMENSAJE %d  (t = %.1f s)" % (i, m.get("time", 0.0)))
         print("   frames vistos: %s" % m.get("frames_seen"))

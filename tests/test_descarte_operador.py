@@ -12,6 +12,17 @@ she walked to where a refused object stood. Section 2 is that contrast, and it i
 refusal carries an appearance and is rejected without one.
 
 Run with: python tests/test_descarte_operador.py
+
+The scene is a phantom, which is a bin the detector keeps calling a person, and somebody else
+entirely.
+
+THE SAME COORDINATES THE OPERATOR REFUSED WITH A DIFFERENT APPEARANCE MUST STILL BE REPORTED.
+If that were silenced, the feature would be a way of LOSING people and the refusal would be
+worse than no refusal at all.
+
+The station never decodes the embedding: it hands back the base64 of float16 it received. If the
+drone could only act on a refusal built from a vector in memory, the feature would work in a
+test and not in the air.
 """
 import os
 import sys
@@ -19,14 +30,13 @@ import sys
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
-# gradys-embedded vive al lado de este repositorio, como en el resto de la suite.
 sys.path.insert(0, os.path.join(os.path.dirname(RAIZ), "gradys-embedded"))
 
-import base64  # noqa: E402
+import base64
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from uav_vision.vision_protocol import VisionProtocol  # noqa: E402
+from uav_vision.vision_protocol import VisionProtocol
 
 RNG = np.random.default_rng(23)
 
@@ -48,8 +58,8 @@ def poi(x, y, emb=None, cls="person"):
     return d
 
 
-APARIENCIA_TACHO = unitario(3)      # the phantom: a bin the detector keeps calling a person
-APARIENCIA_PERSONA = unitario(9)    # somebody else entirely
+APARIENCIA_TACHO = unitario(3)
+APARIENCIA_PERSONA = unitario(9)
 
 
 def protocolo():
@@ -76,8 +86,6 @@ print()
 print("=" * 72)
 print("2. EL CONTRASTE QUE IMPORTA: UNA PERSONA EN ESE MISMO SITIO SI SE REPORTA")
 print("=" * 72)
-# The same coordinates the operator refused, a different appearance. If this were silenced the
-# feature would be a way of losing people, and the refusal would be worse than no refusal.
 persona_ahi = poi(5.0, 5.0, APARIENCIA_PERSONA)
 sin_huella = poi(5.0, 5.0)
 otro_tacho_lejos = poi(40.0, 40.0, APARIENCIA_TACHO)
@@ -122,9 +130,6 @@ print()
 print("=" * 72)
 print("5. LA APARIENCIA LLEGA POR EL CABLE, NO POR REFERENCIA")
 print("=" * 72)
-# The station never decodes the embedding: it hands back the base64 of float16 it received. If
-# the drone could only refuse from a vector in memory, the feature would work in a test and not
-# in the air.
 r = protocolo()
 r.descartar(5.0, 5.0, "person", en_cable(APARIENCIA_TACHO))
 desde_lista = protocolo()

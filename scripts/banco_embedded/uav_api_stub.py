@@ -16,6 +16,22 @@ origin, so the log alone shows which waypoints left the protocol.
 State: arm/takeoff always succeed; after /command/rtl the vehicle flies home and
 the reported relative_alt drops to 0 so the runner's landing detector can close
 the mission out.
+
+THE ORIGIN HAS TO BE THE MISSION'S. The local metres of this fake autopilot are measured from
+it, and if the two disagree every waypoint this file logs is offset by the distance between
+them and reads as a wild number: commanded 30 m from a target, the log once said
+'llegado a (112.0, 51.1)' because the two origins were 120 m apart. The default is PUC-Rio so
+the geo maths runs on real numbers when nobody says otherwise, and the bench launcher passes the
+mission's. The flat-earth constants are the ones cartesian_to_geo uses, so a waypoint commanded
+at x metres north is logged back as x metres north and not x plus a rounding.
+
+The fake camera faces "north" of the local frame, and the altitude reported while landed is the
+relative one. The destination is (lat, lon, alt) or None while holding position, and the speed
+is in m/s, overwritten by /command/set_air_speed.
+
+/telemetry/general is THE ONLY ENDPOINT POLLED IN A LOOP, so it is the one that ticks the pose
+forward. It is not logged, because 2 Hz would bury the waypoints. Its shape is the real
+uav_api's, with the heading nested under "info".
 """
 
 import json
@@ -25,28 +41,21 @@ import time
 from http import server
 from urllib.parse import parse_qs, urlparse
 
-# The origin the local metres of this fake autopilot are measured from. It has to be the mission's
-# origin, or every waypoint this file logs is offset by the distance between the two and reads as a
-# wild number: commanded 30 m from a target, the log said 'llegado a (112.0, 51.1)' because the two
-# origins were 120 m apart. The default is PUC-Rio so the geo maths runs on real numbers when
-# nobody says otherwise; the bench launcher passes the mission's.
 _ORIGEN = os.environ.get("UAV_API_ORIGEN", "")
 try:
     LAT, LON = (float(v) for v in _ORIGEN.split(",")[:2])
 except (ValueError, TypeError):
     LAT, LON = -22.9793, -43.2325
-HEADING = 0.0                   # camera facing "north" of the local frame
-GROUND_ALT = 0.0                # relative_alt reported while landed
+HEADING = 0.0
+GROUND_ALT = 0.0
 
-# Same flat-earth constants cartesian_to_geo uses, so a waypoint commanded at
-# x metres north is logged back as x metres north and not x plus a rounding.
 M_PER_DEG_LAT = 111320.0
 M_PER_DEG_LON = 111320.0 * math.cos(math.radians(LAT))
 
 estado = {
     "lat": LAT, "lon": LON, "alt": GROUND_ALT,
-    "target": None,          # (lat, lon, alt) or None while holding position
-    "speed": 5.0,            # m/s, overwritten by /command/set_air_speed
+    "target": None,
+    "speed": 5.0,
     "t": time.monotonic(),
 }
 
@@ -104,8 +113,6 @@ class Handler(server.BaseHTTPRequestHandler):
         args = parse_qs(partes.query)
 
         if ruta == "/telemetry/gps":
-            # The only endpoint polled in a loop, so it is the one that ticks
-            # the pose forward. Not logged: 2 Hz would bury the waypoints.
             _advance()
             self._json({"info": {
                 "position": {"lat": estado["lat"], "lon": estado["lon"],
@@ -113,7 +120,6 @@ class Handler(server.BaseHTTPRequestHandler):
                 "heading": HEADING,
             }})
         elif ruta == "/telemetry/general":
-            # Same shape as the real uav_api: heading nested under "info".
             self._json({"result": "Success", "info": {"heading": HEADING}})
         elif ruta == "/command/arm":
             _log("ARMA motores")

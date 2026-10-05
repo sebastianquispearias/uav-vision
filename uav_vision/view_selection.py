@@ -12,6 +12,11 @@ A measurement follows the same format as fusion.py:
     (origin, direction) where origin = (x,y,z), direction = (dx,dy,dz)
 
 All functions are pure. No simulator or protocol dependencies.
+
+CONSTANTS THAT ARE DECISIONS
+    DEFAULT_K, DEFAULT_ALPHA, DEFAULT_MIN_ANGLE_DEG are the published experimental parameters,
+    not values tuned here; NOTES.md has the provenance. _MAX_DIVERSITY_DEG is the cap on
+    angular diversity: two rays can be at most perpendicular before the measure saturates.
 """
 
 from __future__ import annotations
@@ -21,14 +26,12 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-# Type alias (same as fusion.py, kept independent to avoid coupling)
 Measurement = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
 
-# Defaults from the published experimental parameters; see NOTES.md for provenance.
 DEFAULT_K: int = 30
 DEFAULT_ALPHA: float = 0.2
 DEFAULT_MIN_ANGLE_DEG: float = 10.0
-_MAX_DIVERSITY_DEG: float = 90.0  # cap for angular diversity
+_MAX_DIVERSITY_DEG: float = 90.0
 
 
 def compute_angular_diversity(
@@ -71,7 +74,6 @@ def compute_angular_diversity(
             continue
         sv = sv / sv_norm
         dot = float(np.clip(np.dot(c, sv), -1.0, 1.0))
-        # abs(dot) so parallel and anti-parallel both give ~0 diversity
         angle_deg = math.degrees(math.acos(abs(dot)))
         if angle_deg < min_angle:
             min_angle = angle_deg
@@ -115,7 +117,6 @@ def next_best_viewpoint(
     for k in range(int(n_azimuths)):
         a = 2.0 * math.pi * k / float(n_azimuths)
         pos = (tx + radius_m * math.cos(a), ty + radius_m * math.sin(a), tz + altitude_m)
-        # The ray this viewpoint would produce: from the aircraft towards the target.
         d = np.array([tx - pos[0], ty - pos[1], tz - pos[2]], dtype=float)
         norma = float(np.linalg.norm(d))
         if norma < 1e-9:
@@ -227,22 +228,19 @@ def select_best_views(
             f"number of measurements ({n})."
         )
 
-    # Extract direction vectors
     directions = [m[1] for m in measurements]
 
-    # Step 1: select the measurement with highest confidence (tie: lowest index)
     first_idx = max(range(n), key=lambda i: (confidences[i], -i))
 
     selected_indices: List[int] = [first_idx]
     selected_dirs: List[Tuple[float, float, float]] = [directions[first_idx]]
     remaining = set(range(n)) - {first_idx}
 
-    # Steps 2-4: greedy selection
     while len(selected_indices) < k and remaining:
         best_idx = -1
         best_score = -1.0
 
-        for idx in sorted(remaining):  # sorted for deterministic tie-breaking
+        for idx in sorted(remaining):
             ang_div = compute_angular_diversity(directions[idx], selected_dirs)
             if ang_div < min_angle_deg:
                 continue
@@ -252,7 +250,7 @@ def select_best_views(
                 best_idx = idx
 
         if best_idx == -1:
-            break  # no valid candidates left
+            break
 
         selected_indices.append(best_idx)
         selected_dirs.append(directions[best_idx])
@@ -261,9 +259,6 @@ def select_best_views(
     return selected_indices
 
 
-# ---------------------------------------------------------------------------
-# FIM-based greedy selector
-# ---------------------------------------------------------------------------
 
 
 def _estimate_target_from_rays(
@@ -409,9 +404,6 @@ def select_greedy_fim(
     return selected
 
 
-# ---------------------------------------------------------------------------
-# Bias-aware FIM selector (experimental)
-# ---------------------------------------------------------------------------
 
 
 def _fim_drone_contribution(
@@ -562,9 +554,6 @@ def select_greedy_fim_bias_corrected(
     return selected
 
 
-# ---------------------------------------------------------------------------
-# Adaptive-alpha selector (EXPERIMENTAL — does NOT replace paper method)
-# ---------------------------------------------------------------------------
 
 
 def compute_angular_coverage(
@@ -693,7 +682,6 @@ def select_best_views_adaptive_alpha(
     q = max(0.0, min(span_deg / span_ref_deg, 1.0))
     alpha_eff = alpha_min + q * (alpha_max - alpha_min)
 
-    # --- Greedy selection (same logic as select_best_views) ---
     directions = [m[1] for m in measurements]
     first_idx = max(range(n), key=lambda i: (confidences[i], -i))
 
@@ -732,9 +720,6 @@ def select_best_views_adaptive_alpha(
     return selected_indices, debug_info
 
 
-# ---------------------------------------------------------------------------
-# Drone-saturation penalty selector (EXPERIMENTAL)
-# ---------------------------------------------------------------------------
 
 
 def select_best_views_drone_penalty(
@@ -863,7 +848,6 @@ def select_best_views_relative_penalty(
 
     from collections import Counter
 
-    # Compute per-drone availability fraction (once)
     total_per_drone = Counter(drone_ids)
     availability = {did: count / n for did, count in total_per_drone.items()}
 
@@ -877,8 +861,7 @@ def select_best_views_relative_penalty(
     drone_selected: Counter = Counter()
     drone_selected[drone_ids[first_idx]] += 1
 
-    # Debug: track penalty activations
-    penalty_activations = []  # list of (drone_id, penalty_value) for each eval with penalty > 0
+    penalty_activations = []
     total_evals = 0
 
     while len(selected_indices) < k and remaining:
@@ -930,9 +913,6 @@ def select_best_views_relative_penalty(
     return selected_indices, debug_info
 
 
-# ---------------------------------------------------------------------------
-# Initial-coverage selector (EXPERIMENTAL)
-# ---------------------------------------------------------------------------
 
 
 def select_best_views_initial_coverage(
@@ -988,7 +968,6 @@ def select_best_views_initial_coverage(
         step = len(selected_indices) + 1
         in_bootstrap = step <= n_bootstrap
 
-        # First pass: respect cap
         for idx in sorted(remaining):
             ang_div = compute_angular_diversity(directions[idx], selected_dirs)
             if ang_div < min_angle_deg:
@@ -1001,7 +980,6 @@ def select_best_views_initial_coverage(
                 best_score = score
                 best_idx = idx
 
-        # Fallback: if all valid candidates are capped, lift cap for this step
         if best_idx == -1 and in_bootstrap:
             for idx in sorted(remaining):
                 ang_div = compute_angular_diversity(directions[idx], selected_dirs)
@@ -1034,9 +1012,6 @@ def select_best_views_initial_coverage(
     return selected_indices, debug_info
 
 
-# ---------------------------------------------------------------------------
-# Drone-quota selector (EXPERIMENTAL)
-# ---------------------------------------------------------------------------
 
 
 def _compute_drone_quotas(
@@ -1062,21 +1037,17 @@ def _compute_drone_quotas(
 
     score_sum = sum(scores.values())
     if score_sum < 1e-12:
-        # Uniform fallback
         n_drones = len(scores)
         return {did: max(min_per_drone, k_eff // n_drones) for did in scores}
 
-    # Raw quotas
     raw = {did: k_eff * s / score_sum for did, s in scores.items()}
 
-    # Apply minimum, clamp to available candidates
     quotas = {}
     for did in sorted(raw.keys()):
         q = max(round(raw[did]), min_per_drone if total_per_drone[did] >= min_per_drone else 0)
         q = min(q, total_per_drone[did])
         quotas[did] = q
 
-    # Adjust sum to k_eff
     diff = sum(quotas.values()) - k_eff
     sorted_drones = sorted(quotas.keys(), key=lambda d: raw[d] - quotas[d])
     i = 0
@@ -1148,7 +1119,6 @@ def select_best_views_drone_quota(
         best_idx = -1
         best_score = -1.0
 
-        # First pass: respect quota blocking
         for idx in sorted(remaining):
             did = drone_ids[idx]
             if any_below_quota and drone_counts[did] >= quotas[did]:
@@ -1162,7 +1132,6 @@ def select_best_views_drone_quota(
                 best_score = score
                 best_idx = idx
 
-        # Fallback: lift quota block
         if best_idx == -1:
             for idx in sorted(remaining):
                 ang_div = compute_angular_diversity(directions[idx], selected_dirs)
@@ -1195,9 +1164,6 @@ def select_best_views_drone_quota(
     return selected_indices, debug_info
 
 
-# ---------------------------------------------------------------------------
-# Balanced-quota selector (EXPERIMENTAL)
-# ---------------------------------------------------------------------------
 
 
 def select_best_views_balanced_quota(
@@ -1273,7 +1239,6 @@ def select_best_views_balanced_quota(
                 best_score = score
                 best_idx = idx
 
-        # Fallback: if all valid candidates are from satisfied drones
         if best_idx == -1:
             for idx in sorted(remaining):
                 ang_div = compute_angular_diversity(directions[idx], selected_dirs)
@@ -1311,9 +1276,6 @@ def select_best_views_balanced_quota(
     return selected_indices, debug_info
 
 
-# ---------------------------------------------------------------------------
-# Regime-switch selector (EXPERIMENTAL)
-# ---------------------------------------------------------------------------
 
 
 def select_best_views_switched(
@@ -1348,9 +1310,7 @@ def select_best_views_switched(
     if drone_ids is None or len(drone_ids) != n:
         raise ValueError("drone_ids is required and must match measurement count.")
 
-    from collections import defaultdict
 
-    # Per-drone stats
     drone_meas_count: dict = {}
     drone_conf_sum: dict = {}
     for i, did in enumerate(drone_ids):
@@ -1364,7 +1324,6 @@ def select_best_views_switched(
     max_avail = max(drone_avail.values())
     max_conf = max(drone_conf_mean.values())
 
-    # Weakest drone by availability
     weakest_did = min(drone_avail, key=drone_avail.get)
     avail_ratio = drone_avail[weakest_did] / max_avail if max_avail > 0 else 1.0
     conf_ratio = drone_conf_mean[weakest_did] / max_conf if max_conf > 0 else 1.0
@@ -1417,7 +1376,6 @@ def select_top_k_by_confidence(
     Returns:
         Indices sorted by descending confidence (ties: lowest index first).
     """
-    # Sort by (-confidence, index) for stable descending order
     ranked = sorted(range(len(confidences)),
                     key=lambda i: (-confidences[i], i))
     return ranked[:k]
@@ -1450,7 +1408,6 @@ def select_top_k_by_geometry(
 
     directions = [m[1] for m in measurements]
 
-    # Find the most divergent pair to seed the selection
     best_i, best_j = 0, 1
     best_angle = -1.0
     for i in range(n):
@@ -1479,7 +1436,7 @@ def select_top_k_by_geometry(
         best_idx = -1
         best_div = -1.0
 
-        for idx in sorted(remaining):  # sorted for deterministic tie-breaking
+        for idx in sorted(remaining):
             ang_div = compute_angular_diversity(directions[idx], selected_dirs)
             if ang_div < min_angle_deg:
                 continue

@@ -1,6 +1,9 @@
 """What one frame of the FLIGHT configuration costs on this board, with everything it carries."""
-import statistics as st, time
+import statistics as st
+import time
+
 from uav_vision.camera import OnboardCamera
+
 cam = OnboardCamera(model="/home/pi/modelos_visdrone/y960_ncnn_model", threshold=0.25,
                     tracker=True, reid_model="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
                     fps=3.0, crops=True)

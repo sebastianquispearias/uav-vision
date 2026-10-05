@@ -3,6 +3,22 @@ Camera configuration dataclass and predefined camera presets.
 
 Centralizes all camera intrinsic parameters so that switching cameras
 only requires changing DEFAULT_CAMERA (or passing a different CameraConfig).
+
+WHERE EACH PRESET'S NUMBERS COME FROM
+    SIYI_A8_MINI is estimated from the published SIYI specifications, for a Sony 1/1.7"
+    sensor of 7.6 x 5.7 mm with a diagonal field of view of 93 degrees:
+
+        f_real = (9.41 / 2) / tan(46.5 deg) ~= 4.47 mm
+        f_px = 4.47 * 1920 / 7.6 ~= 1130
+        horizontal FOV = 2 * atan(7.6 / (2 * 4.47)) ~= 80.8 deg
+
+    ARDUCAM_MODULE_3 is the camera that flies, and its intrinsics are recovered from the logs
+    of the real flights rather than estimated; NOTES.md has the provenance. Its calibrated
+    principal point sits 14 px away from the geometric centre, and its horizontal field of
+    view is 2 * atan(1920 / (2 * 1407)) = 68.6 degrees.
+
+    RPI_CAMERA_V2 comes from the official Raspberry Pi specifications:
+    f_px = (3.04 mm * 640 px) / 3.68 mm = 529.
 """
 
 from __future__ import annotations
@@ -13,13 +29,16 @@ from typing import Optional, Tuple
 
 @dataclass(frozen=True)
 class CameraConfig:
-    """Intrinsic camera parameters for simulation and geolocation."""
+    """Intrinsic camera parameters for simulation and geolocation.
+
+    fov_deg is the HORIZONTAL field of view, in degrees.
+    """
 
     name: str
     focal_length_px: float
     image_width: int
     image_height: int
-    fov_deg: float  # horizontal FOV in degrees
+    fov_deg: float
     calibrated_principal_point: Optional[Tuple[float, float]] = None
 
     @property
@@ -71,15 +90,7 @@ class CameraConfig:
         )
 
 
-# ---------------------------------------------------------------------------
-# Predefined camera presets
-# ---------------------------------------------------------------------------
 
-# Estimated from the published SIYI specifications (sensor Sony 1/1.7", 7.6 x 5.7 mm,
-# diagonal FOV 93 degrees):
-#   f_real = (9.41 / 2) / tan(46.5 deg) ~= 4.47 mm
-#   f_px = 4.47 * 1920 / 7.6 ~= 1130
-#   horizontal FOV = 2 * atan(7.6 / (2 * 4.47)) ~= 80.8 deg
 SIYI_A8_MINI = CameraConfig(
     name="SIYI A8 mini",
     focal_length_px=1130.0,
@@ -88,9 +99,6 @@ SIYI_A8_MINI = CameraConfig(
     fov_deg=80.8,
 )
 
-# Intrinsics recovered from the logs of the real flights (see NOTES.md). The calibrated
-# principal point is 14 px away from the geometric centre.
-# Horizontal FOV = 2 * atan(1920 / (2 * 1407)) = 68.6 degrees.
 ARDUCAM_MODULE_3 = CameraConfig(
     name="Arducam Module 3",
     focal_length_px=1407.0,
@@ -100,7 +108,6 @@ ARDUCAM_MODULE_3 = CameraConfig(
     calibrated_principal_point=(945.7, 547.1),
 )
 
-# From the official Raspberry Pi specifications: f_px = (3.04 mm * 640 px) / 3.68 mm = 529.
 RPI_CAMERA_V2 = CameraConfig(
     name="Raspberry Pi Camera v2",
     focal_length_px=529.0,

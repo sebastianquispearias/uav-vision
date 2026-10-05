@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Checkerboard calibration for the ArduCam, ready to run the day the board is printed.
 
 The intrinsics in ARDUCAM_MODULE_3 were never calibrated: the focal length comes from the
@@ -22,14 +21,25 @@ Two modes, because they happen at different times:
 Usage on the Raspberry:
     python calibrar_tablero.py capture --salida ~/calib --vistas 25
     python calibrar_tablero.py calibrar --salida ~/calib --casillas 9x6 --lado-mm 25
+
+The two-second sleep after the camera starts is the sensor stabilising its exposure, and the
+device is both stopped and closed at the end: stop() alone keeps it acquired, and then no later
+Picamera2 instance can open it.
+
+COVERAGE IS TRACKED AS A COARSE GRID over the frame, and each accepted view marks the cell its
+board centre falls in. The corners are the cells that matter and the ones people skip. Enough
+views of the same cell add cost and no information, so they are refused.
+
+The reprojection error per view is the honest quality number. Under about 0.5 px is good; a
+single view far above the rest is usually a mis-detected board and should be removed.
 """
 import argparse
 import glob
 import os
 import sys
 
-import numpy as np
 import cv2
+import numpy as np
 
 
 def parse_casillas(s):
@@ -61,10 +71,8 @@ def capture(args):
         main={"size": (ARDUCAM_MODULE_3.image_width, ARDUCAM_MODULE_3.image_height)},
         transform=Transform(hflip=1, vflip=1) if args.rot180 else Transform()))
     picam.start()
-    time.sleep(2)  # the sensor needs time to stabilize exposure
+    time.sleep(2)
 
-    # Coverage is tracked as a coarse grid over the frame: each accepted view marks the cell
-    # its board centre falls in. Corners are the cells that matter and the ones people skip.
     REJ = 4
     visto = np.zeros((REJ, REJ), dtype=int)
     n = 0
@@ -85,7 +93,6 @@ def capture(args):
             c = esq.reshape(-1, 2).mean(axis=0)
             celda = (min(REJ - 1, int(c[1] / img.shape[0] * REJ)),
                      min(REJ - 1, int(c[0] / img.shape[1] * REJ)))
-            # Enough views of the same cell add cost and no information.
             if visto[celda] >= max(1, args.vistas // (REJ * REJ)):
                 continue
             visto[celda] += 1
@@ -97,8 +104,6 @@ def capture(args):
         print('\ninterrumpido')
     finally:
         picam.stop()
-        # stop() alone keeps the device acquired; without close() no later
-        # Picamera2 instance can open it.
         picam.close()
 
     faltan = [(i, j) for i in range(REJ) for j in range(REJ) if visto[i, j] == 0]
@@ -143,8 +148,6 @@ def calibrar(args):
     rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(
         puntos_obj, puntos_img, forma, None, None)
 
-    # Reprojection error per view: the honest quality number. Under ~0.5 px is good; a single
-    # view far above the rest is usually a mis-detected board and should be removed.
     errs = []
     for i in range(len(puntos_obj)):
         proj, _ = cv2.projectPoints(puntos_obj[i], rvecs[i], tvecs[i], K, dist)

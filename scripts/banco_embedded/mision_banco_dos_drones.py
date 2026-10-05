@@ -19,6 +19,16 @@ Configured by environment variables, so one file serves both boards:
 
 Loaded like any mission, from ~/gradys_protocols:
     POST /mission/load {"protocol": "mision_banco_dos_drones:ProtocoloVisionBanco", ...}
+
+The fps given to the identity layer is the rate at which the chain processed THIS flight, and
+the layer converts its time thresholds into observation counts with it, exactly as the replay
+does. The cached detections carry no class, and a detection without one passes any search, as
+it does in the protocol; the order is still taken and acknowledged in the report.
+
+THE FAKE AUTOPILOT'S POSE IS DELIBERATELY KEPT OUT OF THE RAY CASTING. Rays have to be cast
+from where the drone was when each frame was taken, which is the recording's pose. But that
+pose IS where this board thinks it is flying, so the orbit needs it: without it the drone is
+told to go somewhere, the fake autopilot walks it there, and nothing ever notices it arrived.
 """
 import csv
 import math
@@ -33,8 +43,6 @@ from uav_vision.vision_protocol import VisionProtocol
 LAT0, LNG0, R_TIERRA = -22.978029946, -43.23214256266666, 6378137.0
 PITCH = -55.0
 CONF_MIN = 0.25
-# The rate at which the chain processed this flight. The identity layer converts its time
-# thresholds into observation counts with it, exactly as the replay does.
 FPS_CADENA = 1.638
 DATOS = os.path.expanduser(os.environ.get("BANCO_DATOS", "~/banco/datos"))
 DESDE_S = float(os.environ.get("BANCO_DESDE_S", "0"))
@@ -102,8 +110,6 @@ class CamaraBanco:
         self.classes = None
 
     def set_classes(self, classes=None):
-        # The cached detections carry no class, and a detection without one passes any search, as
-        # it does in the protocol. The order is still taken and acknowledged in the report.
         self.classes = frozenset(classes) if classes else None
 
     def ultimo_marco_jpeg(self, calidad: int = 85):
@@ -141,11 +147,6 @@ class ProtocoloBanco(VisionProtocol):
     _pose_placa = None
 
     def handle_telemetry(self, telemetry):
-        # The fake autopilot's pose is deliberately kept out of the ray casting: rays have to be
-        # cast from where the drone was when each frame was taken, which is the recording's pose.
-        # But it IS where this board thinks it is flying, so the orbit needs it: without this the
-        # drone is told to go somewhere, the fake autopilot walks it there, and nothing ever
-        # notices it arrived.
         self._pose_placa = telemetry.current_position
         if self._rodeo is not None:
             self._llego_al_rodeo()

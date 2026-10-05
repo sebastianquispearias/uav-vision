@@ -9,6 +9,13 @@ there, because a stretch full of 180 px people adds nothing to a set that alread
 The person-size estimate is measured, not derived: the camera looks forward and down, so a person at
 four metres is far along the ground and comes out no bigger than one at ten. A formula from the optics
 would say otherwise, so the test pins the shape that the labelled flights actually showed.
+
+WHAT EACH SECTION PROVES
+    1. The size estimate follows the FLIGHTS and not the optics, so it does not grow as the
+       drone descends. The flight used climbs: low at the start, high at the end. And a frame
+       cannot be called reviewed with a box still undecided.
+    2. A stretch reports what is NEW, which is the number the decision hangs on.
+    3. A flight without frames.csv says so instead of pretending it has a profile.
 """
 import os
 import shutil
@@ -21,7 +28,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import cv2
 import etiquetar_grupos as E
 
-# 1. the size estimate follows the flights, not the optics: it does not grow as the drone descends
 assert E.persona_px(4) >= E.persona_px(10) >= E.persona_px(18) >= E.persona_px(30), \
     "el tamano estimado no decrece con la altura: %s" % [E.persona_px(a) for a in (4, 10, 18, 30)]
 assert abs(E.persona_px(25) - 62) <= 8, "a 25 m deberia rondar los 62 px medidos, da %d" % E.persona_px(25)
@@ -34,7 +40,6 @@ try:
     vuelo = os.path.join(base, "vuelo")
     frames_dir = os.path.join(vuelo, "frames")
     os.makedirs(frames_dir)
-    # a flight that climbs: low at the start, 25 m at the end
     with open(os.path.join(vuelo, "frames.csv"), "w", newline="") as fh:
         fh.write("frame,alt_agl\n")
         for f in range(100, 200):
@@ -48,7 +53,7 @@ try:
     embs[0, 0], embs[1, 1] = 1.0, 1.0
     s = E.Sesion(cajas, embs, frames_dir, os.path.join(base, "et.json"), 2,
                  lista_frames=list(range(100, 140)))
-    s.corregir(0, "persona")          # a frame cannot be called reviewed with a box still undecided
+    s.corregir(0, "persona")
     s.marcar_revisado(100, True)
 
     d = s.alturas(cada=1)
@@ -57,7 +62,6 @@ try:
     assert d["en_lista"][10] and not d["en_lista"][60], "no distingue lo que esta en la lista de lo que nunca se propuso"
     print("  perfil: %d puntos, altura maxima %.1f m, marca revisados y lista" % (len(d["frames"]), d["max"]))
 
-    # 2. a stretch reports what is NEW, which is the number the decision hangs on
     bajo = s.tramo(100, 120)
     alto = s.tramo(180, 199)
     assert bajo["ya_revisados"] == 1 and bajo["frames"] == 21, "el tramo bajo no conto bien: %s" % bajo
@@ -69,7 +73,6 @@ try:
           % (bajo["alt_mediana"], bajo["persona_px"], bajo["ya_revisados"],
              alto["alt_mediana"], alto["persona_px"], alto["frames"] - alto["ya_revisados"]))
 
-    # 3. a flight without frames.csv says so instead of pretending it has a profile
     solo = os.path.join(base, "solo", "frames")
     os.makedirs(solo)
     cv2.imwrite(os.path.join(solo, "frame_0100.jpg"), np.full((120, 160, 3), 170, np.uint8))

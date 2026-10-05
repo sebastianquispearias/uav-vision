@@ -8,6 +8,25 @@ beside it and the drone moving on it.
     python scripts/render_compuesto.py --desde 3000 --hasta 3700
 
 Writes docs/clip_compuesto.mp4. Needs the recording in the sibling repo.
+
+THE REPORTS ARE THE ONES THE CHAIN ACTUALLY EMITTED, with the flight second of each, captured by
+running the replay against a recorder. Drawing the final answer from the first frame was a lie of
+omission: the system does not know it yet, and what makes this worth watching is that a target
+appears unsure and settles.
+
+The map window is in metres, chosen to hold both targets and the flight path with room to spare,
+and the camera earns more of the space than the map: it is what the audience reads, and the map
+is a reference beside it rather than an equal half.
+
+ONLY THE IDENTITIES THAT LASTED GET A NUMBER, renumbered from one over the rendered stretch.
+Nearest-centre continuity fragments badly, and NOTES.md has how badly on this stretch; putting a
+three-digit id over a pedestrian would say the system cannot hold anything, when what cannot hold
+it is this stand-in. The chain that flies has appearance matching and an identity layer that
+collapses these tracklets into a couple of candidates. Counting from the take-off would also open
+the clip at a serial number instead of what it is: this object, followed.
+
+The replay's clock starts at the first airborne frame that carries a detection, not at the first
+recorded frame. Getting that wrong slides every report by four minutes.
 """
 import argparse
 import csv
@@ -26,14 +45,9 @@ FRAMES = os.path.join(VUELO, "frames")
 SAT = os.path.join(HNO, "entrenamiento")
 
 LAT0, LNG0, R = -22.978029946, -43.23214256266666, 6378137.0
-# The reports the chain actually emitted, with the flight second of each. Captured by running
-# the replay against a recorder; docs/reportes_vuelo.json. Drawing the final answer from the
-# first frame was a lie of omission: the system does not know it yet, and what makes it worth
-# watching is that a target appears unsure and settles.
 REPORTES = os.path.join(RAIZ, "docs", "reportes_vuelo.json")
 COLOR = {"person": (201, 95, 128), "car": (62, 155, 190), "van": (62, 155, 190),
          "truck": (62, 155, 190), "bus": (62, 155, 190)}
-# Map window in metres, chosen to hold both targets and the flight path with room to spare.
 E0, E1, N0, N1 = -22.0, 18.0, -14.0, 26.0
 LADO = 800
 
@@ -91,7 +105,7 @@ def numerar(cajas, umbral=110.0, min_vida=20):
         for (b, conf, cls) in cajas[n]:
             cx, cy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
             mejor, dmin = None, umbral
-            for k, (vx, vy, vcls, vid, vn) in enumerate(vivos):
+            for k, (vx, vy, vcls, _vid, vn) in enumerate(vivos):
                 if vcls != cls or n - vn > 12:
                     continue
                 d = math.hypot(cx - vx, cy - vy)
@@ -108,12 +122,6 @@ def numerar(cajas, umbral=110.0, min_vida=20):
         salida[n] = actuales
         vivos = [v for v in vivos if n - v[4] <= 12]
 
-    # Only the identities that lasted get a number, renumbered from one. Nearest-centre
-    # continuity fragments -- measured on this stretch, the median identity survived three
-    # frames and the count reached 201 for at most ten boxes on screen. Putting #187 over a
-    # pedestrian would say the system cannot hold anything, when what cannot hold it is this
-    # stand-in: the chain that flies has appearance matching and an identity layer that
-    # collapses these tracklets into two candidates.
     duracion = {}
     for lista in salida.values():
         for (_b, _c, cls, ident) in lista:
@@ -148,11 +156,7 @@ def main():
         if f[1] >= args.conf:
             cajas.setdefault(int(f[0]), []).append((f[2:6], float(f[1]), str(c)))
 
-    # Numbered over the rendered stretch only. Counting from the take-off would open the clip
-    # at #219, which reads as a serial number instead of what it is: this object, followed.
     cajas = numerar({k: v for k, v in cajas.items() if args.desde <= k <= args.hasta})
-    # The replay's clock starts at the first airborne frame that carries a detection, not at
-    # the first recorded frame. Getting this wrong slides every report by four minutes.
     con_persona = {int(f[0]) for f in d if f[1] >= args.conf}
     aire = sorted(f for f, q in poses.items()
                   if float(q["alt_agl"]) > 3.0 and f in con_persona)
@@ -163,8 +167,6 @@ def main():
     if fondo is None:
         fondo = np.full((LADO, LADO, 3), 22, np.uint8)
 
-    # The camera earns the space: it is what the audience reads. The map is a
-    # reference beside it, not an equal half.
     ANCHO_CAM, ALTO_CAM = 1420, 800
     W, H = ANCHO_CAM + LADO, ALTO_CAM + 120
     vw = cv2.VideoWriter(args.salida, cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (W, H))

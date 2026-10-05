@@ -5,6 +5,15 @@ Each case is built from the data shape the guard exists to catch, rather than fr
 synthetic: a guard that only passes on well-formed input has not been tested.
 
 Run with: python tests/test_invariants.py
+
+THE SHAPE THAT MATTERS is flight 3's: a camera running fast with three long spells on the
+ground. Dividing the count by the whole span understates the rate by about three times, which
+is the error made four times in this repository. Without the gaps the two agree, which is
+exactly why the wrong version survives so long.
+
+The stale-cache cases cover a file with no stamp at all, left by an earlier version, and the
+harmless differences that must NOT force a rebuild: a float that arrives as an int, or a key in
+another order.
 """
 import os
 import sys
@@ -15,8 +24,7 @@ sys.path.insert(0, _HERE)
 
 import numpy as np
 
-from uav_vision.invariants import (InvariantError, instantaneous_rate, load_cache,
-                                save_cache, check_rate)
+from uav_vision.invariants import InvariantError, check_rate, instantaneous_rate, load_cache, save_cache
 
 FALLOS = []
 
@@ -31,15 +39,13 @@ print("=" * 70)
 print("1. La cadencia: huecos largos no pueden mover el resultado")
 print("=" * 70)
 
-# Flight 3's shape: a camera at 9.35 Hz with three long spells on the ground. Dividing the
-# count by the span says 3.28 Hz for the same recording -- the error made four times.
 paso = 1.0 / 9.35
 t, ahora = [], 0.0
-for tramo in range(3):
+for _tramo in range(3):
     for _ in range(1000):
         t.append(ahora)
         ahora += paso
-    ahora += 190.0          # on the ground between passes
+    ahora += 190.0
 t = np.asarray(t)
 
 cad = instantaneous_rate(t)
@@ -48,7 +54,6 @@ revisar(abs(cad - 9.35) < 0.1, "devuelve la cadencia real", "%.2f Hz" % cad)
 revisar(por_span < 6.0, "   (y el calculo por span habria dado otra cosa)",
         "%.2f Hz, %.1fx mas bajo" % (por_span, cad / por_span))
 
-# Without the gaps the two agree, which is why the wrong version survives so long.
 liso = np.arange(0, 100) * paso
 revisar(abs(instantaneous_rate(liso, warn=False) - len(liso) / (liso[-1] - liso[0])) < 0.2,
         "sin huecos, ambos calculos coinciden: por eso el error sobrevive")
@@ -72,14 +77,14 @@ print("2. La tasa declarada tiene que ser la entregada")
 print("=" * 70)
 
 try:
-    check_rate(3.00, 2.31, what="la tasa del lazo")   # measured on the Pi, 2026-08-25
+    check_rate(3.00, 2.31, what="la tasa del lazo")
     revisar(False, "2.31 contra 3.00 tiene que reventar")
 except InvariantError as exc:
     revisar("2.31" in str(exc) and "3.00" in str(exc),
             "el caso real de la Pi revienta y dice los dos numeros")
 
 try:
-    check_rate(3.00, 2.55, what="el submuestreo")     # the subsampler bug, same night
+    check_rate(3.00, 2.55, what="el submuestreo")
     revisar(False, "2.55 contra 3.00 tiene que reventar")
 except InvariantError:
     revisar(True, "el caso real del submuestreo revienta")
@@ -109,16 +114,14 @@ revisar(d is not None and float(d["cadencia"]) == 3.11, "y trae todo lo guardado
 revisar(load_cache(ruta, P2, quiet=True) is None,
         "con OTROS parametros, se ignora en vez de mentir")
 
-# The shape that matters: a stale file with no stamp at all, left by an earlier version.
 viejo = os.path.join(tmp, "viejo.npz")
-np.savez(viejo, obs=np.arange(3.0))          # written by the old code, no stamp at all
+np.savez(viejo, obs=np.arange(3.0))
 revisar(load_cache(viejo, P1, quiet=True) is None,
         "una cache SIN firma tambien se ignora (la de la corrida zombi)")
 
 revisar(load_cache(os.path.join(tmp, "no_existe.npz"), P1) is None,
         "y si no existe, devuelve None sin drama")
 
-# A float that arrives as int, or a key in another order, must not force a rebuild.
 revisar(load_cache(ruta, {"buffer_s": 8.0, "modelo": "y960", "tasa": 3.0}) is not None,
         "el orden de las claves no cuenta como cambio")
 

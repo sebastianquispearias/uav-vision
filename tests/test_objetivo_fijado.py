@@ -21,6 +21,16 @@ Tres cosas pueden fallar sin que nadie se entere, y son las tres secciones:
   3. Que no este apagado mientras nadie senale nada.
 
 Run: python tests/test_objetivo_fijado.py
+
+WHAT EACH SECTION PROVES
+    1. The window filters: a weak box inside survives and the same box outside does not. And
+       WITHOUT the window the same list behaves as it always did, which is what proves the gain
+       comes from the window and not from having loosened the general threshold.
+    2. The window FOLLOWS THE AIRCRAFT and is cleared when the target leaves the frame. With
+       nothing pointed at, it stays off; the operator fixes a point in front of the aircraft;
+       the aircraft moves and the same ground point lands somewhere else in the image; the
+       target leaves the frame and the window must be CLEARED, not left where it was.
+    3. Releasing it turns everything off.
 """
 import os
 import sys
@@ -28,16 +38,14 @@ import sys
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
-# gradys-embedded vive al lado de este repositorio, como en el resto de la suite.
 sys.path.insert(0, os.path.join(os.path.dirname(RAIZ), "gradys-embedded"))
 
-from uav_vision.camera import dentro_del_foco, solo_confirmadas  # noqa: E402
-from uav_vision.camera_config import ARDUCAM_MODULE_3  # noqa: E402
-from uav_vision.vision_protocol import FOCO_RADIO_PX, FOCO_UMBRAL, VisionProtocol  # noqa: E402
+from uav_vision.camera import dentro_del_foco, solo_confirmadas
+from uav_vision.camera_config import ARDUCAM_MODULE_3
+from uav_vision.vision_protocol import FOCO_RADIO_PX, FOCO_UMBRAL, VisionProtocol
 
 print()
 
-# 1. the window filters: a weak box inside survives, the same box outside does not
 FOCO = {"cx": 960.0, "cy": 540.0, "radio": 320.0, "umbral": 0.10}
 dentro = {"px": 1000.0, "py": 500.0, "conf": 0.14}
 fuera = {"px": 100.0, "py": 500.0, "conf": 0.14}
@@ -53,14 +61,11 @@ assert dentro in sobrevive, "una caja floja DENTRO de la ventana tenia que pasar
 assert fuera not in sobrevive, "la misma caja floja FUERA de la ventana no puede pasar"
 assert floja not in sobrevive, "una caja por debajo del umbral del foco no puede pasar ni dentro"
 assert firme in sobrevive, "una caja firme fuera de la ventana no puede perderse"
-# Sin ventana, la misma lista se comporta como siempre: esto es lo que prueba que la ganancia
-# viene de la ventana y no de haber aflojado el umbral general.
 sin_foco = solo_confirmadas([dentro, fuera, floja, firme], 0.25, None)
 assert sin_foco == [firme], "sin ventana solo puede pasar la caja firme, y paso %d" % len(sin_foco)
 print("  sin ventana, esa misma lista deja pasar solo la caja firme: la ganancia es de la ventana")
 
 
-# 2. the window follows the aircraft, and is cleared when the target leaves the frame
 class CamaraDePrueba:
     """Just enough camera to see where the protocol points the window."""
 
@@ -85,13 +90,11 @@ p.pitch_deg = -55.0
 p.ground_z = 0.0
 p._objetivo = None
 
-# nothing pointed at: the window stays off
 p._position = (0.0, 0.0, 20.0)
 p._apuntar_foco(0.0, 0.0, 0.0)
 assert p.camera.foco is None, "sin objetivo no puede haber ventana"
 print("  sin objetivo senalado: no hay ventana")
 
-# the operator fixes a point in front of the aircraft
 p.fix_target(0.0, 14.0)
 p._apuntar_foco(0.0, 0.0, 0.0)
 primera = p.camera.foco
@@ -100,7 +103,6 @@ assert primera["umbral"] == FOCO_UMBRAL and primera["radio"] == FOCO_RADIO_PX, "
 print("  objetivo a 14 m al norte, dron a 20 m: la ventana cae en (%d, %d)"
       % (primera["cx"], primera["cy"]))
 
-# the aircraft moves: the same ground point lands somewhere else in the image
 p._position = (0.0, 4.0, 20.0)
 p._apuntar_foco(0.0, 0.0, 0.0)
 segunda = p.camera.foco
@@ -110,14 +112,12 @@ assert abs(segunda["cy"] - primera["cy"]) > 50, (
 print("  el dron avanza 4 m y la misma persona cae en (%d, %d): la ventana lo sigue"
       % (segunda["cx"], segunda["cy"]))
 
-# the target leaves the frame: the window must be cleared, not left where it was
 p._position = (400.0, 400.0, 20.0)
 p._apuntar_foco(0.0, 0.0, 0.0)
 assert p.camera.foco is None, ("el objetivo salio del encuadre y la ventana vieja quedo pegada: "
                                "eso baja el umbral sobre suelo que nadie avalo")
 print("  el dron se va a 560 m: el objetivo sale del cuadro y la ventana se APAGA")
 
-# 3. releasing it turns everything off
 p._position = (0.0, 0.0, 20.0)
 p.fix_target(None)
 assert p._objetivo is None and p.camera.foco is None, "soltar el objetivo no apago la ventana"

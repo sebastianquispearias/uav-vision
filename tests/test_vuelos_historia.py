@@ -6,6 +6,15 @@ comparing two flights meant restarting the tool, so nobody compared; and when a 
 wrong there was no way to ask when it changed, because the only thing on disk was the current answer.
 The picker has to report each flight without loading it and open another without losing what the
 current one saved, and every save has to leave a line and a recoverable copy.
+
+The grouping clusters by cosine, which has no answer for a zero vector, so every synthetic box
+is given a direction.
+
+WHAT EACH SECTION PROVES
+    1. Every save leaves a line whose counts follow what the review holds.
+    2. A copy of the state is recoverable, and it is THE STATE and not a summary.
+    3. The picker reports a flight WITHOUT LOADING IT, and the numbers are that flight's own.
+    4. Opening a flight gives a working session, and refuses one it does not know.
 """
 import json
 import os
@@ -27,13 +36,11 @@ try:
     with open(cajas, "w", newline="") as fh:
         fh.write("frame,conf,x1,y1,x2,y2,fuente\n100,0.9,10,10,60,120,vuelo\n101,0.8,12,10,62,120,vuelo\n")
     salida = os.path.join(base, "etiquetas.json")
-    # the grouping clusters by cosine, which has no answer for a zero vector: give each box a direction
     embs = np.zeros((2, 512), "float32")
     embs[0, 0], embs[1, 1] = 1.0, 1.0
     np.save(os.path.join(base, "embs.npy"), embs)
     s = E.Sesion(cajas, embs, base, salida, 1, lista_frames=[100, 101, 102, 103])
 
-    # 1. every save leaves a line whose counts follow what the review holds
     s.corregir(0, "persona")
     s.nueva(102, [20, 20, 70, 130])
     hist = salida.replace(".json", "_frames_historia.jsonl")
@@ -45,7 +52,6 @@ try:
     print("  historia: %d guardados, el ultimo con %d personas y %d dibujadas"
           % (len(lineas), lineas[-1]["personas"], lineas[-1]["dibujadas"]))
 
-    # 2. a copy of the state is recoverable, and it is the state and not a summary
     copias = salida.replace(".json", "_frames_copias")
     archivos = sorted(os.listdir(copias))
     assert archivos, "no se guardo ninguna copia"
@@ -53,7 +59,6 @@ try:
     assert d["nuevas"]["102"], "la copia no trae la caja dibujada"
     print("  copias: %d, la ultima trae la caja dibujada" % len(archivos))
 
-    # 3. the picker reports a flight without loading it, and the numbers are the flight's own
     E.VUELOS["_prueba"] = (cajas, os.path.join(base, "embs.npy"), base, salida,
                            os.path.join(base, "lista.txt"))
     open(os.path.join(base, "lista.txt"), "w").write("100\n101\n102\n103\n")
@@ -63,7 +68,6 @@ try:
     assert r["frames"] == 4, "el resumen no conto los frames: %s" % r
     print("  resumen sin cargar: %d cajas, %d personas, %d frames" % (r["cajas"], r["personas"], r["frames"]))
 
-    # 4. opening a flight gives a working session, and refuses one it does not know
     otra = E.abrir_vuelo("_prueba")
     assert otra.nombre == "_prueba" and len(otra.lista) == 4, "la sesion abierta no es la del vuelo"
     assert otra.final(0) == "persona", "la sesion abierta perdio lo que ya estaba guardado"

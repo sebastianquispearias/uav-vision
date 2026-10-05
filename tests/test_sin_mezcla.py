@@ -9,8 +9,27 @@ Sobre el vuelo real (el replay): ningun POI sin marca de madurez, y los reportes
 la mezcla llegan como latidos. El resultado del vuelo no cambia: el operador sigue donde estaba.
 
 Run: python tests/test_sin_mezcla.py
+
+THE ERROR CAME DOWN IN THREE STEPS, each of them a rule this file now pins:
+
+  - until moving targets were described by their RECENT past, some of the flight's walkers were
+    not classified mobile and merged into the operator's candidate;
+  - until a fitted motion also had to carry the target further than projection noise, short
+    tracks of the STANDING operator counted as mobile and stopped merging back into one
+    candidate;
+  - until a moving track had to ask whether the person already had a candidate before opening
+    one, the mobile branch was the only path that never consulted the matcher, so a standing
+    operator whose duplicate boxes fake a speed became several points.
+
+Scored by identity against the hand labels of this flight, the operator went from four
+candidates to three with the same five people found and the same four phantoms, and the point
+landed closer. NOTES.md has the distances.
 """
-import contextlib, io, os, runpy, sys
+import contextlib
+import io
+import os
+import runpy
+import sys
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
@@ -35,15 +54,6 @@ for modo in ([], ["--span"]):
           % (nombre, len(reps), len(mezcla), latidos, d))
     assert not mezcla, "con capa de identidad no puede salir un punto RANSAC: %s" % mezcla[:1]
     assert latidos > 0, "antes del primer candidato el dron tiene que mandar latidos"
-    # 2.18 m until moving targets were described by their recent past: with it some of the flight's
-    # walkers are classified mobile and stop merging into the operator's candidate (670 -> 519 impacts).
-    # 2.25 m until a fitted motion also had to carry the target further than projection noise: short
-    # tracks of the standing operator stopped being mobile and merge back into one candidate.
-    # 2.27 m until a moving track had to ask whether the person already had a candidate before opening
-    # one: the mobile branch was the only path that never consulted the matcher, so a standing operator
-    # whose duplicate boxes fake a speed became several points. Scored by identity against the hand
-    # labels of this flight, the operator went from four candidates to three with the same five people
-    # found and the same four phantoms, and the point landed closer.
     esperado = 2.39 if modo else 1.98
     assert abs(d - esperado) < 0.005, "el resultado del vuelo cambio: %.2f m en vez de %.2f" % (d, esperado)
 

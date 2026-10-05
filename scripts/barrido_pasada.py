@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Would this system report anything at all during a real search sweep?
 
 Every number this project has produced comes from flight 3, where the drone LOITERED over one
@@ -28,6 +27,19 @@ incompatible dwell-time tables ended up in this project's notes:
        pass. This one measures the PIPELINE alone, and it is the one to quote.
 
 Stage 1 caches the observation stream, so the parameter sweeps are cheap.
+
+The cached observation stream and the embeddings live in the flight archive next to this repo:
+they are 5 MB of intermediate data, not source. --miradas asks for maturity by independent
+looks instead of first-to-last span; see IncrementalIdentity.
+
+THE CADENCE IS THE RATE FRAMES ACTUALLY ARRIVE AT. The value cached in the npz was frames over
+the wall-clock span, which counts 573 s of the drone sitting on the ground as if it were flying
+and understates the rate by about 3x, shrinking every maturity threshold with it.
+
+THE CONTROL THE FIRST TABLE NEEDS. A pass that reports nothing because the drone was pointing
+elsewhere is not a failure of the pipeline, it is a failure of the flight plan. Separating the
+two means asking only about passes where the target was genuinely in the field of view, which
+the reprojection gives for free.
 """
 import csv
 import math
@@ -38,12 +50,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from uav_vision.camera_config import ARDUCAM_MODULE_3
-from uav_vision.pinhole_local import pixel_to_ray
 from uav_vision.identity import IncrementalIdentity
+from uav_vision.pinhole_local import pixel_to_ray
 
 FR = r'C:\Users\User\Desktop\lac\drone-geolocation\data\flight_02ago\20260802_133309'
-# The cached observation stream and the embeddings live in the flight archive,
-# next to this repo: they are 5 MB of intermediate data, not source.
 AQUI = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), 'drone-geolocation', 'entrenamiento')
 REF = (-22.978029946, -43.23214256266666)
@@ -54,14 +64,13 @@ OBJ = np.array([2.5, 4.4])
 RADIO = 3.5
 
 CUAL = next((a for a in sys.argv[1:] if not a.startswith('--')), '1280')
-# --miradas: maturity by independent looks instead of first-to-last span (see IncrementalIdentity).
 MADUREZ = 'looks' if '--miradas' in sys.argv else 'span'
 MIRADAS_MIN = next((int(a.split('=', 1)[1]) for a in sys.argv if a.startswith('--miradas-min=')), 5)
 OBS_NPZ = os.path.join(AQUI, 'obs_stream_%s.npz' % CUAL)
 
-DURACIONES = [10, 15, 20, 30, 45, 60, 90, 120]     # seconds per simulated pass
-PASO_S = 10                                        # window step
-REPORTES = [6, 9, 12, 18, 24, 36]                  # dur_reporte_s to try
+DURACIONES = [10, 15, 20, 30, 45, 60, 90, 120]
+PASO_S = 10
+REPORTES = [6, 9, 12, 18, 24, 36]
 
 
 def enu(lat, lng):
@@ -75,7 +84,7 @@ def construir_stream():
     import cv2
     from boxmot.trackers.bbox.botsort import BotSort
 
-    filas = [r for r in csv.DictReader(open(os.path.join(AQUI, 'y%s_cajas.csv' % CUAL)))]
+    filas = list(csv.DictReader(open(os.path.join(AQUI, 'y%s_cajas.csv' % CUAL))))
     embs = np.load(os.path.join(AQUI, 'y%s_embs.npy' % CUAL))
     por_frame = {}
     for i, r in enumerate(filas):
@@ -159,9 +168,6 @@ if __name__ == '__main__':
         construir_stream()
     D = np.load(OBS_NPZ)
     obs = D['obs']
-    # The cadence frames actually arrive at. The value cached in the npz was frames over the
-    # wall-clock span, which counts 573 s of the drone sitting on the ground as if it were
-    # flying and understates the rate ~3x -- shrinking every maturity threshold with it.
     _p = [r for r in csv.DictReader(open(os.path.join(FR, 'frames.csv')))
           if float(r['alt_agl']) > 3.0]
     _t = np.array([float(r['t_mono']) for r in _p])
@@ -214,13 +220,8 @@ if __name__ == '__main__':
               % ('%.0f s' % rep, 100.0 * op / len(inicios),
                  100.0 * algo / len(inicios), fal / len(inicios)))
 
-    # -- the control the first table needs ---------------------------------
-    # A pass that reports nothing because the drone was pointing elsewhere is not a failure
-    # of the pipeline, it is a failure of the flight plan. Separating the two means asking
-    # only about passes where the target was genuinely in the field of view, which the
-    # reprojection gives for free.
     from uav_vision.pinhole_local import project_to_pixel
-    poses = [r for r in csv.DictReader(open(os.path.join(FR, 'frames.csv')))]
+    poses = list(csv.DictReader(open(os.path.join(FR, 'frames.csv'))))
     aire = [r for r in poses if float(r['alt_agl']) > 3.0]
     t_ini = float(aire[0]['t_mono'])
     visibles = []
@@ -249,7 +250,7 @@ if __name__ == '__main__':
             if len(vv) == 0:
                 continue
             seg_vista = float(vv[:, 1].sum()) / fps
-            if seg_vista < 0.3 * dur:      # target in view under a third of the pass
+            if seg_vista < 0.3 * dur:
                 continue
             sl = obs[(T >= s0) & (T < s0 + dur)]
             if len(sl) == 0:

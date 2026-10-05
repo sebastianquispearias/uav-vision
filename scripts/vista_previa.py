@@ -3,6 +3,8 @@
 Serves http://<pi>:8000/ with the same capture transform the deployment chain
 uses (rot180), so what you see is what the detector gets. Stop it with Ctrl+C
 or `pkill -f vista_previa` before running anything else that needs the camera.
+
+A broken pipe here is the client closing the tab, which is not an error.
 """
 
 import io

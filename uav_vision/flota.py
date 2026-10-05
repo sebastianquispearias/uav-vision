@@ -11,7 +11,6 @@ Nothing here knows about HTTP, drawing, or where it runs: data in, decisions out
 
 import base64
 import math
-from typing import Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -87,8 +86,6 @@ def mismo_objetivo(a, b):
     if ca and cb and ca != cb:
         return False
     radio = distancia_maxima(a, b)
-    # Plain metres. separacion_m() is for lat/lng pairs; handing it x/y in metres reads them
-    # as degrees and every pair comes back impossibly far apart.
     if math.hypot(a.get('x', 0.0) - b.get('x', 0.0),
                   a.get('y', 0.0) - b.get('y', 0.0)) > radio:
         return False
@@ -141,6 +138,41 @@ def fundir(por_dron):
 
     The fused position is weighted by how many observations each drone contributed, so a
     target one drone barely glimpsed does not drag the estimate of the one that watched it.
+
+    Every other field needs its own rule, because a pin otherwise keeps whatever the FIRST
+    report that created it happened to carry, and "first" is an accident of arrival order:
+
+    age_s
+        A target is as fresh as the drone that saw it LAST. Keeping the first drone's age
+        would fade out, on the station's map, a target another drone has in view. The sighting
+        instants are compared on the station's clock, which is report time minus age; a drone
+        that sends no age leaves the fused pin without one, which the page reads as "cannot be
+        aged" rather than as old.
+
+    evidence, looks, looks_min, duty
+        Evidence travels as a trio -- how much, out of how much, as a fraction -- and the trio
+        is taken WHOLE from the drone that has more of it, rather than each field being
+        maximised on its own, which could pair one drone's count with another's threshold.
+        Looks are not added up: two drones watching the same target at the same time are
+        counting the same seconds, so the sum would invent evidence.
+
+    emb
+        The appearance of a fused pin is whichever drone's has one. This is not cosmetic: the
+        operator's "not it" only leaves the station when there is a template to send, because
+        gs_mapa.plantilla_para filters on emb, so a fused pin with no vector turns the
+        operator's button into a button that does nothing. The two vectors are NOT averaged:
+        they belong to different cameras with different exposures, and the mean of two
+        appearances is the appearance of nothing.
+
+    radius_m
+        The margin of a fused pin is the SMALLER of the two, not the first drone's. A target
+        seen from close and from far does not have one uncertainty, it has the closer drone's,
+        and keeping whichever arrived first was reporting the worse of two answers for no
+        reason; NOTES.md has the measurement. What is NOT done here, and would need an
+        argument first, is averaging the two biases DOWN. Two aircraft have independent
+        compasses, so the yaw half really is independent and sqrt(2) of it would be honest,
+        but their GPS error is partly common, so the gps half is not. Claiming the whole bias
+        averages would invent precision.
     """
     salida = []
     for dron, lista in por_dron.items():
@@ -156,46 +188,14 @@ def fundir(por_dron):
                 ya['y'] = round((ya['y'] * na + poi['y'] * nb) / (na + nb), 2)
                 ya['n_obs'] = na + nb
                 ya['mature'] = bool(ya.get('mature') or poi.get('mature'))
-                # A target is as fresh as the drone that saw it last. Keeping the first drone's
-                # age would fade out, on the station's map, a target another drone has in view.
-                # The sighting instants are compared on the station's clock (report time minus
-                # age); a drone that sends no age leaves the fused pin without one, which the
-                # page reads as "cannot be aged" rather than as old.
                 ea, eb = ya.get('age_s'), poi.get('age_s')
                 if ea is None or eb is None:
                     ya['age_s'] = None
                 elif (poi.get('t') or 0.0) - eb > (ya.get('t') or 0.0) - ea:
                     ya['age_s'], ya['t'] = eb, poi.get('t', ya.get('t'))
-                # Evidence travels as a trio (how much, out of how much, as a fraction), and the
-                # trio is taken whole from the drone that has more of it rather than each field
-                # being maximised on its own, which could pair one drone's count with another's
-                # threshold. Looks are not added up: two drones watching the same target at the
-                # same time are counting the same seconds, so the sum would invent evidence.
                 if (poi.get('evidence') or 0.0) > (ya.get('evidence') or 0.0):
                     for campo in ('evidence', 'looks', 'looks_min', 'duty'):
                         ya[campo] = poi.get(campo)
-                # The margin of a fused pin is the SMALLER of the two, not the first drone's.
-                # Measured on the 02ago candidates, the 95 % radius of a static target is 82 to
-                # 99.9 % bias and almost nothing scatter, and that bias is gps_sigma plus the
-                # slant range times yaw_sigma: a target seen from 14 m and from 37 m does not have
-                # one uncertainty, it has the closer drone's. Keeping whichever arrived first was
-                # reporting the worse of two answers for no reason.
-                #
-                # What is NOT done here, and would need an argument first: averaging the two
-                # biases down. Two aircraft have independent compasses, so the yaw half really is
-                # independent and sqrt(2) of it would be honest; their GPS error is partly common,
-                # so the gps half is not. Claiming the whole bias averages would invent precision.
-                # La apariencia del pin fundido: la del que la tenga. Un pin se queda con los
-                # campos del primer reporte que lo creo, y si ESE dron no calcula apariencia el
-                # pin queda sin vector aunque el otro si lo traiga. Eso no es cosmetico: el "no
-                # es" del operador solo sale de la estacion cuando hay una plantilla que mandar
-                # (gs_mapa.plantilla_para filtra por emb), asi que un pin fundido sin vector
-                # convierte el boton del operador en un boton que no hace nada.
-                # Medido el 3oct con una placa calculando apariencia y la otra no: el veredicto
-                # se registraba en disco y no llegaba a ningun dron.
-                # No se promedian los dos vectores: pertenecen a camaras distintas con
-                # exposiciones distintas, y la media de dos apariencias no es la apariencia de
-                # nada. Se conserva la que ya existe.
                 if ya.get('emb') is None and poi.get('emb') is not None:
                     ya['emb'] = poi['emb']
                 ra, rb = ya.get('radius_m'), poi.get('radius_m')
@@ -218,6 +218,11 @@ def pedidos_de_verificacion(pois, drones, ahora, vivo_s=10.0):
     A target earns a request when it is unconfirmed, when only one drone has seen it, and when
     some other drone is alive to go. Unconfirmed and seen by two is not a request: the second
     look already happened and the answer was still 'not sure', which is a different problem.
+
+    'puede_ir' names every idle drone rather than the nearest one. The nearest would be better,
+    but the station does not know where the others are: a report carries the target's position,
+    not the drone's. Naming them all and letting the operator choose is honest; guessing would
+    not be.
     """
     vivos = [d for d, f in drones.items() if ahora - f.get('t', 0) < vivo_s]
     if len(vivos) < 2:
@@ -238,9 +243,6 @@ def pedidos_de_verificacion(pois, drones, ahora, vivo_s=10.0):
             'lat': p.get('lat'), 'lng': p.get('lng'),
             'n_obs': p.get('n_obs'),
             'visto_por': vistos[0],
-            # The nearest idle drone would be better, but the station does not know where the
-            # others are: a report carries the target's position, not the drone's. Naming them
-            # all and letting the operator choose is honest; guessing would not be.
             'puede_ir': sorted(libres),
         })
     return salida

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Invariants for derived quantities, enforced in code rather than documented as warnings.
 
 The failure mode these guard against is a specific one: a derived number that is wrong but

@@ -16,6 +16,11 @@ gave AUC 0.55-0.80.
 Runs in the training venv, which has open_clip:
 
     ../drone-geolocation/entrenamiento/venv/Scripts/python.exe scripts/medir_filtro_clip.py
+
+THE WEIGHTS NEED THE MATCHING CONFIG. The OpenAI weights were trained with QuickGELU, and
+loaded under the plain "ViT-B-32" config they run with the wrong activation, which open_clip
+warns about, and separate worse. On 128 px crops: AUC 0.928 / 0.891 / 0.896 on
+02ago / 01ago-2a / 01ago-2b, against 0.947 / 0.923 / 0.944 with the matching config.
 """
 import argparse
 import csv
@@ -31,9 +36,6 @@ RAIZ = os.path.dirname(AQUI)
 HNO = os.path.join(RAIZ, "..", "drone-geolocation")
 ENT = os.path.join(HNO, "entrenamiento")
 
-# The OpenAI weights were trained with QuickGELU. Loaded under the plain "ViT-B-32" config they run with
-# the wrong activation (open_clip warns about it) and separate worse: on 128 px crops AUC 0.928 / 0.891 /
-# 0.896 on 02ago / 01ago-2a / 01ago-2b, against 0.947 / 0.923 / 0.944 with the matching config.
 MODELO = "ViT-B-32-quickgelu"
 PESOS = "openai"
 
@@ -165,7 +167,7 @@ def main():
     print("ZERO-SHOT (sin entrenar nada)")
     print("%-10s %6s | %-52s" % ("vuelo", "AUC", "al umbral que conserva 95% de personas"))
     tt = t.cpu().numpy()
-    for nombre, (dia, feats, es) in datos.items():
+    for nombre, (_dia, feats, es) in datos.items():
         sim = 100.0 * feats @ tt.T
         s = (np.log(np.exp(sim[:, :len(POSITIVOS)]).sum(1)) - np.log(np.exp(sim[:, len(POSITIVOS):]).sum(1)))
         rech, p0, p1 = al_95(s, es)

@@ -10,6 +10,48 @@ Three things were silently dead, and the first section below measures the one th
 because it does not look like a failure on the screen.
 
 Run: python tests/test_misiones_operador.py
+
+WHAT EACH SECTION PROVES
+    TWO PEOPLE, STANDING STILL, A FEW METRES APART, seen by two drones. The second drone has its
+    own GPS and compass bias, so it sees both of them shifted. With that bias, its reading of
+    the first person lands CLOSER to the first drone's reading of the second person than to its
+    own. The WRONG pin is nearer. Choosing by distance, even by the best match and not the
+    first, gets it wrong: appearance has to decide. The bias is not contrived; NOTES.md has what
+    share of a static target's 95 % radius is bias rather than scatter, and bias neither
+    averages out over a flight nor is shared between aircraft.
+
+    COUNTING THE PINS DETECTS NOTHING, because both cases give two. The failure is not a missing
+    contact, it is that both end up in the SAME PLACE, and on the operator's map that does not
+    read as an error.
+
+    A MISSION WITH CROPS IS A MISSION MEANT FOR A PERSON TO LOOK AT AND DECIDE, and the crop is
+    good for nothing else. All three actions that person has depend on the appearance vector:
+    gs_mapa.plantilla_para only looks at candidates carrying one, so without it neither the
+    "not it" nor the target click leaves the station, and flota.mismo_objetivo falls back to the
+    weak path.
+
+    The check is on THE CODE ONLY: a mission's docstring may name either model to explain why it
+    does NOT use it, and that is not configuration. Two forms are accepted, the path written
+    there and a name the mission resolves, because the appearance model costs several times more
+    on one board than the other and the decision is per board. What is NOT accepted is an
+    explicit None. The check is textual because importing a mission needs the GrADyS runtime and
+    a camera; a mission that names a model and resolves it to None at run time slips past, and
+    that is what the launcher is for, since it fails loudly without the file. The same reasoning
+    and the same risk apply to the detector: a mission may name it in a variable, because the
+    aerial model sees nothing indoors and the indoor one is no use flying, but no detector at all
+    detects nothing and does it silently.
+
+    THE NEAREST PIN AND NOT THE FIRST THAT FITS, with no vectors at all so that only geometry
+    decides. The greedy version put a report into the pin on the left; with two aircraft that
+    almost never shows, because the only pin within reach is usually the right one, but with
+    three it starts to, and what decides becomes the ARRIVAL ORDER of the reports, which means
+    nothing.
+
+    THE APPEARANCE OF A FUSED PIN is whichever drone has one. The two boards of this bench do
+    not compute the same things, so a fused pin has one drone with a vector and one without, and
+    which won used to depend on which reported first. It is not cosmetic: a fused pin with no
+    vector leaves the operator's "not it" with nothing to send, and NOTES.md records the day the
+    verdict was written to disk and reached no board at all.
 """
 import os
 import re
@@ -34,16 +76,6 @@ def poi(x, y, emb):
 print('=' * 70)
 print('1. SIN APARIENCIA, LA ESTACION CRUZA LOS EMPAREJAMIENTOS ENTRE AERONAVES')
 print('=' * 70)
-# Ana y Beto, quietos, a 3 m uno del otro. El dron 1 los ve donde estan. El dron 2 tiene su
-# propio sesgo de GPS y brujula, 2 m hacia el este, y los ve a los dos corridos.
-#
-# Con ese sesgo, la Ana del dron 2 (en 12.0) queda a 1 m del Beto del dron 1 (en 13.0) y a 2 m
-# de su propia Ana (en 10.0). El pin EQUIVOCADO esta mas cerca. Elegir por distancia, aunque se
-# elija el mejor y no el primero, se equivoca: hace falta mirar la apariencia.
-#
-# El sesgo de 2 m no es rebuscado. Medido sobre los candidatos del 02ago, entre el 82 % y el
-# 99.9 % del radio del 95 % de un objetivo quieto es SESGO del gps y la brujula de esa aeronave,
-# no dispersion. El sesgo no se promedia a lo largo del vuelo y no se comparte entre aviones.
 ana = np.zeros(512, dtype=np.float32); ana[0] = 1.0
 beto = np.zeros(512, dtype=np.float32); beto[9] = 1.0
 
@@ -71,8 +103,6 @@ print('  sin vector: %d pines, separados %.2f m   %s'
 print('  con vector: %d pines, separados %.2f m   %s'
       % (len(con_v), d_con, [round(p['x'], 2) for p in con_v]))
 
-# Contar los pines no detecta nada: los dos casos dan DOS. El fallo no es que falte un contacto,
-# es que los dos quedan en el MISMO sitio. En el mapa del operador eso no se lee como un error.
 assert len(sin_v) == len(con_v) == 2, 'el numero de pines no es lo que distingue los dos casos'
 assert d_sin < 0.5, ('sin apariencia los dos pines tendrian que colapsar; dieron %.2f m. '
                      'Si esto deja de pasar, la geometria sola ya resuelve este caso y hay que '
@@ -86,35 +116,18 @@ print()
 print('=' * 70)
 print('2. LA MISION QUE EL OPERADOR USA TIENE QUE LLEVAR EL MODELO')
 print('=' * 70)
-# Esta es la seccion que habria atrapado el fallo del 2oct. Una mision con recortes es una mision
-# pensada para que una persona mire y decida: el recorte no sirve para nada mas. Y las tres
-# acciones que esa persona tiene dependen del vector:
-#   gs_mapa.plantilla_para solo mira candidatos con 'emb', asi que sin el ni el "no es" ni el
-#   clic de objetivo salen de la estacion, y flota.mismo_objetivo cae al camino debil.
 MISIONES = os.path.join(AQUI, '..', 'scripts', 'banco_embedded')
 revisadas = 0
 for nombre in sorted(os.listdir(MISIONES)):
     if not nombre.startswith('mision_') or not nombre.endswith('.py'):
         continue
     texto = open(os.path.join(MISIONES, nombre), encoding='utf-8').read()
-    # Solo el codigo: el docstring de una mision puede nombrar cualquiera de los dos para
-    # explicar por que NO lo usa, y eso no es configuracion.
     codigo = re.sub(r'"""[\s\S]*?"""', '', texto)
     recortes = re.search(r'crops\s*=\s*True', codigo) is not None
-    # Dos formas valen: la ruta escrita ahi mismo, y un nombre que la mision resuelve (hoy
-    # mision_banco_lab lo lee del entorno, porque el modelo cuesta unos 30 ms por caja en la
-    # Pi 5 y entre 170 y 330 en la Pi 4, asi que la decision es por placa). Lo que NO vale es
-    # reid_model=None. La comprobacion es textual porque importar una mision pide el runtime
-    # de GrADyS y una camara; se le escapa una mision que nombre un modelo y lo resuelva a None
-    # en ejecucion, y para eso esta el arranque, que falla ruidosamente sin el archivo.
     m_reid = re.search(r'reid_model\s*=\s*([^,\n]+)', codigo)
     asignado = m_reid is not None and m_reid.group(1).strip() not in ('None', '')
     hay_ruta = re.search(r'osnet\w*\.pt', codigo) is not None
     reid = asignado and hay_ruta
-    # Y el detector. Mismo razonamiento y mismo riesgo: una mision puede nombrar el modelo en
-    # una variable (mision_banco_lab lo lee de BANCO_MODELO desde el 3oct, porque el aereo no
-    # ve nada en interior y el de COCO no sirve volando), pero model=None o una mision sin
-    # detector no detecta nada y lo hace en silencio.
     m_det = re.search(r'[^_]model\s*=\s*([^,\n]+)', codigo)
     detector = m_det is not None and m_det.group(1).strip() not in ('None', '')
     estado = ('recortes SI, modelo ' + ('SI' if reid else 'NO') + ', detector ' + ('SI' if detector else 'NO')) if recortes else 'sin recortes'
@@ -135,12 +148,6 @@ print()
 print('=' * 70)
 print('3. LA ESTACION SE FUNDE CON EL PIN MAS CERCANO, NO CON EL PRIMERO')
 print('=' * 70)
-# Sin vectores, para que decida solo la geometria. El dron 1 reporta dos objetivos y crea dos
-# pines, en ese orden. El dron 2 reporta uno que cae a 2.4 m del primer pin y a 0.6 m del
-# segundo. La version voraz, que se quedaba con el primero que encajara, lo metia en el pin de
-# la izquierda; con dos aeronaves eso casi nunca se nota, porque el unico pin al alcance suele
-# ser el correcto. Con tres empieza a notarse, y lo que decide pasa a ser el orden de llegada
-# de los reportes, que no significa nada.
 pines = fundir({'1': [poi(10.0, 10.0, None), poi(13.0, 10.0, None)],
                 '2': [poi(12.4, 10.0, None)]})
 fundidos = [p for p in pines if len(p['drones']) > 1]
@@ -148,7 +155,6 @@ print('  pines del dron 1 en x=10.0 y x=13.0; el dron 2 reporta x=12.4')
 print('  resultado: %s' % [(round(p['x'], 2), p.get('dron', '+'.join(p['drones']))) for p in pines])
 assert len(fundidos) == 1, 'el reporte del dron 2 tenia que fundirse con alguno: %r' % pines
 x = fundidos[0]['x']
-# Primero: (10.0 + 12.4) / 2 = 11.2.   Mas cercano: (13.0 + 12.4) / 2 = 12.7.
 assert abs(x - 12.7) < 0.05, (
     'se fundio en x=%.2f. 11.2 significa que eligio el PRIMER pin que encajaba en vez del mas '
     'cercano, que es la asignacion voraz que se quito el 3oct.' % x)
@@ -158,12 +164,6 @@ print()
 print('=' * 70)
 print('4. UN PIN FUNDIDO SE QUEDA CON LA APARIENCIA DEL QUE LA TENGA')
 print('=' * 70)
-# Las dos placas de este banco no calculan lo mismo: el modelo cuesta seis a ocho veces mas en la
-# Pi 4, asi que se enciende en una y se apaga en la otra. Entonces un pin fundido tiene un dron
-# con vector y otro sin el, y cual gana dependia de cual reporto primero.
-# No es cosmetico: gs_mapa.plantilla_para solo considera candidatos con emb, asi que un pin
-# fundido sin vector deja el "no es" del operador sin nada que mandar. Medido el 3oct: el
-# veredicto se escribia en disco y no llegaba a ninguna placa.
 v = np.zeros(512, dtype=np.float32); v[0] = 1.0
 for primero, etiqueta in ((None, 'el que reporta primero NO tiene vector'),
                           (v, 'el que reporta primero SI tiene vector')):

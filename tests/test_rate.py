@@ -13,6 +13,22 @@ never fall behind. The harness here is event-driven and the camera BURNS CLOCK, 
 only way the fault is visible at all.
 
 Run with: python tests/test_rate.py
+
+The real camera takes about fifteen seconds on its first call: sensor warm-up plus loading the
+detector and the appearance model. That is what the first section stands in for.
+
+WHAT EACH SECTION PROVES
+    1. The cadence is the one asked for, against what the old fixed-delay loop would have given.
+    2. Saturated, it SAYS SO instead of lying.
+    3. Maturity no longer depends on the delivered rate. The whole point: the same declared fps,
+       wildly different delivered rates. Before the fix the maturity moment tracked the
+       delivered rate; now it tracks the clock. And the fallback still works for callers
+       replaying recorded data with no clock at all.
+    4. The reported rate is the one for NOW and not for the start-up. NOTES.md has the
+       measurement: a loop delivering almost exactly its configured rate reported itself as far
+       slower with dozens of lost slots, because the camera warm-up was averaged in for the
+       whole mission, and an operator would have read a saturated drone that was running
+       perfectly.
 """
 import json
 import os
@@ -25,12 +41,11 @@ if os.path.isdir(_GRADYS):
     sys.path.insert(0, _GRADYS)
 
 from gradys_embedded.protocol.messages.telemetry import Telemetry
+from test_vision_protocol import FakeProvider
 
 from uav_vision.camera_config import ARDUCAM_MODULE_3
 from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import VisionProtocol
-
-from test_vision_protocol import FakeProvider  # noqa: E402
 
 FALLOS = []
 
@@ -48,8 +63,6 @@ class CamaraQueTarda:
     def __init__(self, provider, trabajo_s, detecciones=(), trabajo_inicial_s=None):
         self.provider = provider
         self.trabajo_s = trabajo_s
-        # The real camera takes about 15 s on its first call: sensor warm-up plus loading the
-        # detector and the appearance model.
         self.trabajo_inicial_s = trabajo_inicial_s
         self.detecciones = list(detecciones)
         self.camera = ARDUCAM_MODULE_3
@@ -104,7 +117,6 @@ def correr(trabajo_s, periodo_s, hasta_s, detecciones=(), fps_declarado=None,
     return protocolo, provider, mensajes, t_maduro
 
 
-# ================================================ 1. la cadencia es la pedida
 print("=" * 68)
 print("1. El lazo entrega la cadencia configurada, no 'periodo + trabajo'")
 print("=" * 68)
@@ -112,14 +124,13 @@ print("=" * 68)
 for trabajo, periodo, esperado in [(0.05, 0.25, 4.0), (0.196, 0.333, 3.0)]:
     p, prov, msgs, _ = correr(trabajo, periodo, hasta_s=30.0)
     real = p._frames_seen / prov.time
-    antes = 1.0 / (periodo + trabajo)      # what the old fixed-delay loop would have given
+    antes = 1.0 / (periodo + trabajo)
     revisar(abs(real - esperado) < 0.12,
             "trabajo %.0f ms, periodo %.0f ms -> %.2f FPS (pedidos %.1f)"
             % (trabajo * 1000, periodo * 1000, real, esperado),
             "el lazo viejo habria dado %.2f" % antes)
     revisar(p._slots_perdidos == 0, "   y sin perder una sola ranura")
 
-# ============================================ 2. saturado, lo dice en vez de mentir
 print()
 print("=" * 68)
 print("2. Cuando NO puede seguir el ritmo, lo declara")
@@ -143,14 +154,11 @@ revisar(real < 3.0, "   (no puede correr mas rapido que su propio trabajo)",
         "%.2f FPS con 450 ms por frame" % real)
 
 
-# ================================== 3. la madurez ya no depende de la tasa
 print()
 print("=" * 68)
 print("3. '36 s' son 36 s, corra el lazo a la velocidad que corra")
 print("=" * 68)
 
-# The whole point: same declared fps, wildly different delivered rates. Before the fix the
-# maturity moment tracked the delivered rate; now it tracks the clock.
 for trabajo, etiqueta in [(0.05, "lazo holgado"), (0.45, "lazo saturado")]:
     p, prov, msgs, t_mad = correr(trabajo, 0.333, hasta_s=90.0,
                                   detecciones=[DETECCION], fps_declarado=3.0)
@@ -162,7 +170,6 @@ for trabajo, etiqueta in [(0.05, "lazo holgado"), (0.45, "lazo saturado")]:
             "%s (%.2f FPS reales): madura a los %.1f s" % (etiqueta, entregados, t_mad),
             "objetivo 36.0 s")
 
-# And the fallback still works for callers replaying recorded data with no clock at all.
 ident = IncrementalIdentity(fusion_radius_m=3.5, fps=4.0, report_dur_s=10.0, maturity="span")
 for f in range(200):
     ident.observe(frame=f, track_id=1, ground_xy=(5.0, 5.0), conf=0.9)
@@ -170,15 +177,11 @@ c = ident.candidates()
 revisar(bool(c) and c[0]["mature"],
         "sin reloj, la madurez sigue midiendose por span de frames (replays)")
 
-# ============================== 4. la tasa reportada es la de AHORA, no la del arranque
 print()
 print("=" * 68)
 print("4. El arranque no contamina la tasa que se reporta")
 print("=" * 68)
 
-# Measured on the Pi 2026-08-25: a loop delivering 2.98 of a configured 3.00 reported itself as
-# 2.42 fps with 46 lost slots, because the 15 s camera warm-up was averaged in for the whole
-# mission. An operator would have read a saturated drone that was running perfectly.
 p, prov, msgs, _ = correr(0.05, 0.333, hasta_s=90.0, trabajo_inicial_s=15.0)
 tardios = [m for m in msgs if m["fps_real"] is not None][-10:]
 peor = min(m["fps_real"] for m in tardios)

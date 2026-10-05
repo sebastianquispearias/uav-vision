@@ -11,6 +11,18 @@ megabits sitting on top of the telemetry.
 
 RF-DETR itself is not loaded here: it lives in the training venv and this suite runs on the plain
 interpreter. What is pinned is the plumbing and the merge, which is where the mistakes would be silent.
+
+WHAT EACH SECTION PROVES
+    1. The camera hands over the frame it JUDGED, not a new one.
+    2. The packet carries it whole, and the ground reads it back.
+    3. The merge: the same person seen by two tiles comes back once, and two people stay two.
+    4. The tiles cover the frame, so a person in any corner falls inside at least one.
+    5. The line protocol the station speaks to it, with the detector faked. The station runs on
+       the plain interpreter and RF-DETR lives in the training venv, so the two talk through a
+       pipe. What has to hold is that one question gets exactly ONE answer line carrying the
+       same id, that a bad line does not take the worker down with it -- a worker that dies on a
+       typo leaves the operator with a button that silently stops working -- and that the
+       answers stay separable from whatever the library prints.
 """
 import base64
 import json
@@ -24,9 +36,9 @@ sys.path.insert(0, RAIZ)
 sys.path.insert(0, os.path.join(RAIZ, "scripts", "banco_embedded"))
 import cv2
 import segunda_opinion as SO
+
 from uav_vision.camera import OnboardCamera
 
-# 1. the camera hands over the frame it JUDGED, not a new one
 c = OnboardCamera.__new__(OnboardCamera)
 c._ultimo_frame = None
 assert c.ultimo_marco_jpeg() is None, "devolvio algo antes de haber mirado un solo frame"
@@ -40,7 +52,6 @@ assert vuelta.shape == marca.shape, "el marco cambio de tamano al viajar"
 assert vuelta[50, 40].mean() > 200, "el marco que viajo no es el que la camara miro"
 print("  la camara entrega el frame que miro (%d bytes) y nada antes de mirar" % len(datos))
 
-# 2. the packet carries it whole, and the ground reads it back
 mensaje = {"type": "vision_marco", "sender": 1, "t": 12.5,
            "jpeg": base64.b64encode(datos).decode("ascii")}
 assert base64.b64decode(mensaje["jpeg"]) == datos, "el base64 no devuelve los mismos bytes"
@@ -50,7 +61,6 @@ roto = SO.mirar_jpeg(b"esto no es un jpeg")
 assert roto["n"] == 0 and "error" in roto, "no aviso que el jpeg venia roto"
 print("  el paquete lleva el marco entero y un paquete equivocado se rechaza con motivo")
 
-# 3. the merge: the same person seen by two tiles comes back once, two people stay two
 una = SO.fusionar([[10, 10, 50, 110], [12, 11, 52, 112]], [0.9, 0.8])
 assert len(una) == 1, "la misma persona en dos fichas quedo como dos: %s" % una
 assert una[0]["conf"] == 0.9, "no se quedo con la caja mas segura"
@@ -59,7 +69,6 @@ assert len(dos) == 2, "fusiono dos personas que estan lejos"
 assert not SO.fusionar([], []), "invento algo sin cajas"
 print("  la fusion deja una caja por persona y no junta a dos que estan separadas")
 
-# 4. the tiles cover the frame: a person in any corner falls inside at least one
 alto, ancho = 1080, 1920
 for x, y in ((5, 5), (1900, 5), (5, 1070), (1900, 1070), (960, 540)):
     dentro = [f for f in SO.FICHAS if f[0] <= x <= f[2] and f[1] <= y <= f[3]]
@@ -67,12 +76,6 @@ for x, y in ((5, 5), (1900, 5), (5, 1070), (1900, 1070), (960, 540)):
 assert any(f == (0, 0, ancho, alto) for f in SO.FICHAS), "falta la ficha del frame entero"
 print("  las %d fichas cubren las cuatro esquinas y el centro, y una es el frame entero" % len(SO.FICHAS))
 
-# 5. the line protocol the station speaks to it, with the detector faked
-# The station runs on the plain interpreter and RF-DETR lives in the training venv, so the two talk
-# through a pipe. What has to hold is that one question gets exactly one answer line carrying the
-# same id, that a bad line does not take the worker down with it -- a worker that dies on a typo
-# leaves the operator with a button that silently stops working -- and that the answers stay
-# separable from whatever the library prints.
 import io as _io
 
 _pedidos = []

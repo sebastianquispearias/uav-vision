@@ -10,29 +10,44 @@
  * pintarLista() against a synthetic report. If the page changes, this runs the change.
  *
  * Run with: node tests/test_gs_filtro.js        (from the uav_vision root)
+
+  WHAT EACH SECTION PROVES
+
+  A path can be passed in to run this against a modified copy -- which is how the gate itself
+  gets checked: point it at a deliberately broken page and it must fail.
+
+  The last three lines boot the page against a live server and a live canvas. Everything above
+  them is pure logic and is what we want to exercise.
+
+  -- the smallest DOM the page will accept -----------------------------------
+  Every canvas call is swallowed: this checks which POIs survive the filter, not pixels.
+
+  the browser would parse the buttons the page just wrote; this reads them back out
+
+  The page polls the server on timers. Nothing is served here, so no timer may keep node alive
+  and no request may be left to fail: the filter logic is all this test exercises.
+
+  The checks run inside the same eval as the page code: `estado`, `ocultas` and `visibles` are
+  let-bound in that scope and are not reachable from out here.
+
+  A report with only cars in it. The person button must NOT disappear: it would take the
+  operator's filter with it, silently, the moment a target left the frame.
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
-// A path can be passed in to run this against a modified copy -- which is how the gate itself
-// gets checked: point it at a deliberately broken page and it must fail.
 const GS = process.argv[2] || path.join(__dirname, '..', 'scripts', 'banco_embedded', 'gs_mapa.py');
 const py = fs.readFileSync(GS, 'utf8');
 const html = /PAGINA = r"""([\s\S]*?)"""/.exec(py)[1];
 let codigo = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
-// The last three lines boot the page against a live server and a live canvas. Everything above
-// them is pure logic and is what we want to exercise.
 codigo = codigo.replace(/redimensionar\(\);\s*refrescar\(\);\s*setInterval\(refrescar,\s*1000\);/, '');
 
-// -- the smallest DOM the page will accept -----------------------------------
-// Every canvas call is swallowed: this checks which POIs survive the filter, not pixels.
 const nulo = new Proxy(function () {}, { get: () => nulo, apply: () => nulo });
 const elems = {};
 function elem(id) {
   if (!elems[id]) elems[id] = {
     id, innerHTML: '', textContent: '', className: '', style: {}, dataset: {},
-    // the browser would parse the buttons the page just wrote; this reads them back out
     querySelectorAll() {
       return [...this.innerHTML.matchAll(/data-c="([^"]+)" class="([^"]*)"/g)]
         .map(m => ({ dataset: { c: m[1] }, clase: m[2], onclick: null }));
@@ -45,8 +60,6 @@ function elem(id) {
 }
 global.document = { getElementById: elem };
 global.window = { devicePixelRatio: 1, addEventListener: () => {} };
-// The page polls the server on timers. Nothing is served here, so no timer may keep node alive
-// and no request may be left to fail: the filter logic is all this test exercises.
 global.setInterval = () => 0;
 global.fetch = () => new Promise(() => {});
 
@@ -54,8 +67,6 @@ function ok(cond, msg) {
   if (!cond) { console.error('FALLO: ' + msg); process.exit(1); }
 }
 
-// The checks run inside the same eval as the page code: `estado`, `ocultas` and `visibles` are
-// let-bound in that scope and are not reachable from out here.
 const prueba = `
 estado = { pois: [
   { x: 1, y: 2, cls: 'person', mature: true,  mobile: false, n_obs: 90, conf: .8, dron: 7 },
@@ -81,8 +92,6 @@ ok(document.getElementById('cuenta').textContent === '2 POI de 4',
 ok(document.getElementById('filtro').querySelectorAll()
      .find(b => b.dataset.c === 'car').clase === 'off', 'el boton oculto no queda tachado');
 
-// A report with only cars in it. The person button must NOT disappear: it would take the
-// operator's filter with it, silently, the moment a target left the frame.
 estado = { pois: [{ x: 5, y: 6, cls: 'car', mature: true, mobile: false, n_obs: 40, conf: .7, dron: 7 }] };
 pintar();
 console.log('  solo llegan coches :', document.getElementById('cuenta').textContent,

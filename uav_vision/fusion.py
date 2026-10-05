@@ -14,6 +14,11 @@ References:
     - Traa [21]: Loss function and gradient for orthogonal distance minimisation
     - Lampesberger (2024): Ray intersection and gradient descent
     - Dogançay (2005): Weighted least squares for bearing-only localisation
+
+A measurement is spelled out in the Measurement type alias. The gradient-descent defaults
+DEFAULT_LR, DEFAULT_MAX_ITER and DEFAULT_TOL are the published ones from Lampesberger and
+Traa, not values tuned here. _PARALLEL_EPS is the threshold below which two rays count as
+parallel and no intersection is attempted.
 """
 
 from __future__ import annotations
@@ -22,15 +27,12 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-# Type alias: a measurement is (position, direction_vector)
 Measurement = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
 
-# Gradient descent defaults (from Lampesberger / Traa)
 DEFAULT_LR: float = 0.065
 DEFAULT_MAX_ITER: int = 1000
 DEFAULT_TOL: float = 1e-7
 
-# Parallel-ray detection threshold
 _PARALLEL_EPS: float = 1e-10
 
 
@@ -94,6 +96,10 @@ def ray_intersection_2(
         m1: First measurement (origin, direction).
         m2: Second measurement (origin, direction).
 
+    The common perpendicular u is solved for alongside alpha and gamma, so the system solved
+    is [v1 | u | -v2] @ [alpha, beta, gamma] = p2 - p1, and the answer is the midpoint of the
+    two closest points q1 = p1 + alpha*v1 and q2 = p2 + gamma*v2.
+
     Returns:
         Estimated target position (x, y, z) in meters.
     """
@@ -102,7 +108,6 @@ def ray_intersection_2(
     p2 = np.asarray(m2[0], dtype=np.float64)
     v2 = np.asarray(m2[1], dtype=np.float64)
 
-    # Normalise directions
     v1 = v1 / np.linalg.norm(v1)
     v2 = v2 / np.linalg.norm(v2)
 
@@ -110,13 +115,11 @@ def ray_intersection_2(
     u_norm = np.linalg.norm(u)
 
     if u_norm < _PARALLEL_EPS:
-        # Parallel rays — return midpoint of origins as stable fallback
         mid = (p1 + p2) / 2.0
         return (float(mid[0]), float(mid[1]), float(mid[2]))
 
     u = u / u_norm
 
-    # Build and solve  [v1 | u | -v2] @ [alpha, beta, gamma] = p2 - p1
     A = np.column_stack([v1, u, -v2])
     b = p2 - p1
 
@@ -128,15 +131,12 @@ def ray_intersection_2(
 
     alpha, beta, gamma = solution
 
-    # Clamp to forward direction of each ray
     alpha = max(alpha, 0.0)
     gamma = max(gamma, 0.0)
 
-    # Closest points on each ray
     q1 = p1 + alpha * v1
     q2 = p2 + gamma * v2
 
-    # Midpoint
     q = (q1 + q2) / 2.0
     return (float(q[0]), float(q[1]), float(q[2]))
 
@@ -182,6 +182,14 @@ def _gradient_descent_core(
 
     Gradient (Traa Eq. 12, extended with weights):
         dL/dq = -2 * sum_i  w_i * (I - v_i v_i^T) (p_i - q)
+
+    The weights are normalised to sum to 1, which makes this a mean gradient instead of a sum
+    gradient and keeps the learning rate stable regardless of n or of the scale the caller
+    passed its weights in. The optimum is unchanged, because
+    argmin sum(w_i * d_i^2) == argmin sum((w_i/c) * d_i^2) for any c > 0.
+
+    The search starts from the intersection of the two most divergent rays, which is the
+    best-conditioned pair there is.
     """
     n = len(measurements)
     if n < 2:
@@ -189,7 +197,6 @@ def _gradient_descent_core(
             f"At least 2 measurements required, got {n}."
         )
 
-    # Pre-compute projection matrices and origins
     proj_matrices: List[np.ndarray] = []
     origins: List[np.ndarray] = []
     for origin, direction in measurements:
@@ -199,17 +206,12 @@ def _gradient_descent_core(
         proj_matrices.append(np.eye(3) - v @ v.T)
         origins.append(np.asarray(origin, dtype=np.float64))
 
-    # Weights: normalise so they sum to 1 (mean-gradient instead of sum-gradient).
-    # This keeps the learning rate stable regardless of n or weight scale.
-    # The optimum is unchanged because
-    # argmin sum(w_i * d_i^2) == argmin sum((w_i/c) * d_i^2) for any c > 0.
     if weights is None:
         w = [1.0 / n] * n
     else:
         w_sum = sum(weights)
         w = [wi / w_sum for wi in weights]
 
-    # Initialise with midpoint of the two most divergent rays
     i, j = _find_most_divergent_pair(measurements)
     q = np.asarray(ray_intersection_2(measurements[i], measurements[j]),
                    dtype=np.float64)
@@ -350,7 +352,7 @@ def _gradient_descent_ground(
         for k in range(n):
             grad -= 2.0 * w[k] * (proj_matrices[k] @ (origins[k] - q))
 
-        grad[2] = 0.0  # constrain to ground plane
+        grad[2] = 0.0
         q = q - learning_rate * grad
 
         if np.linalg.norm(q - q_prev) < tolerance:
@@ -443,11 +445,9 @@ def ransac_fusion(
     best_hypothesis = ray_intersection_2(measurements[0], measurements[1])
 
     for _ in range(n_iterations):
-        # Sample 2 distinct indices
         i, j = rng.choice(n, size=2, replace=False)
         hypothesis = ray_intersection_2(measurements[i], measurements[j])
 
-        # Count inliers
         inlier_indices = []
         for k in range(n):
             dist = orthogonal_distance(
@@ -460,7 +460,6 @@ def ransac_fusion(
             best_inlier_indices = inlier_indices
             best_hypothesis = hypothesis
 
-    # Re-estimate using all inliers of the best hypothesis
     if len(best_inlier_indices) >= 2:
         inlier_measurements = [measurements[i] for i in best_inlier_indices]
 
@@ -479,7 +478,6 @@ def ransac_fusion(
             )
         return gradient_descent_uniform(inlier_measurements)
 
-    # Fallback: not enough inliers, return best 2-ray hypothesis
     return best_hypothesis
 
 

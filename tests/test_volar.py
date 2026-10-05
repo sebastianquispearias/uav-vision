@@ -16,6 +16,28 @@ and it must print it when they all speak. Everything else it does is orchestrati
 test_levantar_banco.py already covers.
 
 Run: python tests/test_volar.py
+
+WHY THE FAKE ssh IS BUILT THE WAY IT IS
+    It does nothing and does NOT read stdin: the script hands it the board script that way, and
+    a cat here would wait forever on the calls that carry -n. It is GIT's bash and not whatever
+    wins the PATH: with WSL installed, "bash" finds the one in System32, which lives in another
+    filesystem and cannot see the Windows paths this test writes. Provisioning has its own test,
+    and the addresses used here do not exist.
+
+WHAT EACH SECTION PROVES
+    The command SAYS WHAT TO DO, because one that ends in silence leaves the operator guessing.
+
+    A BOARD THAT STARTED AND THEN WENT QUIET MUST NOT BE CALLED READY. The second board booted
+    fine and has not spoken for a minute, so a script that only looked at the boot would say
+    yes. The station does not help either: its log is silent when there are no finds. So the
+    command sends the operator to look WHERE IT HELPS, and not at the station's log.
+
+    PASTING THE LINE TWICE IN A TERMINAL JOINS IT, and the result is a list of six "boards" of
+    which three are a filename and an address. The old launcher gave those node ids.
+
+    A MISSION THAT SOUNDS LIKE THE FLYING ONE AND IS THE BENCH ONE IS REFUSED: no crops, no
+    appearance, no preliminaries and the indoor detector. Flying that is flying with no operator
+    loop at all.
 """
 import json
 import os
@@ -31,7 +53,6 @@ TMP = tempfile.mkdtemp(prefix="volar_")
 REGISTRO = os.path.join(TMP, "ssh.txt").replace("\\", "/")
 PUERTO = 8399
 
-# Cuanto hace que hablo cada dron, en segundos. La prueba lo mueve entre secciones.
 EDADES = {"1": 1.0, "2": 1.0}
 
 
@@ -57,15 +78,11 @@ class Estacion(BaseHTTPRequestHandler):
 servidor = HTTPServer(("127.0.0.1", PUERTO), Estacion)
 threading.Thread(target=servidor.serve_forever, daemon=True).start()
 
-# Un ssh falso que no hace nada y no lee stdin: el guion le pasa el script de la placa por ahi, y
-# un cat aqui se quedaria esperando para siempre en las llamadas que llevan -n.
 STUB = os.path.join(TMP, "ssh_falso.sh").replace("\\", "/")
 with open(STUB, "w", newline="\n") as f:
     f.write('echo "ssh $*" >> %s\n' % REGISTRO)
     f.write('echo "   setup: {\\"state\\": \\"ready\\"}"\n')
 
-# El bash de Git y no el que gane el PATH: con WSL instalado, "bash" encuentra el de System32,
-# que vive en otro sistema de archivos y no ve las rutas de Windows que esta prueba escribe.
 BASH = r"C:\Program Files\Git\bin\bash.exe"
 if not os.path.exists(BASH):
     BASH = "bash"
@@ -76,8 +93,8 @@ def correr(edades, extra=None):
     EDADES.update(edades)
     entorno = dict(os.environ)
     entorno["SSH"] = "bash " + STUB
-    entorno["VOLAR_SIN_PREPARAR"] = "1"     # la provision tiene su propia prueba
-    entorno["VOLAR_SIN_PING"] = "1"        # las direcciones de la prueba no existen
+    entorno["VOLAR_SIN_PREPARAR"] = "1"
+    entorno["VOLAR_SIN_PING"] = "1"
     entorno["VOLAR_FRESCO_S"] = "10"
     entorno.update(extra or {})
     return subprocess.run(
@@ -96,15 +113,12 @@ for l in r.stdout.splitlines():
         print("  %s" % l.strip()[:90])
 assert r.returncode == 0, "se nego con las dos aeronaves sanas:\n%s" % r.stdout[-700:]
 assert "LISTO PARA VOLAR" in r.stdout, "no dijo que estaba listo:\n%s" % r.stdout[-700:]
-# Y dice que hacer, porque un comando que termina en silencio deja al operador adivinando.
 assert "SEARCHING" in r.stdout, "no recuerda mandar la orden de busqueda antes de despegar"
 
 print()
 print("=" * 74)
 print("2. SI UNA CALLA, SE NIEGA. ESTA ES LA RAZON DE SER DEL GUION")
 print("=" * 74)
-# La segunda lleva un minuto sin hablar. Arranco igual, asi que un guion que solo mire el
-# arranque diria que si. La estacion tampoco ayuda: su log calla cuando no hay hallazgos.
 r = correr({"1": 1.0, "2": 60.0}, {"VOLAR_FRESCO_S": "10"})
 print("  salida: %d" % r.returncode)
 for l in r.stdout.splitlines():
@@ -113,15 +127,12 @@ for l in r.stdout.splitlines():
 assert r.returncode != 0, ("dijo que estaba listo con una aeronave callada hace 60 s:\n%s"
                            % r.stdout[-700:])
 assert "NO DESPEGAR" in r.stdout, "no lo dice con todas las letras:\n%s" % r.stdout[-700:]
-# Y manda a mirar donde sirve, no al log de la estacion.
 assert "runner.log" in r.stdout, "no dice donde mirar"
 
 print()
 print("=" * 74)
 print("3. NI SIQUIERA LO INTENTA CON ARGUMENTOS QUE NO SON PLACAS")
 print("=" * 74)
-# Pegar la linea dos veces en un terminal la une, y el resultado es una lista de seis "placas"
-# de las que tres son un nombre de archivo y una direccion. El lanzador viejo les daba node_id.
 entorno = dict(os.environ, SSH="bash " + STUB, VOLAR_SIN_PREPARAR="1",
                VOLAR_SIN_PING="1")
 r = subprocess.run([BASH, "scripts/banco_embedded/volar.sh", "127.0.0.1:%d" % PUERTO,
@@ -139,11 +150,10 @@ print()
 print("=" * 74)
 print("4. LA MISION POR OMISION ES LA DE VUELO, NO LA DEL ESCRITORIO")
 print("=" * 74)
-# mision_vision.py suena a la de vuelo y es la bancada: sin recortes, sin apariencia, sin
-# preliminares y con el detector de interior. Volar eso es volar sin lazo de operador.
 fuente = open(os.path.join(AQUI, "..", "scripts", "banco_embedded", "volar.sh"),
               encoding="utf-8").read()
 import re
+
 m = re.search(r'MISION="\$\{VOLAR_MISION:-([^}]+)\}"', fuente)
 assert m, "no encuentro la mision por omision en volar.sh"
 print("  por omision carga: %s" % m.group(1))

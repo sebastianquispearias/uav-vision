@@ -16,6 +16,13 @@ triangulation and nothing else. Twelve centimetres is already two orders of magn
 the chain achieves when it works and far below what it reports when any stage is broken.
 
 Run with: python tests/test_correr.py
+
+THE IMPORT AT THE TOP IS HALF THE GATE: elegir_camara builds the camera by name, so a rename in
+camera.py breaks it and no amount of running the flying chain would say so.
+
+A chain that triangulated WITHOUT selecting would pass that gate and still have lost the
+contribution, so the three stages are driven by hand too, and the checks are that the selector
+really discards views and that the fusion lands on the target.
 """
 import os
 import sys
@@ -24,20 +31,18 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-import correr  # noqa: E402
-from uav_vision.camera import SimulatedCamera  # noqa: E402
-from uav_vision.fusion import ransac_fusion  # noqa: E402
-from uav_vision.pinhole_local import pixel_to_ray  # noqa: E402
-from uav_vision.view_selection import select_best_views  # noqa: E402
+import correr
+from uav_vision.camera import SimulatedCamera
+from uav_vision.fusion import ransac_fusion
+from uav_vision.pinhole_local import pixel_to_ray
+from uav_vision.view_selection import select_best_views
 
 print()
 print("=" * 64)
 print("1. LA CADENA DEL PAPER ARRANCA Y TRIANGULA")
 print("=" * 64)
-# The import above is half the gate: elegir_camara builds the camera by name, so a rename in
-# camera.py breaks it and no amount of running the flying chain will say so.
 codigo = correr.main(["sim", "--pasos", "40", "--semilla", "0"])
 print(f"  python correr.py sim --pasos 40  ->  codigo de salida {codigo}")
 assert codigo == 0, "la cadena del paper tiene que correr de punta a punta"
@@ -46,9 +51,6 @@ print()
 print("=" * 64)
 print("2. LAS DOS PIEZAS DEL PAPER ESTAN EN EL CAMINO, NO SOLO IMPORTADAS")
 print("=" * 64)
-# A chain that triangulated without selecting would pass gate 1 and still have lost the
-# contribution. So drive the same three stages by hand and check that the selector actually
-# discards views and that the fusion lands on the target.
 camara = SimulatedCamera(target=(0.0, 0.0, 0.0), pitch_deg=-55.0,
                          camera=correr.SIYI_A8_MINI, rng=np.random.default_rng(0))
 rayos, confianzas = [], []

@@ -7,7 +7,16 @@ sin escribir nada.
 
 Run: python tests/test_veredictos_disco.py
 """
-import base64, json, os, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import base64
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 GS = os.path.join(AQUI, '..', 'scripts', 'banco_embedded', 'gs_mapa.py')

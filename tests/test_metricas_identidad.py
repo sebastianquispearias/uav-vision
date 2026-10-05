@@ -6,6 +6,17 @@ values: a switch and a fragment cost the same IDF1 here, a box left without an i
 not precision, and a false positive labelled 'x' costs nothing at all.
 
 Run: python tests/test_metricas_identidad.py
+
+Each case carries its arithmetic so the expected number is derived rather than asserted:
+
+  - Shared counts A->1: 2, A->2: 2, B->2: 4. The best one-to-one match is A-1 and B-2, 6 of 8,
+    so IDF1 = 2*6 / (2*6 + 2 + 2) = 0.75, and A going 1 -> 2 is one switch.
+  - A gap is NOT a change of id: six boxes with an id, all correct, give IDTP 6, IDFP 0, IDFN 2
+    and IDF1 12/14, with no switch.
+  - Shared A->1: 4, B->1: 4 allows only one of them to keep id 1, so IDTP is 4 of 8 and IDF1
+    0.5, with no switch on either, because each identity always carries id 1.
+  - The same boxes listed OUT OF TIME ORDER: in time A goes 1, 1, 2, 2, which is one switch and
+    not three.
 """
 import os
 import sys
@@ -38,28 +49,21 @@ ver("perfecto con otros nombres de id", [7, 7, 7, 7, 3, 3, 3, 3], 1.0, 0)
 print("=" * 70)
 print("2. CAMBIO DE ID: la mitad de A se lleva el id de B")
 print("=" * 70)
-# shared: A->1: 2, A->2: 2, B->2: 4. Best one-to-one: A-1 (2) + B-2 (4) = 6 of 8.
-# IDF1 = 2*6 / (2*6 + 2 + 2) = 0.75. A goes 1 -> 2: one switch.
 ver("A: 1,1,2,2", [1, 1, 2, 2, 2, 2, 2, 2], 0.75, 1, idp=0.75, idr=0.75)
 
 print("=" * 70)
 print("3. FRAGMENTO: la mitad de A recibe un id nuevo")
 print("=" * 70)
-# Same arithmetic as the switch: A-1 (2) + B-2 (4) = 6. The IDF1 cannot tell them apart here.
 ver("A: 1,1,3,3", [1, 1, 3, 3, 2, 2, 2, 2], 0.75, 1)
 
 print("=" * 70)
 print("4. SIN ID: el tracker no confirmo dos cajas de A")
 print("=" * 70)
-# 6 boxes with an id, all correct: IDTP 6, IDFP 0, IDFN 2. IDF1 = 12/14. No switch: a gap is
-# not a change of id.
 ver("A: 1,1,-,-", [1, 1, None, None, 2, 2, 2, 2], 12 / 14, 0, idp=1.0, idr=0.75)
 
 print("=" * 70)
 print("5. UNO SOLO PARA TODOS: el tracker funde a A y B")
 print("=" * 70)
-# shared: A->1: 4, B->1: 4. One-to-one: only one of them keeps id 1. IDTP 4 of 8: IDF1 0.5.
-# No switch on either: each identity always carries id 1.
 ver("todo id 1", [1] * 8, 0.5, 0)
 
 print("=" * 70)
@@ -77,7 +81,6 @@ print("  X mayuscula tambien queda fuera: identities=%d" % r["identities"])
 print("=" * 70)
 print("7. EL ORDEN TEMPORAL MANDA, NO EL ORDEN DE LA LISTA")
 print("=" * 70)
-# Same boxes, listed out of time order. A in time: 1, 1, 2, 2 -> one switch, not three.
 ver("desordenado", [2, 1, 2, 1, 2, 2, 2, 2], 0.75, 1, orden=[3, 0, 2, 1, 4, 5, 6, 7])
 
 print("test_metricas_identidad OK")

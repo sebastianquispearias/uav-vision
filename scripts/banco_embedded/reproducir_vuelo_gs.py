@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Replays a recorded flight into the ground station, so the whole chain can be watched.
 
 Between the identity layer and the map there are three things that have only ever been tested
@@ -21,6 +20,14 @@ sweep path, and it is easier to trust after seeing it happen than after reading 
     python reproducir_vuelo_gs.py --velocidad 20 --preliminares
 
 --velocidad 20 plays fifteen minutes of flight in forty-five seconds.
+
+The recording lives in the companion data repository, a sibling of this one, and UAV_DATOS
+overrides that so the replay runs wherever the flight data was put. Each cached row is
+t, k, track_id, x, y, conf, idx_emb.
+
+THE CADENCE IS FRAMES OVER THE SPAN FRAMES ARRIVE IN, not frames over the wall-clock span. The
+flight-3 span includes 573 s of the drone sitting on the ground, and dividing by it shrinks
+every maturity threshold by almost 3x.
 """
 import argparse
 import json
@@ -36,8 +43,6 @@ _REPO = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _REPO)
 from uav_vision.identity import IncrementalIdentity
 
-# The recording lives in the companion data repository, a sibling of this one. Overridable with
-# UAV_DATOS so the replay runs wherever the flight data was put.
 _DATOS = os.environ.get('UAV_DATOS',
                         os.path.join(os.path.dirname(_REPO), 'drone-geolocation'))
 ENTREN = os.path.join(_DATOS, 'entrenamiento')
@@ -73,12 +78,9 @@ if __name__ == '__main__':
     if not os.path.exists(args.stream):
         raise SystemExit('no existe %s -- generalo con barrido_pasada.py' % args.stream)
     D = np.load(args.stream)
-    obs = D['obs']                      # t, k, track_id, x, y, conf, idx_emb
+    obs = D['obs']
     embs = np.load(os.path.join(ENTREN, 'y1280_embs.npy'))
 
-    # The cadence frames arrive at, not frames over the wall-clock span: the flight-3 span
-    # includes 573 s of the drone on the ground, and dividing by it shrinks every maturity
-    # threshold by almost 3x.
     import csv
     FR = os.path.join(VUELO3, 'frames.csv')
     t_air = np.array([float(r['t_mono']) for r in csv.DictReader(open(FR))
@@ -102,7 +104,6 @@ if __name__ == '__main__':
         t_vuelo = (time.time() - inicio) * args.velocidad
         if t_vuelo > dur:
             t_vuelo = dur
-        # feed everything that had happened by now
         while i < len(obs) and T[i] <= t_vuelo:
             _t, k, tid, x, y, cf, idx = obs[i]
             ident.observe(frame=int(k), track_id=int(tid), ground_xy=(x, y),

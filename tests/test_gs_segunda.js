@@ -23,6 +23,32 @@
  * page's own pintar() against synthetic reports.
  *
  * Run with: node tests/test_gs_segunda.js        (from the uav_vision root)
+
+  WHAT EACH SECTION PROVES
+
+  lo que la barra de busqueda usa para sus clases.
+
+  What the page asked the station for, so the click can be checked instead of assumed. The promise
+  never settles: the page's other fetches (the search order, the drone list) must not run their
+  handlers here and rewrite the state this test just set up.
+
+  1. before anybody asks, no card claims a second opinion
+
+  2. the click asks the station about the POI's DRONE
+
+  3. every stage is visible, and none of them claims a result
+
+  4. the answer, and to whom it belongs
+
+  The POI of drone 2 must not inherit it: the frame answers about a drone, not about a point.
+
+  5. an old answer says how old, because the scene moves
+
+  6. a drone with no points still has a button: it has a camera, and it is exactly the drone an
+  operator wonders about. With the button only inside a point's card, the second opinion was
+  unreachable for a drone that reports nothing -- which is when you most want to look.
+
+  7. no detector installed: it says so instead of going quiet
  */
 'use strict';
 const fs = require('fs');
@@ -41,7 +67,6 @@ function elem(id) {
     id, innerHTML: '', textContent: '', className: '', style: {}, dataset: {},
     querySelectorAll(sel) {
       // 'button[data-x]' busca por atributo; 'button' a secas devuelve los botones tal cual, que es
-      // lo que la barra de busqueda usa para sus clases.
       const m0 = /\[([a-z-]+)=?/.exec(sel);
       if (!m0) {
         return [...this.innerHTML.matchAll(/<button([^>]*)>/g)]
@@ -63,9 +88,6 @@ global.document = { getElementById: elem };
 global.window = { devicePixelRatio: 1, addEventListener: () => {} };
 global.setInterval = () => 0;
 
-// What the page asked the station for, so the click can be checked instead of assumed. The promise
-// never settles: the page's other fetches (the search order, the drone list) must not run their
-// handlers here and rewrite the state this test just set up.
 const pedidos = [];
 global.fetch = (ruta, opciones) => {
   pedidos.push({ ruta, cuerpo: opciones && opciones.body ? JSON.parse(opciones.body) : null });
@@ -82,20 +104,17 @@ const poi = (x, y, extra) => Object.assign(
 const lista = () => document.getElementById('lista').innerHTML;
 const AHORA = 1000;
 
-// 1. before anybody asks, no card claims a second opinion
 estado = { ahora: AHORA, pois: [poi(0, 0), poi(10, 0, { dron: 2 })], segunda: {} };
 pintar();
 console.log('  sin pedir nada         :', (lista().match(/class="segunda/g) || []).length, 'bloques de segunda opinion');
 ok(lista().indexOf('class="segunda') < 0, 'invento una segunda opinion que nadie pidio');
 ok((lista().match(/data-mirar=/g) || []).length === 2, 'cada POI necesita su boton de segunda opinion');
 
-// 2. the click asks the station about the POI's DRONE
 pedirSegunda(2);
 console.log('  clic en el del dron 2  :', JSON.stringify(pedidos[pedidos.length - 1]));
 ok(pedidos[pedidos.length - 1].ruta === '/mirar', 'el boton no pidio /mirar');
 ok(pedidos[pedidos.length - 1].cuerpo.dron === '2', 'pidio la opinion sobre el dron equivocado');
 
-// 3. every stage is visible, and none of them claims a result
 for (const [fase, esperado] of [['pedido', 'asking the drone for the frame'], ['mirando', 'RF-DETR looking at the frame']]) {
   estado.segunda = { '1': { estado: fase, t: AHORA } };
   pintar();
@@ -104,29 +123,23 @@ for (const [fase, esperado] of [['pedido', 'asking the drone for the frame'], ['
 }
 console.log('  mientras espera        : se ven las dos fases y ninguna afirma un resultado');
 
-// 4. the answer, and to whom it belongs
 estado.segunda = { '1': { estado: 'listo', t: AHORA, n: 4, espera: 1.44, dibujo: 'x.jpg',
                           personas: [{ caja: [1, 2, 3, 4], conf: .83 }] } };
 pintar();
 console.log('  contesta               :', /4 people on the ground, in [0-9.]+ s/.exec(lista())[0]);
 ok(lista().indexOf('4 people on the ground, in 1.44 s') >= 0, 'no dice cuantas encontro ni cuanto tardo');
 ok(lista().indexOf('/segunda.jpg?dron=1') >= 0, 'no muestra el cuadro que RF-DETR miro');
-// The POI of drone 2 must not inherit it: the frame answers about a drone, not about a point.
 const tarjetas = lista().split('<div class="poi');
 ok(tarjetas.length === 3, 'se esperaban dos tarjetas, hay ' + (tarjetas.length - 1));
 ok(tarjetas[1].indexOf('people on the ground') >= 0, 'la tarjeta del dron 1 perdio su respuesta');
 ok(tarjetas[2].indexOf('people on the ground') < 0, 'el POI del dron 2 se apropio de la respuesta del dron 1');
 console.log('  y solo al dron que miro: la tarjeta del dron 2 sigue sin respuesta');
 
-// 5. an old answer says how old, because the scene moves
 estado = Object.assign({}, estado, { ahora: AHORA + 300 });
 pintar();
 console.log('  cinco minutos despues  :', /\\([0-9]+ s ago\\)/.exec(lista())[0]);
 ok(lista().indexOf('(300 s ago)') >= 0, 'una respuesta vieja no dice que lo es');
 
-// 6. a drone with no points still has a button: it has a camera, and it is exactly the drone an
-// operator wonders about. With the button only inside a point's card, the second opinion was
-// unreachable for a drone that reports nothing -- which is when you most want to look.
 estado = { ahora: AHORA, pois: [], segunda: {},
            drones: {'1': {buscando: {clases: ['person'], v: null, epoca: null}},
                     '7': {buscando: {clases: ['person'], v: null, epoca: null}}} };
@@ -142,7 +155,6 @@ pedirSegunda('7');
 ok(pedidos[pedidos.length - 1].cuerpo.dron === '7',
    'el boton de un dron tiene que preguntar por ESE dron');
 
-// 7. no detector installed: it says so instead of going quiet
 estado = { ahora: AHORA + 300, pois: [poi(0, 0), poi(10, 0, { dron: 2 })],
            segunda: { '1': { estado: 'error', t: AHORA + 300, error: 'no existe el venv' } } };
 pintar();

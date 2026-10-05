@@ -10,13 +10,22 @@ recibe esas dos cosas en vez de decidirlas el.
 
     simulacion ->  examples/correr_sim.py
     dron real  ->  examples/correr_uav.md
+
+The path juggling at the top is so the imports work with ANY interpreter, whether or not
+anything was installed with pip.
+
+With x_axis_degrees = 0 the frame is x = north, y = east, so the square is north, east, south
+and back to the start.
+
+THE MISSION IS TWO PARTS. First the VISION part, configured with whatever camera is given.
+Then the FLIGHT part, added on top by inheritance. Calling the vision layer's initialize is
+MANDATORY: it starts every timer and the identity layer, and leaving it out makes the drone fly
+BLIND without raising anything at all.
 """
 
 import os
 import sys
 
-# Para que los imports funcionen con cualquier interprete, este o no
-# instalado nada con pip.
 _AQUI = os.path.dirname(os.path.abspath(__file__))
 _UAV_VISION = os.path.dirname(_AQUI)
 _LAC = os.path.dirname(_UAV_VISION)
@@ -25,22 +34,21 @@ for _p in (_UAV_VISION, os.path.join(_LAC, "gradys-embedded")):
         sys.path.insert(0, _p)
 
 from gradys_embedded.protocol.plugin.mission_mobility import (
-    MissionMobilityPlugin,
     MissionMobilityConfiguration,
+    MissionMobilityPlugin,
 )
+
 from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import VisionProtocol
 
+LADO = 60.0
+ALTURA = 30.0
 
-LADO = 60.0        # metros de lado del cuadrado
-ALTURA = 30.0      # metros de altura de vuelo
-
-# Con x_axis_degrees = 0:  x = norte,  y = este.
 CUADRADO = [
-    (LADO,  0.0,   ALTURA),    # 60 m al norte
-    (LADO,  LADO,  ALTURA),    # 60 m al este
-    (0.0,   LADO,  ALTURA),    # 60 m al sur
-    (0.0,   0.0,   ALTURA),    # y de vuelta al inicio
+    (LADO,  0.0,   ALTURA),
+    (LADO,  LADO,  ALTURA),
+    (0.0,   LADO,  ALTURA),
+    (0.0,   0.0,   ALTURA),
 ]
 
 
@@ -58,7 +66,6 @@ def construir(camara, yaw_source, velocidad=5.0):
         velocidad: m/s a los que recorrer el cuadrado.
     """
 
-    # 1) La parte de VISION: se configura con la camara que nos den.
     Vision = VisionProtocol.with_config(
         camera=camara,
         yaw_source=yaw_source,
@@ -72,12 +79,9 @@ def construir(camara, yaw_source, velocidad=5.0):
         ),
     )
 
-    # 2) La parte de VUELO: se le agrega encima, heredando.
     class CuadradoConVision(Vision):
 
         def initialize(self):
-            # OBLIGATORIO. Arranca toda la vision (timers, identidad...).
-            # Si falta, el dron vuela CIEGO y no salta ningun error.
             super().initialize()
 
             self.vuelo = MissionMobilityPlugin(

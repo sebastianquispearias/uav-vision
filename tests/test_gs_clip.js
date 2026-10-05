@@ -10,6 +10,12 @@
  * page's own pintar() against a synthetic report.
  *
  * Run with: node tests/test_gs_clip.js        (from the uav_vision root)
+
+  WHAT EACH SECTION PROVES
+
+  Without scores: what a station started without --clip sends.
+
+  The station flagged the first one. It arrives first; it must be drawn last, and marked.
  */
 'use strict';
 const fs = require('fs');
@@ -52,13 +58,11 @@ const lista = () => document.getElementById('lista').innerHTML;
 const marcas = () => (lista().match(/probably not a person \\(CLIP [0-9.-]+\\)/g) || []);
 const tarjetas = () => lista().split('class="poi ').slice(1);
 
-// Without scores: what a station started without --clip sends.
 estado = { pois: [ poi(0, { crop: 'AAAA' }), poi(10, { crop: 'BBBB' }), poi(20) ] };
 pintar();
 console.log('  sin puntaje   : orden x =', visibles.map(p => p.x).join(', '), '| marcas:', marcas().length);
 ok(marcas().length === 0, 'sin puntaje no puede aparecer la marca');
 
-// The station flagged the first one. It arrives first; it must be drawn last, and marked.
 estado = { pois: [
   poi(0,  { crop: 'AAAA', clip: 0.12, clip_no_persona: true }),
   poi(10, { crop: 'BBBB', clip: 2.5,  clip_no_persona: false }),

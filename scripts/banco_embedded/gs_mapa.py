@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Ground station with a map: the points the drone finds, on the ground they were found on.
 
 The laptop has been the ground station since the first end-to-end run -- oyente_gs.py already
@@ -21,9 +20,9 @@ over a car park reports dozens of cars, and one person among them is the thing w
 Everything is served by one process with no external dependencies: no CDN, no npm, nothing
 that needs a network in the field. The page polls a JSON endpoint and draws.
 
-    python gs_mapa.py --puerto 8300 \\
-        --fondo ../../drone-geolocation/entrenamiento/satelite_zona.png \\
-        --georef ../../drone-geolocation/entrenamiento/satelite_georef.txt \\
+    python gs_mapa.py --puerto 8300 \
+        --fondo ../../drone-geolocation/entrenamiento/satelite_zona.png \
+        --georef ../../drone-geolocation/entrenamiento/satelite_georef.txt \
         --origen -22.978029946,-43.23214256266666
 
 Without --fondo it draws a metric grid, which works anywhere and needs no imagery.
@@ -38,9 +37,11 @@ only in the training venv, which also runs everything else this file imports:
     ../drone-geolocation/entrenamiento/venv/Scripts/python.exe scripts/banco_embedded/gs_mapa.py --clip
 
 Without open_clip, --clip prints a warning and the station runs without scores.
+
+How the station is put together, what lives in its state, and every knob the operator
+has: docs/ARQUITECTURA.md.
 """
 import argparse
-import uuid
 import base64
 import json
 import math
@@ -48,21 +49,14 @@ import os
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from http import server
 
-# Cross-drone fusion needs the same numbers the drone uses to fuse its own tracks. Imported
-# rather than copied: two drones disagreeing with the station about what counts as the same
-# object is a bug nobody would think to look for. Without the package -- this file is meant to
-# be droppable anywhere -- the station still runs and simply shows both drones' targets.
 try:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
-    from uav_vision.flota import fundir, pedidos_de_verificacion
-    # Imported and not copied, for the same reason as fundir: a threshold written out by hand in
-    # two places is how the station and the drones end up disagreeing about what the operator's
-    # click meant. Without the package the template simply does not travel and the click keeps
-    # meaning only a position, which is what it meant before.
     from uav_vision.camera import EMB_DIST_OBJETIVO
+    from uav_vision.flota import fundir, pedidos_de_verificacion
     FUSION_DISPONIBLE = True
 except Exception:
     FUSION_DISPONIBLE = False
@@ -74,62 +68,38 @@ except Exception:
     def pedidos_de_verificacion(pois, drones, ahora, vivo_s=10.0):
         return []
 
-# POIs arrive in local metres (x east, y north) from the mission origin. With the origin's
-# coordinates the same points become lat/lng -- the conversion that was supposedly blocked on
-# agreeing a format with the group. It is not: we own both ends of this link.
 R_TIERRA = 6378137.0
 
 ESTADO = {
-    'pois': [],            # last list received, annotated
-    'historia': [],        # every report, for the trail
-    'drones': {},          # id -> last seen
-    'veredictos_dir': 'veredictos',   # where the operator's verdicts and their crops are kept
-    'origen': None,        # in use: the drone's, if it declares one
-    'origen_cli': None,    # what the operator typed, kept to check the drone against
-    'desacuerdo': None,    # metres between the two, when they disagree
+    'pois': [],
+    'historia': [],
+    'drones': {},
+    'veredictos_dir': 'veredictos',
+    'origen': None,
+    'origen_cli': None,
+    'desacuerdo': None,
 
     'georef': None,
     'fondo': None,
     'arranque': time.time(),
 
-    # What the operator asks the drone to look for. This is NOT the display
-    # filter below it: hiding a class only stops drawing it, while this changes
-    # what the detector reports at all. None means "whatever the drone booted
-    # with". The counter lets the drone notice a change without diffing lists.
     'buscar': None,
     'buscar_v': 0,
-    # Which run of this station issued the order. A restarted station counts from zero again,
-    # and without this a drone that took version 7 would ignore every new order below it.
     'buscar_epoca': uuid.uuid4().hex[:8],
-    # Data-plane addresses of the drones, from --nodos, to push each order to. Empty means
-    # the drones learn it by polling /buscar.
     'nodos': {},
 
-    # One list per drone. A single shared list was replaced on every report, so a second
-    # drone erased the first one's targets and the map flickered between the two views.
-    # What the operator sees is the concatenation, kept in 'pois'.
     'pois_por_dron': {},
 
-    # Which frame the bench replay is on, and where the frames live. Only the bench sends
-    # this: a real drone ships coordinates, not pictures, and the link could not carry them.
-    # It exists so a demo can put what the camera saw next to what the map made of it.
     'rastros': {},
     'frame_actual': None,
     'frames_dir': None,
 
-    # The target the operator fixed with "es lo que busco", in metres, or None.
     'objetivo': None,
 
-    # The ground's second opinion, one entry per drone: what the operator asked for and what came
-    # back. Never the picture itself, which is served from disk by /segunda.jpg: a 1920x1080 frame
-    # is 300 KB, and carrying it inside a state poll that runs every second would be four megabits
-    # of the same image for as long as the operator looks at it.
     'segunda': {},
 }
 CANDADO = threading.Lock()
 
-# Where the second opinion runs. It is a separate process on purpose: RF-DETR lives in the training
-# venv and this station has to stay droppable on a laptop with nothing installed.
 SEGUNDA = None
 PYTHON_RFDETR = os.path.join('..', 'drone-geolocation', 'entrenamiento', 'venv', 'Scripts',
                              'python.exe')
@@ -214,13 +184,15 @@ def empujar_mensaje(nodos, mensaje):
     The envelope is the one a GrADyS node uses to talk to another -- {"message", "source"} POSTed
     to /message -- so the drone receives it in handle_packet exactly as it receives a neighbour's
     report. Each send runs in its own thread: the operator's click must not wait on a radio link.
+
+    'source' is 0 because the embedded runtime types it as an int, and no mission numbers a
+    drone 0.
     """
     if not nodos:
         return
     import threading as _t
     import urllib.request
     cuerpo = json.dumps({'message': json.dumps(mensaje),
-                         # The embedded runtime types the source as an int, and no mission numbers a drone 0.
                          'source': 0}).encode('utf-8')
 
     def uno(nodo, direccion):
@@ -235,8 +207,6 @@ def empujar_mensaje(nodos, mensaje):
     for nodo, direccion in nodos.items():
         _t.Thread(target=uno, args=(nodo, direccion), daemon=True).start()
 
-# The optional CLIP second opinion on each crop (filtro_clip.Anotador), set by --clip. None means
-# the station never started one, and then no POI carries a score field at all.
 CLIP = None
 
 
@@ -256,25 +226,27 @@ def ficha(ahora, mensaje):
     fps_real and slots_perdidos are here because a drone that cannot keep up does not look
     any different from one that can: same pins, same cadence of reports, fewer looks taken.
     Until 2026-08-25 that gap was only findable with a stopwatch.
+
+    'salud' is what the board says about its own current and temperature, and it is kept beside
+    those two because it is the same kind of thing: the health of the aircraft, not a find. It
+    is here because a board spent four hours browning out and nothing on this screen showed it;
+    NOTES.md has that story.
+
+    'pos' is where the drone is and, through the trail, where it has been. The trail is what
+    shows an operator whether the drone is working the area or hovering, which is the difference
+    between rays that cross and rays that do not.
+
+    'buscando' is what the camera is REALLY searching for, and whether it took the last order.
+    The station's own record of the request says nothing about a drone out of range.
     """
     return {
         't': ahora,
-        # Where it is, and where it has been. The trail is what shows an operator whether the
-        # drone is working the area or hovering, which is the difference between rays that
-        # cross and rays that do not.
         'pos': mensaje.get('pos'),
         'frames_seen': mensaje.get('frames_seen'),
         'fps_real': mensaje.get('fps_real'),
         'slots_perdidos': mensaje.get('slots_perdidos'),
         'slots_perdidos_total': mensaje.get('slots_perdidos_total'),
-        # Lo que la placa dice de su propia corriente. Se guarda junto a fps_real y
-        # slots_perdidos porque es lo mismo: salud del avion, no hallazgos. El 3oct una placa
-        # estuvo cuatro horas con bajo voltaje y nada en esta pantalla lo mostraba; murio a mitad
-        # de una linea de log y la causa se encontro al dia siguiente, leyendo su tarjeta desde
-        # otra placa. En el aire eso es un dron que desaparece sin explicacion.
         'salud': mensaje.get('salud'),
-        # What the camera is really searching for, and whether it took the last order. The
-        # station's own record of the request says nothing about a drone out of range.
         'buscando': mensaje.get('buscando'),
     }
 
@@ -348,6 +320,9 @@ def adoptar_origen(mensaje):
     loaded without an origin the runner resolves one from the GPS fix, which no operator can
     know in advance. So the drone wins -- but silently overriding would hide the very mistake
     worth catching, so the disagreement is recorded and shown.
+
+    A disagreement under a metre is not reported: a metre is well under the system's own error
+    and far above float noise.
     """
     origen = mensaje.get('origen_gps')
     if not origen or len(origen) < 2:
@@ -355,7 +330,6 @@ def adoptar_origen(mensaje):
     nuevo = (float(origen[0]), float(origen[1]))
     if ESTADO['origen_cli'] is not None:
         d = separacion_m(ESTADO['origen_cli'], nuevo)
-        # A metre is well under the system's own error and far above float noise.
         ESTADO['desacuerdo'] = round(d, 1) if d > 1.0 else None
     if ESTADO['origen'] != nuevo:
         ESTADO['origen'] = nuevo
@@ -366,46 +340,25 @@ def adoptar_origen(mensaje):
 
 
 def _rastro(fuente, pos):
-    """Keeps the last stretch of a drone's path. Called with the lock already held."""
+    """Keeps the last stretch of a drone's path. Called with the lock already held.
+
+    The trail is bounded on purpose: a whole flight drawn at once is a scribble, and the
+    question an operator has is where the drone went lately, not where it took off.
+    """
     if not pos:
         return
     r = ESTADO['rastros'].setdefault(str(fuente), [])
     if not r or (abs(r[-1][0] - pos[0]) + abs(r[-1][1] - pos[1])) > 0.5:
         r.append([pos[0], pos[1]])
-        # Bounded on purpose: a whole flight drawn at once is a scribble, and the question an
-        # operator has is where it went lately, not where it took off.
         del r[:-200]
 
 
-# A drone that has not reported for this long is not seeing anything now. Its targets stop counting
-# towards the map: a pin labelled "seen by 1+2" must not outlive one of the two going silent. It is
-# the same window the drones apply to what they hear from each other. --callado-s changes it.
-CLIP_DESCARTA = False          # --clip-descarta: sacar de la lista lo que CLIP llama no-persona
+CLIP_DESCARTA = False
 DRON_CALLADO_S = 15.0
-# How far from the click a candidate may be and still be taken as the one the operator meant.
-# Same reasoning as the verdict, which only applies to the nearest POI: a click is a gesture with
-# the precision of a finger on a map, and reaching further would hand the drone the appearance of
-# somebody standing next to the person who was pointed at.
 OBJETIVO_RADIO_M = 3.0
-# Where the operator wants an aircraft to stand when it is sent to look at a target from another
-# side. These are mission decisions and nothing derives them: close enough that a person is more
-# than a shape, far enough not to be over somebody's head, inside whatever the airspace allows.
-# They live here, in the operator's instrument, because the layer that flies refuses to invent
-# them, and they are overridable from the command line.
 RODEO_RADIO_M = 30.0
 RODEO_ALTURA_M = 25.0
-# How many stops. ONE by default, and the reasoning matters more than the number: the question the
-# operator is asking is "is that a person", and one photograph from an angle nobody has answers it.
-# Twelve stops is twelve photographs of the same point, eleven of them answering a question nobody
-# asked, and at this radius each leg takes tens of seconds, so a full way round is minutes of
-# flight during which that aircraft is not patrolling anything.
-#
-# The orbit is still there and the protocol takes any number, because 'go and hold over it' is in
-# the mission and will be wanted. It is not the default because the default has to be the cheap
-# answer to the common question. A mission decision, like the radius and the altitude.
 RODEO_PUNTOS = 1
-# --banco: this station is driving boards on a desk, not aircraft. Only affects what the page says
-# about position, and it says it instead of printing a number nobody should believe.
 EN_BANCO = False
 
 
@@ -433,10 +386,11 @@ def plantilla_para(x, y, vigentes):
     here, because nothing here reads it. A click with no candidate within OBJETIVO_RADIO_M sends
     only the position, exactly as it did before, rather than reaching further and handing the
     drone the appearance of somebody standing next to the person who was pointed at.
+
+    The sort key is the distance ALONE. Two candidates exactly as far from the click is not a
+    corner case to shrug at: comparing the pairs would compare the dicts and raise, inside the
+    handler that answers the operator's click.
     """
-    # Sorted by the distance alone. Two candidates exactly as far from the click is not a corner
-    # case to shrug at: comparing the pairs would compare the dicts and raise, inside the handler
-    # that answers the operator's click.
     cerca = sorted(((math.hypot(p['x'] - x, p['y'] - y), p) for p in vigentes
                     if p.get('emb') is not None
                     and p.get('x') is not None and p.get('y') is not None),
@@ -493,18 +447,21 @@ def pois_vigentes(ahora):
     of as corroborated by a drone that may have fallen out of the sky. Measured on the
     two-Raspberry bench before this existed: fifteen seconds after one runner was killed, the
     station still showed the target as seen by 1+2.
+
+    The fusion works in metres and knows nothing about the globe, so the coordinates are put
+    back on each merged position here; otherwise the pin and its GPS reading would part.
+
+    What CLIP doubts goes to the END of the queue and nothing else moves: the sort is stable,
+    and a POI without a score is never demoted. With --clip-descarta it is dropped instead of
+    demoted. That is off by default for two reasons: hiding a point the operator never saw is
+    their call and not the system's, and CLIP still misses the harder clutter. NOTES.md has
+    what dropping buys and what it still lets through.
     """
     vivos = {k: v for k, v in ESTADO['pois_por_dron'].items()
              if ahora - ESTADO['drones'].get(k, {}).get('t', float('-inf')) <= DRON_CALLADO_S}
     pois = fundir(vivos)
     for q in pois:
         q['lat'], q['lng'] = a_latlng(q['x'], q['y'], ESTADO['origen'])
-    # What CLIP doubts goes to the end of the queue, and nothing else moves: the sort is stable
-    # and a POI without a score is never demoted. With --clip-descarta it is dropped instead of
-    # demoted, which on the 02ago flight removed the bag and the cone and left every person standing:
-    # phantoms 2 -> 1 with 5 of 5 people kept. Off by default because hiding a point the operator never
-    # saw is their call and not the system's, and because CLIP still misses the harder clutter -- the
-    # red object on that flight scored 1.81, above the threshold, and looks like a person by size too.
     if CLIP_DESCARTA:
         pois = [q for q in pois if not q.get('clip_no_persona')]
     pois.sort(key=lambda q: bool(q.get('clip_no_persona')))
@@ -512,12 +469,50 @@ def pois_vigentes(ahora):
 
 
 def registrar(mensaje, fuente):
+    """Files one drone's report: its own pin list, its trail, and the fused map the page reads.
+
+    AN EMPTY BEAT says "still here", not "there is nothing". Touching the pin list on one would
+    wipe the map every time a target left the frame for a second, so a heartbeat updates the
+    drone's record and the trail and returns.
+
+    The drone is heard BEFORE the fusion runs, or its own report would find it silent and leave
+    its targets out. The per-drone lists are concatenated and not merged beyond what fundir
+    decides: two drones seeing the same person still produce two pins until something decides
+    they are the same target, and showing both is the honest state of affairs while hiding one
+    would be a claim nobody has made yet.
+
+    How each field of a POI is read off the wire, where it is not obvious:
+
+    mature
+        A POI with no 'mature' field predates the sweep work, or came from the RANSAC fallback
+        that fires before any candidate exists. It is treated as UNCONFIRMED: assuming the
+        safer reading is what keeps a maybe from being shown as a find.
+
+    cls
+        None when the drone never named it, which is older firmware or a camera with no class.
+        Shown as 'sin clase' rather than guessed at.
+
+    looks, looks_min, evidence, duty, radius_m
+        How much independent evidence there is, how much it takes to be reported, the fraction
+        of the way there, and how far off the point may be, when the drone matures by looks.
+        Absent from older reports, and then simply not drawn: a bar with no threshold behind it
+        would be a guess dressed as a measurement.
+
+    age_s
+        Seconds between the drone's last sighting of the target and this report. The page adds
+        the time elapsed since the report and fades live contacts by it.
+
+    emb
+        Kept so the station can decide whether two drones are looking at one target. NEVER
+        drawn: it is evidence, not something an operator reads.
+
+    CLIP scores outside the station's lock, because the drone already has its answer and a
+    model call must not stall the page's reads. Each distinct crop goes through the model once.
+    """
     ahora = time.time()
     with CANDADO:
         adoptar_origen(mensaje)
     if mensaje.get('latido'):
-        # An empty beat says "still here", not "there is nothing". Touching the pin list on
-        # one would wipe the map every time a target left the frame for a second.
         with CANDADO:
             ESTADO['drones'][str(fuente)] = ficha(ahora, mensaje)
         _rastro(fuente, mensaje.get('pos'))
@@ -525,55 +520,34 @@ def registrar(mensaje, fuente):
     pois = []
     for p in mensaje.get('pois', []):
         lat, lng = a_latlng(p.get('x', 0.0), p.get('y', 0.0), ESTADO['origen'])
-        # A POI with no 'mature' field predates the sweep work, or came from the RANSAC
-        # fallback that fires before any candidate exists. Treat it as unconfirmed: assuming
-        # the safer reading is what keeps a maybe from being shown as a find.
         pois.append({
             'x': p.get('x'), 'y': p.get('y'),
             'lat': lat, 'lng': lng,
             'n_obs': p.get('n_obs'),
-            # None when the drone never named it: older firmware, or a camera with no
-            # class. Shown as 'sin clase' rather than guessed at.
             'cls': p.get('cls'),
             'conf': p.get('conf', p.get('conf_mean')),
             'mobile': p.get('mobile'),
             'mature': bool(p.get('mature', False)),
             'crop': p.get('crop'),
-            # How much independent evidence, how much it takes to be reported, the fraction of
-            # the way there, and how far off the point may be, when the drone matures by looks.
-            # Absent from older reports, and then simply not drawn: a bar with no threshold
-            # behind it would be a guess dressed as a measurement.
             'looks': p.get('looks'),
             'looks_min': p.get('looks_min'),
             'evidence': p.get('evidence'),
             'duty': p.get('duty'),
             'radius_m': p.get('radius_m'),
-            # Seconds between the drone's last sighting of the target and this report. The page
-            # adds the time elapsed since the report ('t') and fades live contacts by it.
             'age_s': p.get('age_s'),
-            # Kept so the station can decide whether two drones are looking at one target.
-            # Never drawn: it is evidence, not something an operator reads.
             'emb': p.get('emb'),
             'dron': fuente,
             't': ahora,
         })
-    # Scored outside the station's lock: the drone already has its answer, and a model call must
-    # not stall the page's reads. Each distinct crop goes through the model once.
     if CLIP is not None:
         for q in pois:
             CLIP.anotar(q)
     with CANDADO:
         ESTADO['pois_por_dron'][str(fuente)] = pois
-        # Concatenated, not merged: two drones seeing the same person still produce two pins
-        # until something decides they are the same target. Showing both is the honest state
-        # of affairs; hiding one would be a claim nobody has made yet.
         ESTADO['historia'].append({'t': ahora, 'n': len(pois),
                                    'frames': mensaje.get('frames_seen')})
         ESTADO['historia'][:] = ESTADO['historia'][-500:]
-        # Heard before fusing, or the drone's own report would find it silent.
         ESTADO['drones'][str(fuente)] = ficha(ahora, mensaje)
-        # The fusion works in metres and knows nothing about the globe; pois_vigentes puts the
-        # coordinates back on each merged position, or the pin and its GPS reading would part.
         ESTADO['pois'] = pois_vigentes(ahora)
         _rastro(fuente, mensaje.get('pos'))
     hora = datetime.now().strftime('%H:%M:%S')
@@ -592,8 +566,69 @@ class Handler(server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(cuerpo)
 
-    # -- the fleet data plane: unchanged from oyente_gs.py -----------------
     def do_POST(self):
+        """Everything that arrives at the station: the fleet's own reports, and the operator's
+        clicks.
+
+        The fleet data plane is unchanged from oyente_gs.py. What was added is the operator's
+        side of the control plane, and each endpoint earns its own paragraph:
+
+        /buscar
+            What the operator wants the drones to look for. Answering before any drone has
+            polled is deliberate: the order is STORED, not routed, so the station never blocks
+            on a link it does not control.
+
+        /objetivo
+            "Es lo que busco". Not only a verdict kept on disk: it is the one thing the
+            operator knows that the drone cannot work out, and it buys recall for free, because
+            sending it back lets the camera lower its threshold over that square of the image
+            where the detector had already scored the boxes it was discarding.
+
+        /mirar
+            The operator asks the GROUND to look again at what one drone is seeing right now.
+            Nothing is computed here: the request goes out, the frame comes back on the data
+            plane like any other packet, and the answer appears when it appears. The click must
+            not block on a radio link, or on a detector that takes a second and a half.
+
+        /reiniciar
+            A clean board, for real. The clear button used to hide pins and a page reload
+            brought them all back, because the candidates do not live here: they live in each
+            aircraft's identity layer, which forgets nothing on purpose. So the only honest
+            clear is one that TRAVELS. The station empties its own copy too and says how many
+            it dropped, because a button that clears and reports nothing reads as broken.
+
+        /rodear
+            The operator sends an aircraft to look at one target from a side nobody has looked
+            from. THIS IS THE ONLY REQUEST IN THE STATION THAT MAKES SOMETHING FLY, so it says
+            out loud which aircraft went, and refuses rather than pretend when there is nobody
+            to send. The radius and the altitude travel with the order, because the layer that
+            flies will not invent them. A walker is refused HERE, on the ground, so the
+            operator is told why instead of the order vanishing; the drone refuses it too,
+            which is the line that matters, but a refusal nobody explains reads as a broken
+            button.
+
+        /veredicto
+            The operator's verdict on a point, kept on disk with the crop it was given on. The
+            drone's own signals cannot tell a person from an object the detector keeps
+            confusing with one; the operator can, and every "no es" is exactly the hard
+            negative a detector trained on public aerial data is missing. Keeping them turns
+            using the system into labelling it.
+
+            A "no es" used to STOP here, on disk, and the drone kept reporting the same wrong
+            point every two seconds for the rest of the flight over a 4G dongle, while the next
+            session started knowing nothing. Now the refusal goes back with the appearance of
+            what was refused. Position alone is never sent as a refusal: see
+            VisionProtocol.descartar for why, and without an appearance nothing travels and the
+            verdict keeps working exactly as it did.
+
+            One refusal PER DRONE, carrying the position and the appearance THAT drone
+            reported. The pin the operator pointed at can be the mean of two drones, and that
+            mean belongs to neither: sent as it is, it falls outside the radius of the very
+            candidate it was meant to silence. See descartes_por_dron. When no drone can obey,
+            the station says so out loud, because the case exists and used to be silence: a
+            board with no appearance model publishes no emb, and with no emb there is nothing
+            to send.
+        """
         largo = int(self.headers.get('Content-Length', 0))
         crudo = self.rfile.read(largo)
         if self.path.split('?')[0] == '/frame_actual':
@@ -607,9 +642,6 @@ class Handler(server.BaseHTTPRequestHandler):
             self._responder(b'{"status": "ok"}')
             return
         if self.path.split('?')[0] == '/buscar':
-            # The operator's side of the control plane. Answering before the
-            # drone has polled is deliberate: the order is stored, not routed,
-            # so the station never blocks on a link it does not control.
             try:
                 clases = json.loads(crudo).get('clases')
             except Exception:
@@ -629,10 +661,6 @@ class Handler(server.BaseHTTPRequestHandler):
                                         'epoca': epoca}).encode('utf-8'))
             return
         if self.path.split('?')[0] == '/objetivo':
-            # "Es lo que busco" is not only a verdict kept on disk: it is the one thing the operator
-            # knows that the drone cannot work out, and it buys recall for free. Sending it back
-            # lets the camera lower its threshold over that square of the image, where the detector
-            # had already scored the boxes it was discarding.
             try:
                 d = json.loads(crudo)
                 apagar = bool(d.get('off'))
@@ -656,10 +684,6 @@ class Handler(server.BaseHTTPRequestHandler):
             self._responder(json.dumps({'objetivo': None if apagar else {'x': x, 'y': y}}).encode('utf-8'))
             return
         if self.path.split('?')[0] == '/mirar':
-            # The operator asks the ground to look again at what one drone is seeing right now.
-            # Nothing is computed here: the request goes out, the frame comes back on the data
-            # plane like any other packet, and the answer appears when it appears. The click must
-            # not block on a radio link or on a detector that takes a second and a half.
             try:
                 dron = str(json.loads(crudo)['dron'])
             except Exception:
@@ -675,11 +699,6 @@ class Handler(server.BaseHTTPRequestHandler):
             self._responder(json.dumps({'dron': dron, 'detector_listo': listo}).encode('utf-8'))
             return
         if self.path.split('?')[0] == '/reiniciar':
-            # A clean board, for real. The clear button hides pins and a page reload brought them
-            # all back, because the candidates do not live here: they live in each aircraft's
-            # identity layer, which forgets nothing on purpose. So the only honest clear is one
-            # that travels. The station empties its own copy too, and says how many it dropped,
-            # because a button that clears and reports nothing reads as broken.
             with CANDADO:
                 nodos = dict(ESTADO['nodos'])
                 cuantos = len(ESTADO['pois'])
@@ -693,11 +712,6 @@ class Handler(server.BaseHTTPRequestHandler):
                                         'drones': len(nodos)}).encode('utf-8'))
             return
         if self.path.split('?')[0] == '/rodear':
-            # The operator sends an aircraft to look at one target from a side nobody has looked
-            # from. This is the only request in the station that makes something fly, so it says
-            # out loud which aircraft went and refuses rather than pretend when there is nobody to
-            # send. The radius and the altitude travel with the order because the layer that flies
-            # will not invent them.
             try:
                 d = json.loads(crudo)
                 x, y = float(d['x']), float(d['y'])
@@ -706,9 +720,6 @@ class Handler(server.BaseHTTPRequestHandler):
                 return
             with CANDADO:
                 nodos = dict(ESTADO['nodos'])
-            # A walker is refused HERE, on the ground, so the operator is told why instead of
-            # the order vanishing. The drone refuses it too, which is the line that matters, but a
-            # refusal nobody explains reads as a broken button.
             if d.get('movil'):
                 self._responder(json.dumps({'error':
                     'ese contacto se esta moviendo: cuando el dron llegue ya no va a estar ahi'
@@ -732,11 +743,6 @@ class Handler(server.BaseHTTPRequestHandler):
                                         'altura_m': altura}).encode('utf-8'))
             return
         if self.path.split('?')[0] == '/veredicto':
-            # The operator's verdict on a point, kept on disk with the crop it was given on. The
-            # drone's own signals cannot tell a person from an object the detector keeps
-            # confusing with one; the operator can, and every "no es" is exactly the hard
-            # negative a detector trained on public aerial data is missing. Keeping them turns
-            # using the system into labelling it.
             try:
                 d = json.loads(crudo)
                 if d.get('v') not in ('si', 'no'):
@@ -763,20 +769,9 @@ class Handler(server.BaseHTTPRequestHandler):
             print('[%s] veredicto del operador: %s en (%.1f, %.1f)%s' %
                   (datetime.now().strftime('%H:%M:%S'), d['v'], x, y,
                    ' con recorte' if archivo else ''), flush=True)
-            # A "no es" used to stop here, on disk. The drone kept reporting the same wrong point
-            # every two seconds for the rest of the flight, over a 4G dongle, and the next session
-            # started knowing nothing. Now the refusal goes back with the appearance of what was
-            # refused, so the drone can stop sending it. Position alone is not sent as a refusal:
-            # see VisionProtocol.descartar for why, and without an appearance nothing travels and
-            # the verdict keeps working exactly as it did.
             if d['v'] == 'no':
                 with CANDADO:
                     nodos = dict(ESTADO['nodos'])
-                # Uno por dron, con la posicion y la apariencia que ESE dron reporto. El pin que
-                # el operador apunto puede ser la media de dos drones, y esa media no es de
-                # ninguno: mandada tal cual, cae fuera del radio del candidato que se queria
-                # callar. Medido en el banco antes de esto: el rechazo llegaba a los dos drones
-                # y el conteo de POIs de ninguno se movia.
                 rechazos = descartes_por_dron(x, y, time.time())
                 for dron, cuerpo in rechazos.items():
                     if dron not in nodos:
@@ -787,8 +782,6 @@ class Handler(server.BaseHTTPRequestHandler):
                           % ', '.join('dron %s (%.1f, %.1f)' % (k, v['x'], v['y'])
                                       for k, v in sorted(rechazos.items())), flush=True)
                 else:
-                    # Decirlo, porque el caso existe y hasta hoy era silencio: una placa sin
-                    # modelo de apariencia no publica emb, y sin emb no hay nada que mandar.
                     print('        PERO NINGUN DRON PUEDE OBEDECERLO: ninguno reporta ese punto '
                           'con apariencia. Una placa sin reid_model no puede honrar un veredicto.',
                           flush=True)
@@ -809,23 +802,29 @@ class Handler(server.BaseHTTPRequestHandler):
             print('[%s] mensaje: %s' % (datetime.now().strftime('%H:%M:%S'), mensaje),
                   flush=True)
 
-    # -- the operator's side ----------------------------------------------
     def do_GET(self):
+        """Everything the operator's page reads: itself, the state, and the pictures.
+
+        /estado recomputes the fused map on every READ as well as on every report. When every
+        drone goes silent no report arrives to refresh it, and a silent map must not keep
+        claiming corroboration. It also carries 'banco', which says whether these boards are on
+        a desk: the page uses it to say the metres mean nothing instead of printing a number
+        nobody should believe, and it travels in the state rather than being baked into the page
+        so that the page stays a static file.
+
+        /segunda.jpg is served from disk instead of travelling inside /estado, because the
+        annotated frame is the size of a photograph and the state is polled once a second.
+        """
         ruta = self.path.split('?')[0]
         if ruta == '/':
             self._responder(PAGINA.encode('utf-8'), 'text/html; charset=utf-8')
         elif ruta == '/estado':
             with CANDADO:
-                # Recomputed on every read too: when every drone goes silent no report arrives
-                # to refresh the map, and a silent map must not keep claiming corroboration.
                 ESTADO['pois'] = pois_vigentes(time.time())
                 d = {
                     'objetivo': ESTADO['objetivo'],
                     'segunda': ESTADO['segunda'],
                     'pois': ESTADO['pois'],
-                    # Whether these boards are on a desk. The page uses it to say the metres mean
-                    # nothing instead of printing a number nobody should believe, and it travels
-                    # here rather than being baked into the page so the page stays a static file.
                     'banco': EN_BANCO,
                     'drones': ESTADO['drones'],
                     'rastros': ESTADO['rastros'],
@@ -846,8 +845,6 @@ class Handler(server.BaseHTTPRequestHandler):
                 n = ESTADO['frame_actual']
             self._responder(json.dumps({'n': n}).encode('utf-8'))
         elif ruta == '/segunda.jpg':
-            # Served from disk instead of travelling inside /estado: the annotated frame is the
-            # size of a photograph and the state is polled once a second.
             consulta = self.path.split('?', 1)[1] if '?' in self.path else ''
             dron = dict(par.split('=', 1) for par in consulta.split('&') if '=' in par).get('dron', '')
             with CANDADO:
@@ -1857,9 +1854,6 @@ if __name__ == '__main__':
                     help='el interprete que tiene rfdetr (el venv de entrenamiento)')
     ap.add_argument('--clip-umbral', type=float, default=None,
                     help='umbral del puntaje CLIP (por defecto 1.496, fijado con los vuelos del 01ago)')
-    # Where an aircraft stands when it is sent to look from another side, and how many stops. All
-    # three are mission decisions and the layer that flies refuses to invent them, so they are
-    # arguments of the operator's instrument rather than numbers in the source.
     ap.add_argument('--radio-rodeo', type=float, default=RODEO_RADIO_M,
                     help='metros desde el objetivo al mirar desde otro lado (por defecto %.0f)'
                          % RODEO_RADIO_M)
@@ -1880,7 +1874,6 @@ if __name__ == '__main__':
     EN_BANCO = bool(args.banco)
     CLIP_DESCARTA = bool(args.clip_descarta)
     if args.clip:
-        # Imported only when asked for: the station stays droppable anywhere without torch.
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import filtro_clip
         print('cargando CLIP ViT-B-32-quickgelu/openai...', flush=True)
@@ -1890,8 +1883,6 @@ if __name__ == '__main__':
             print('CLIP listo: umbral %.3f' % CLIP.umbral, flush=True)
     ESTADO['veredictos_dir'] = args.veredictos
     if args.segunda_opinion:
-        # Started before the first report, never on the first click: loading RF-DETR takes 17 s and
-        # the criterion for this feature is that the operator waits less than five.
         print('arrancando la segunda opinion (RF-DETR tarda ~17 s en cargar)...', flush=True)
         SEGUNDA = SegundaOpinion(args.python_rfdetr,
                                  os.path.join(args.veredictos, 'segunda_opinion'))
@@ -1915,9 +1906,6 @@ if __name__ == '__main__':
     elif args.fondo:
         print('AVISO: no existe %s; se dibuja solo la cuadricula.' % args.fondo)
 
-    # Kept apart from the origin actually in use: --origen is what the operator believes,
-    # and the whole point is to be able to tell the two apart once a drone declares its own.
-    # Until one speaks, the typed value is all there is, so it seeds the one in use.
     if args.origen:
         ESTADO['origen_cli'] = tuple(float(x) for x in args.origen.split(','))
         ESTADO['origen'] = ESTADO['origen_cli']
@@ -1931,10 +1919,6 @@ if __name__ == '__main__':
 
     print('Ground Station en http://localhost:%d  (POST del enjambre en el mismo puerto)'
           % args.puerto)
-    # Windows lets a second station bind a port that already has one, and then
-    # the reports go to whichever socket accepts first. The symptom is a map that
-    # stays empty while the flight clearly runs, and it has cost two sessions.
-    # Refuse instead of guessing.
     try:
         import urllib.request
         urllib.request.urlopen('http://127.0.0.1:%d/estado' % args.puerto,

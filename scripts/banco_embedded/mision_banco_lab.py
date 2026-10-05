@@ -57,7 +57,6 @@ the identity layer scales every maturity threshold by the DECLARED rate, so a bo
 slower than its mission claims silently stretches what "eight looks of evidence" means. Set
 BANCO_FPS to what the board actually does, or turn the model off there with BANCO_REID= (empty).
 
-
 THE DETECTOR HERE IS COCO, NOT THE ONE THAT FLIES, and that is the right way round indoors.
 The aircraft carries YOLO26n fine-tuned on VisDrone (modelos_visdrone/y960_ncnn_model, which
 mision_barrido.py loads): aerial imagery, people a few dozen pixels tall seen from above. A desk
@@ -73,6 +72,31 @@ numbers are not the flight numbers and should not be quoted as if they were: the
 measured on real footage belongs to YOLO26 at 960 px, not to what runs here.
 
     POST /mission/load {"protocol": "mision_banco_lab:ProtocoloLab", ...}
+
+WHAT IS CHOSEN PER BOARD, AND WHY
+    BANCO_FPS, BANCO_MODELO and BANCO_REID set what the board is asked to run at, which
+    detector it loads, and whether it computes appearance. All three are per board, because the
+    two in this bench are not the same machine and they are not always pointed at the same kind
+    of scene.
+
+    The detector is COCO by default BECAUSE THE SCENE IS INDOORS, not because it is the better
+    model: the aircraft flies the VisDrone one, and indoors that one returns nothing at all. Two
+    short names are accepted so a demonstration does not hinge on typing a path correctly twice.
+
+    BANCO_SEE_S is how often it looks, in seconds, and it is kept SEPARATE from fps because
+    they are two different things. When they disagree is exactly how "eight looks of evidence"
+    stops meaning eight seconds: fps is what the identity layer BELIEVES the loop runs at, and
+    this is what really fires it.
+
+    Crops are on because the picture of each detection is what the card shows and what the
+    operator judges. The appearance vector is on because without it the operator's "no es" never
+    leaves the station, the click cannot say WHO, and the fusion between aircraft falls back to
+    the weak path.
+
+    THE METRES ON A DESK MEAN NOTHING. The camera is on a desk looking across the room, not
+    hanging off an aircraft looking down. The mount pitch is a guess at how the board is propped
+    up, and it only affects where the point lands on the map; with no autopilot the pose comes
+    from the fake one. The detection is real; the metres are not.
 """
 import os
 
@@ -80,23 +104,14 @@ from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
 
-# What the board is asked to run at, which detector it loads, and whether it computes
-# appearance. All three per board, because the two in this bench are not the same machine and
-# they are not always pointed at the same kind of scene: see the tables above.
 FPS = float(os.environ.get("BANCO_FPS", "4.0"))
 REID = os.environ.get("BANCO_REID", "/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt") or None
 
-# The detector. COCO by default BECAUSE THE SCENE IS INDOORS, not because it is the better model:
-# the aircraft flies the VisDrone one, and indoors that one returns nothing at all. Two short
-# names are accepted so a demonstration does not hinge on typing a path correctly twice.
 DETECTORES = {"coco": "/home/pi/yolov8n_ncnn_model",
               "visdrone": "/home/pi/modelos_visdrone/y960_ncnn_model"}
 MODELO = DETECTORES.get(os.environ.get("BANCO_MODELO", "coco").strip().lower(),
                         os.environ.get("BANCO_MODELO", "coco"))
 
-# Cada cuanto se mira, en segundos. Separado de fps porque son dos cosas distintas y que no
-# coincidan es como "ocho miradas de evidencia" deja de significar ocho segundos: fps es lo
-# que la capa de identidad CREE que corre, y esto es lo que de verdad dispara el lazo.
 SEE_S = float(os.environ.get("BANCO_SEE_S", "0.25"))
 
 ProtocoloLab = VisionProtocol.with_config(
@@ -105,16 +120,9 @@ ProtocoloLab = VisionProtocol.with_config(
         threshold=0.3,
         tracker=True,
         fps=FPS,
-        # The picture of each detection, which is what the card shows and what the operator judges.
         crops=True,
-        # The appearance vector. Without it the operator's "no es" never leaves the station,
-        # the click cannot say who, and the fusion between aircraft falls back to the weak path.
         reid_model=REID,
     ),
-    # The camera is on a desk looking across the room, not hanging off an aircraft looking down.
-    # Twenty degrees is a guess at how the board is propped up and it only affects where the point
-    # lands on the map, which on a desk means nothing anyway: there is no autopilot, so the pose
-    # comes from the fake one. The detection is real; the metres are not.
     see_period_s=SEE_S,
     pitch_deg=-20.0,
     yaw_source=UavApiYaw("http://localhost:8000"),

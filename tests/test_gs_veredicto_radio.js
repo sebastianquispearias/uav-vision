@@ -16,6 +16,11 @@
  * page's own pintar() / marcar() against synthetic reports.
  *
  * Run with: node tests/test_gs_veredicto_radio.js        (from the uav_vision root)
+
+  WHAT EACH SECTION PROVES
+
+  The scene of the recorded station: the confirmed operator (A), a doubtful point 4 m from it (B)
+  whose 95 % circle covers A, and a mobile POI 20 m away whose circle covers everything.
  */
 'use strict';
 const fs = require('fs');
@@ -57,8 +62,6 @@ const poi = (x, y, extra) => Object.assign(
 const cuenta = () => document.getElementById('cuenta').textContent;
 const verificados = () => (document.getElementById('lista').innerHTML.match(/OPERATOR CONFIRMED/g) || []).length;
 const en = x => visibles.some(p => p.x === x);
-// The scene of the recorded station: the confirmed operator (A), a doubtful point 4 m from it (B)
-// whose 95 % circle covers A, and a mobile POI 20 m away whose circle covers everything.
 const escena = (ax, ay) => [
   poi(ax, ay, { looks: 24, radius_m: 4.9 }),
   poi(4, 0,   { looks: 21, radius_m: 4.9, clip_no_persona: true, clip: 0.31 }),

@@ -11,6 +11,8 @@ the same code that runs on the drone: 'person' on a VisDrone model has to become
 model uses.
 
 Run: python tests/test_orden_a_bordo.py
+
+The station also stores what the drone says it is doing, which the page shows per drone.
 """
 import json
 import os
@@ -171,7 +173,6 @@ try:
     print("  la estacion pide bus (v%d, epoca %s) -> el dron busca %s"
           % (orden["v"], orden["epoca"], sorted(cam.classes)))
 
-    # The station also stores what the drone says it is doing, which the page shows per drone.
     pedir(base, "/", {"message": prov.enviados[-1].message, "source": 1})
     ficha = pedir(base, "/estado")["drones"]["1"]
     assert ficha["buscando"]["clases"] == ["bus"], ficha

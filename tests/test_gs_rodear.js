@@ -15,6 +15,26 @@
  * fetch that records instead of talking.
  *
  * Run with: node tests/test_gs_rodear.js        (from the uav_vision root)
+
+  WHAT EACH SECTION PROVES
+
+  Enough of a selector to find the page's own buttons in the markup it just wrote.
+
+  Only the flight order answers. The page polls for state on its own, and a stub that answered
+  every route with the same object would hand that poll a drone record and wipe the scene.
+
+  The page fetches on its own (the search order, the drone list), so what is counted is orders to
+  fly and not requests in general.
+
+  Nothing flies until it is pressed. This is the assertion that matters most in this file.
+
+  Press the one on the second card.
+
+  Whether the contact is moving travels, because a walker is refused: the order carries a
+  coordinate, and by the time the aircraft lands on it the person is somewhere else.
+
+  The notice names the aircraft that went, checked on the next tick because it is set when the
+  answer resolves.
  */
 'use strict';
 const fs = require('fs');
@@ -32,7 +52,6 @@ function elem(id) {
   if (!elems[id]) elems[id] = {
     id, innerHTML: '', textContent: '', className: '', style: {}, dataset: {}, hidden: false,
     querySelectorAll(sel) {
-      // Enough of a selector to find the page's own buttons in the markup it just wrote.
       const m = /^button\[data-([a-z-]+)\]$/.exec(sel);
       if (!m) return [];
       const re = new RegExp('data-' + m[1] + '="([^"]*)"', 'g');
@@ -60,8 +79,6 @@ const pedidos = [];
 global.__pedidos = pedidos;
 global.fetch = (ruta, opciones) => {
   pedidos.push({ ruta, cuerpo: opciones && opciones.body ? JSON.parse(opciones.body) : null });
-  // Only the flight order answers. The page polls for state on its own, and a stub that answered
-  // every route with the same object would hand that poll a drone record and wipe the scene.
   if (ruta !== '/rodear') return new Promise(() => {});
   return Promise.resolve({ json: () => Promise.resolve({ dron: '2', radio_m: 30, altura_m: 25 }) });
 };
@@ -77,8 +94,6 @@ const poi = (x, extra) => Object.assign(
 const lista = () => document.getElementById('lista').innerHTML;
 const botones = (clave) =>
   document.getElementById('lista').querySelectorAll('button[data-' + clave + ']');
-// The page fetches on its own (the search order, the drone list), so what is counted is orders to
-// fly and not requests in general.
 const rodeos = () => __pedidos.filter(q => q.ruta === '/rodear');
 
 estado = { pois: [poi(3), poi(30, {dron: 2})] };
@@ -89,11 +104,9 @@ console.log('  lo que dice el boton   :', /look from another angle/.test(lista()
 ok(botones('rodear').length === 2, 'cada POI necesita su boton de look from another angle');
 ok(lista().indexOf('look from another angle') >= 0, 'el boton tiene que decir que hace');
 
-// Nothing flies until it is pressed. This is the assertion that matters most in this file.
 console.log('  antes del clic         :', __pedidos.length, 'pedidos,', rodeos().length, 'de rodeo');
 ok(rodeos().length === 0, 'pintar la lista no puede mandar a volar a nadie');
 
-// Press the one on the second card.
 pedirRodeo(estado.pois[1]);
 console.log('  tras el clic           :', JSON.stringify(rodeos()[0]));
 ok(rodeos().length === 1, 'un clic, una orden de vuelo');
@@ -104,15 +117,11 @@ ok(String(ult.cuerpo.dron) === '2',
    'viaja QUIEN vio el punto, para que la estacion pueda mandar a OTRO');
 ok(!('radio_m' in ult.cuerpo) && !('altura_m' in ult.cuerpo),
    'el radio y la altura los pone la estacion, que es el instrumento del operador');
-// Whether the contact is moving travels, because a walker is refused: the order carries a
-// coordinate, and by the time the aircraft lands on it the person is somewhere else.
 ok(ult.cuerpo.movil === false, 'tiene que viajar si el contacto se mueve, porque eso lo rechaza');
 pedirRodeo(Object.assign({}, estado.pois[1], {mobile: true}));
 console.log('  un contacto movil      :', JSON.stringify(rodeos()[1].cuerpo.movil));
 ok(rodeos()[1].cuerpo.movil === true, 'un contacto movil tiene que viajar marcado como tal');
 
-// The notice names the aircraft that went, checked on the next tick because it is set when the
-// answer resolves.
 setTimeout(() => {
   console.log('  el aviso dice          :', aviso);
   ok(/drone 2 is going to look/.test(aviso), 'el boton no dice que dron salio: se lee como roto');

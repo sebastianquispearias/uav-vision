@@ -22,6 +22,9 @@ The last two levels can be pointed at another tracker output and another evidenc
 variant of the chain is scored exactly like the one that flies:
 
     python scripts/medir_identidad.py --desde 3000 --hasta 3700         --pistas ../drone-geolocation/entrenamiento/botsort_pistas_02ago_calibrado.npz         --evidencia-min 0.40 --salida metricas_a1.json
+
+Scoring a reviewed window only, while labels elsewhere are still in progress: the trackers and
+the identity layer still run over the whole flight, and only which boxes are SCORED changes.
 """
 import argparse
 import contextlib
@@ -99,8 +102,6 @@ def main():
     dets = g_sus["dets"]
     verdad = [etiquetas.get(str(i)) for i in range(len(dets))]
     orden = [float(d[0]) for d in dets]
-    # Scoring a reviewed window only, while labels elsewhere are still in progress. The trackers and the
-    # identity layer still run over the whole flight; only which boxes are scored changes.
     verdad = [v if args.desde <= dets[i][0] <= args.hasta else None for i, v in enumerate(verdad)]
 
     pistas_sus = g_sus["track_de"]

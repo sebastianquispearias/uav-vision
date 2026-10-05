@@ -10,6 +10,15 @@ adding to them did not, and that difference is the whole design.
 It also costs six times the inference, which is why it runs every Nth frame. The identity layer asks
 for eleven sightings in thirty six seconds, a tenth of the frames, so the cadence is affordable: the
 test pins that the pass is skipped on the other frames rather than merely made cheaper.
+
+WHAT EACH SECTION PROVES
+    1. A tile find where the frame found nothing is added, in coordinates of the WHOLE frame.
+    2. A tile find on top of a box the frame already has is NOT added, while the others still
+       are. The fake answers the same box in every tile, so the tiles land on different parts of
+       the frame and only the one covered by the frame's own box should disappear.
+    3. The tiles are asked for more confidence than the frame, and only on their turn.
+    4. The tiles cover the frame to its FAR EDGE, or a person at the border is invisible to them.
+    5. The overlap rule itself.
 """
 import os
 import sys
@@ -76,7 +85,6 @@ def _camara(yolo, cada):
 
 frame = np.zeros((800, 1200, 3), np.uint8)
 
-# 1. a tile find where the frame found nothing is added, in coordinates of the whole frame
 yolo = _YoloFalso(lambda w, h: [_Caja([10, 20, 40, 90])] if w == 400 else [])
 c = _camara(yolo, 1)
 c._n_frames = 1
@@ -88,9 +96,6 @@ assert all(0 <= v <= 1200 for v in xy[:3:2]), "la caja cayo fuera del frame: %s"
 print("  agrega lo que las fichas ven donde el frame no vio: %d cajas, la primera en (%.0f, %.0f)"
       % (len(extra), xy[0], xy[1]))
 
-# 2. a tile find on top of a box the frame already has is NOT added, while the others still are.
-# The fake answers the same box in every tile, so the tiles land on different parts of the frame and
-# only the one covered by the frame's own box should disappear.
 c2 = _camara(_YoloFalso(lambda w, h: [_Caja([10, 20, 40, 90])] if w == 400 else []), 1)
 c2._n_frames = 1
 sin_previas = len(c2._cajas_de_fichas(frame, []))
@@ -103,7 +108,6 @@ assert len(con_previa) == sin_previas - 1,     "deberia caer exactamente la que 
 assert all(not _solapan(e[0], tapada) for e in con_previa), "dejo pasar la que ya tenia el frame"
 print("  descarta la que el frame ya tenia y conserva las otras (%d -> %d)" % (sin_previas, len(con_previa)))
 
-# 3. the tiles are asked for more confidence than the frame, and only on their turn
 yolo3 = _YoloFalso(lambda w, h: [])
 c3 = _camara(yolo3, 5)
 for n in range(1, 11):
@@ -119,7 +123,6 @@ for n in range(1, 11):
 print("  corre solo en su turno (%d llamadas en 10 frames con cada=5) y con su umbral 0.55" % vueltas)
 assert vueltas > 0, "nunca corrio las fichas"
 
-# 4. the tiles cover the frame to its far edge, or a person at the border is invisible to them
 anchos = {k[0] for k in yolo3.llamadas}
 assert anchos == {400}, "las fichas no salieron del tamano pedido: %s" % anchos
 c5 = _camara(_YoloFalso(lambda w, h: [_Caja([395, 395, 399, 399])] if w == 400 else []), 1)
@@ -129,7 +132,6 @@ assert any(x[2] > 1100 for x in esquinas), "ninguna ficha llego al borde derecho
 assert any(x[3] > 700 for x in esquinas), "ninguna ficha llego al borde inferior"
 print("  las fichas llegan hasta los bordes del frame")
 
-# 5. the overlap rule itself
 assert _solapan([0, 0, 10, 10], [1, 1, 11, 11]), "no reconocio dos cajas casi iguales"
 assert not _solapan([0, 0, 10, 10], [50, 50, 60, 60]), "unio dos cajas que no se tocan"
 print("  la regla de solape distingue la misma caja de dos distintas")

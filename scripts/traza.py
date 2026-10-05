@@ -3,6 +3,9 @@
 Es lo que veria alguien poniendo un punto de interrupcion en cada etapa: la caja como sale del
 detector, el rayo que produce, donde aterriza, y como esa vista se suma a las otras hasta volverse
 un punto en el mapa del operador.
+
+The track followed is the longest one, which is the operator's, and its first detection is taken
+as the one to follow.
 """
 import csv
 import os
@@ -13,8 +16,8 @@ import numpy as np
 UAV = r"C:\Users\User\Desktop\lac\uav_vision"
 os.chdir(UAV)
 sys.path.insert(0, UAV)
-from uav_vision.camera_config import ARDUCAM_MODULE_3  # noqa: E402
-from uav_vision.pinhole_local import _world_to_camera_rotation, pixel_to_ray  # noqa: E402
+from uav_vision.camera_config import ARDUCAM_MODULE_3
+from uav_vision.pinhole_local import _world_to_camera_rotation, pixel_to_ray
 
 DATOS = os.path.join(UAV, "demo", "data")
 PITCH = -55.0
@@ -33,7 +36,6 @@ def enu(lat, lng):
     return (np.radians(lng - LNG0) * R * np.cos(np.radians(LAT0)), np.radians(lat - LAT0) * R)
 
 
-# La pista mas larga: la del operador. Tomamos su primera deteccion como la que vamos a seguir.
 ids, cuentas = np.unique(track[track >= 0], return_counts=True)
 pista = int(ids[np.argmax(cuentas)])
 idx = np.where(track == pista)[0]

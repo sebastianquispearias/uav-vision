@@ -6,6 +6,10 @@ object in the image (higher near the center, lower near edges) and maps
 confidence to pixel noise and gradient-descent weights.
 
 All functions are pure (no side effects, no simulator dependencies).
+
+The two noise constants are hyperparameters of the model sigma_pixel = C / confidence, so a
+low-confidence detection is a noisier one. C_NOISE is the value the paper uses; C_VISDRONE_1D
+is an empirical fit, and NOTES.md says what it was fitted on.
 """
 
 import math
@@ -15,8 +19,8 @@ import numpy as np
 
 from uav_vision.camera_config import DEFAULT_CAMERA
 
-C_NOISE: float = 5.0  # hyperparameter: sigma_pixel = C_NOISE / confidence
-C_VISDRONE_1D: float = 1.13  # empirical fit from VisDrone2019-DET-val + YOLOv8s
+C_NOISE: float = 5.0
+C_VISDRONE_1D: float = 1.13
 MIN_CONFIDENCE: float = 0.3
 MAX_CONFIDENCE: float = 1.0
 

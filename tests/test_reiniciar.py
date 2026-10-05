@@ -10,6 +10,24 @@ So the button was telling the truth about the screen and a lie about the system.
 for the order that reaches the aircraft, and for the one thing it must NOT undo.
 
 Run: python tests/test_reiniciar.py
+
+THE LAYER HAS TO STAY USABLE and not end up broken. That is what separates a reset from a
+shutdown: the drone keeps flying and the next thing it sees has to come in as if nothing had
+happened.
+
+THE CONTRAST THAT JUSTIFIES THE WHOLE METHOD: without the order, TIME CLEANS NOTHING, and that
+is deliberate, because a target lost a minute ago is still reported. If that section stopped
+passing, the layer would have started forgetting on its own and olvidar_todo() would no longer
+be the only way.
+
+The message name is checked as TEXT, because the protocol cannot be imported without the GrADyS
+runtime, which is not on the laptop. Two copies of a name is how a drone and its station stop
+understanding each other in silence: the station sends, the drone ignores, and nobody sees an
+error.
+
+THE REFUSALS SURVIVE. A refusal is a judgement about the world and it cost a person's attention;
+the board is just how things are being drawn right now. Clearing both with the same button would
+make the drone report again exactly the point somebody already said was not a person.
 """
 import os
 import sys
@@ -43,8 +61,6 @@ despues = len(idt.candidates(now=12.0))
 print('  despues de olvidar_todo()                   -> %d candidatos' % despues)
 assert despues == 0, 'quedaron %d candidatos despues de olvidar: no se olvido nada' % despues
 
-# Y la capa tiene que seguir siendo utilizable, no quedar rota. Esto es lo que separa un reinicio
-# de un apagado: el dron sigue volando y lo siguiente que vea tiene que entrar como si nada.
 poblar(idt, x=50.0, tid=7)
 reusada = idt.candidates(now=24.0)
 print('  y un objetivo nuevo despues del reinicio    -> %d candidato en x=%.1f'
@@ -56,9 +72,6 @@ print()
 print('=' * 70)
 print('2. UN CANDIDATO VIEJO NO SE BORRA SOLO: POR ESO HACIA FALTA LA ORDEN')
 print('=' * 70)
-# El contraste que justifica el metodo entero. Sin la orden, el tiempo no limpia nada, y eso es
-# deliberado: un objetivo perdido hace un minuto se sigue reportando. Si esta seccion dejara de
-# pasar, la capa habria empezado a olvidar sola y olvidar_todo() ya no seria la unica via.
 idt2 = IncrementalIdentity(fusion_radius_m=2.0, fps=4.0, track_dur_s=1.0,
                            mobile_dur_s=10.0, report_dur_s=5.0, report_min_looks=4)
 poblar(idt2)
@@ -73,9 +86,6 @@ print()
 print('=' * 70)
 print('3. LA ESTACION Y EL PROTOCOLO SE PONEN DE ACUERDO EN EL NOMBRE')
 print('=' * 70)
-# Dos copias de un nombre es como un dron y su estacion dejan de entenderse en silencio: la
-# estacion manda, el dron ignora, y nadie ve un error. Se comprueba el texto porque el protocolo
-# no se puede importar sin el runtime de GrADyS, que no esta en la laptop.
 proto = open(os.path.join(AQUI, '..', 'uav_vision', 'vision_protocol.py'), encoding='utf-8').read()
 gs = open(os.path.join(AQUI, '..', 'scripts', 'banco_embedded', 'gs_mapa.py'), encoding='utf-8').read()
 for quien, texto in (('el protocolo', proto), ('la estacion', gs)):
@@ -92,9 +102,6 @@ print()
 print('=' * 70)
 print('4. EL REINICIO NO BORRA LOS VEREDICTOS DEL OPERADOR')
 print('=' * 70)
-# Un rechazo es un juicio sobre el mundo y costo la atencion de una persona; el tablero es solo
-# como se esta dibujando ahora. Borrar los dos con el mismo boton haria que el dron volviera a
-# reportar justo el punto que alguien ya dijo que no era una persona.
 assert 'self._descartados' not in proto.split('def reiniciar')[1].split('def descartar')[0] \
     .replace('len(self._descartados)', ''), \
     'reiniciar() toca la lista de descartes; los veredictos tienen que sobrevivir'

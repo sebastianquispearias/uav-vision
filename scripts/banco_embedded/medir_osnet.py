@@ -3,6 +3,9 @@
 The frame-level measurement is useless when the room is empty: with zero boxes the appearance
 model never runs and the two numbers differ by noise. This times the model itself, on a synthetic
 frame with N boxes of the size a person has at mission altitude.
+
+CAJA is roughly a pedestrian at 25 m with this camera. The first of the repeated calls is
+discarded because it warms the model up rather than measuring it.
 """
 import statistics as st
 import time
@@ -11,7 +14,7 @@ import numpy as np
 from boxmot.reid.core.reid import ReID
 
 ANCHO, ALTO = 1920, 1080
-CAJA = (60, 150)   # un peaton a 25 m con esta camara, aproximado
+CAJA = (60, 150)
 
 print("placa:", open("/proc/device-tree/model").read().strip("\x00"))
 t0 = time.time()
@@ -31,7 +34,7 @@ for n in (1, 3, 6):
                             "boxes": np.asarray(cajas, dtype="float32"),
                             "image": frame})
         dt = (time.time() - t) * 1000.0
-        if k:                      # el primero calienta
+        if k:
             ms.append(dt)
     forma = np.asarray(out["_features"], dtype="float32").shape
     print("  %d caja(s): mediana %6.1f ms   -> %5.1f ms por caja   salida %s"

@@ -1,13 +1,24 @@
-// What the station offers to search for, and what it says each drone is doing.
-//
-// The buttons used to be a fixed list, 'boat' included, on a drone whose model has no boat. They
-// now come from the classes the drones report their detector can emit, with the model's names for
-// people collapsed into the one an operator types. And under them, one line per drone with its
-// applied state, because the station having recorded a request is no evidence a drone took it.
-//
-// Runs the real page code of gs_mapa.py with no browser, like test_gs_filtro.js.
-//
-// Run: node tests/test_gs_buscar.js
+/*
+  What the station offers to search for, and what it says each drone is doing.
+
+  The buttons used to be a fixed list, 'boat' included, on a drone whose model has no boat. They
+  now come from the classes the drones report their detector can emit, with the model's names for
+  people collapsed into the one an operator types. And under them, one line per drone with its
+  applied state, because the station having recorded a request is no evidence a drone took it.
+
+  Runs the real page code of gs_mapa.py with no browser, like test_gs_filtro.js.
+
+  Run: node tests/test_gs_buscar.js
+
+  WHAT EACH SECTION PROVES
+
+  The checks share the page's scope, so their names carry a suffix that no page global uses.
+
+  Un detector entrenado con un conjunto publico conoce ochenta cosas, y la mayoria no tiene nada
+  que hacer en un mapa de busqueda. Ofrecerlas todas entierra los cuatro botones que un operador
+  va a apretar. Pero quitarlas seria mentir sobre lo que el detector puede emitir, asi que quedan
+  a un clic. Esta seccion fija las dos mitades de esa decision.
+*/
 const fs = require('fs');
 const path = require('path');
 
@@ -37,7 +48,6 @@ function ok(cond, msg) {
   if (!cond) { console.error('FALLO: ' + msg); process.exit(1); }
 }
 
-// The checks share the page's scope, so their names carry a suffix that no page global uses.
 const prueba = `
 ok(buscables({}).mision.join(',') === BUSCABLES.join(','),
    'sin drones que informen, los botones tienen que ser la lista fija');
@@ -57,10 +67,6 @@ ok(botonesPrueba.join(',') === 'person,car,truck,bus,boat',
 ok(!botonesPrueba.includes('pedestrian') && !botonesPrueba.includes('people'),
    'los nombres de persona de un modelo no pueden salir como botones sueltos');
 
-// Un detector entrenado con un conjunto publico conoce ochenta cosas, y la mayoria no tiene nada
-// que hacer en un mapa de busqueda. Ofrecerlas todas entierra los cuatro botones que un operador
-// va a apretar. Pero quitarlas seria mentir sobre lo que el detector puede emitir, asi que quedan
-// a un clic. Esta seccion fija las dos mitades de esa decision.
 const cocoPrueba = {
   '1': { buscando: { conocidas: ['person', 'car', 'broccoli', 'teddy bear', 'banana', 'boat'] } },
 };

@@ -11,15 +11,16 @@ import time
 
 import cv2
 import numpy as np
+from boxmot.trackers.bbox.botsort import BotSort
 from libcamera import Transform
 from picamera2 import Picamera2
 from ultralytics import YOLO
-from boxmot.trackers.bbox.botsort import BotSort
 
 DUR_S = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
 SALIDA = "/home/pi/demo_frames"
 
 import os
+
 os.makedirs(SALIDA, exist_ok=True)
 for f in os.listdir(SALIDA):
     os.remove(os.path.join(SALIDA, f))

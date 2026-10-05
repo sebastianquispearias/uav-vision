@@ -12,6 +12,11 @@
  * page's own pintar() / marcar() against synthetic reports.
  *
  * Run with: node tests/test_gs_veredicto.js        (from the uav_vision root)
+
+  WHAT EACH SECTION PROVES
+
+  A new report: the same thing moved 2 m, and the list arrives in another order. A verdict kept
+  by index would now hide the wrong point and show the discarded one.
  */
 'use strict';
 const fs = require('fs');
@@ -70,8 +75,6 @@ console.log('  descarto el de x=10    :', cuenta());
 ok(visibles.length === 2, 'el descartado sigue visible');
 ok(cuenta().indexOf('1 discarded') >= 0, 'la cabecera tiene que decir que hay un descarte');
 
-// A new report: the same thing moved 2 m, and the list arrives in another order. A verdict kept
-// by index would now hide the wrong point and show the discarded one.
 estado = { pois: [
   poi(12, 1, { looks: 14, radius_m: 5.0 }),
   poi(30, 0, { mature: false, n_obs: 11 }),

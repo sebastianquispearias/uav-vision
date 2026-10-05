@@ -15,6 +15,10 @@ The pipeline is the one from the paper:
            -> pixel_to_ray, one bearing ray per detection
            -> select_best_views, greedy on angular diversity and confidence
            -> ransac_fusion, robust triangulation
+
+The parameters are the paper's, from its table of parameters, and the drone starts out facing
+the origin. Nothing below the fusion stage depends on the simulated world: from there on it is
+the same code the aircraft runs.
 """
 
 from __future__ import annotations
@@ -27,12 +31,11 @@ from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from uav_vision.camera_config import ARDUCAM_MODULE_3, SIYI_A8_MINI, CameraConfig
+from uav_vision.camera_config import ARDUCAM_MODULE_3, SIYI_A8_MINI
 from uav_vision.fusion import ransac_fusion
 from uav_vision.pinhole_local import pixel_to_ray
 from uav_vision.view_selection import select_best_views
 
-# Parameters from the paper (Table tab:params).
 K_VISTAS = 30
 ALPHA = 0.2
 MIN_ANGLE_DEG = 10.0
@@ -67,7 +70,7 @@ def trayectoria(n: int, altura: float, radio: float) -> List[Tuple[float, float,
     for i in range(n):
         a = 2.0 * math.pi * i / n
         x, y = radio * math.cos(a), radio * math.sin(a)
-        yaw = (math.degrees(math.atan2(-x, -y))) % 360.0   # facing the origin
+        yaw = (math.degrees(math.atan2(-x, -y))) % 360.0
         poses.append(((x, y, altura), yaw))
     return poses
 
@@ -95,7 +98,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"  pitch   : {args.pitch} grados")
     print("=" * 64)
 
-    # ---- de aca para abajo NADA depende del mundo -----------------------
 
     mediciones: List[tuple] = []
     confianzas: List[float] = []

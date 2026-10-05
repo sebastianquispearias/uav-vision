@@ -1,6 +1,11 @@
-"""The same gap, but comparing what the system actually compares: averaged vectors."""
+"""The same gap, but comparing what the system actually compares: averaged vectors.
+
+The window is given in frames: at 3 FPS it is 4 s, the order of a short track.
+"""
 import sys
+
 import numpy as np
+
 sys.path.insert(0, "scripts")
 import personas_encontradas as pe
 
@@ -8,7 +13,7 @@ d = np.load("demo/data/examen_v3_datos.npz", allow_pickle=True)
 dets, embs = d["dets"], d["embs"]
 embs = embs / (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9)
 
-VENTANA = 12   # cuadros: a 3 FPS son 4 s, el orden de una pista corta
+VENTANA = 12
 grupos = {}
 for i in range(len(dets)):
     L = pe.letra_de(dets[i])

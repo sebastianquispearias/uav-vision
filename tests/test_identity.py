@@ -1,11 +1,75 @@
 """
-Empirical gates for IncrementalIdentity, each on a synthetic scene with known ground truth:
+Empirical gates for IncrementalIdentity, each on a synthetic scene with known ground truth.
+
+Every section is a CONTRAST that fails if the behaviour it claims is not there. A test that
+cannot fail proves nothing, so none of these merely re-reads a value that was just set.
 
   1. Static: one standing person under projection noise yields one candidate near the truth.
   2. Mobile: a walker is classified as mobile and its reported position must beat the lagging
-     naive estimate (median of the recent window).
+     naive estimate, which is the median of the recent window.
   3. Co-occurrence veto: two people seen in the same frames stay two candidates.
-  4. Twin override: duplicate boxes of one person merge into one candidate.
+  4. Twin override: duplicate boxes of one person merge into one candidate. The detector is made
+     to duplicate the box half of the time.
+  5. Short pass: nothing matures, but a preliminary worth verifying does appear. This is the
+     SWEEP case: a short pass over a person never matures a candidate, so without preliminaries
+     the system says nothing at all about somebody it tracked perfectly well. The section also
+     carries the guarantee that keeps preliminaries honest -- once evidence accumulates the same
+     candidate matures, and the two calls agree. It asks for the SPAN rule explicitly, because
+     that is the rule the measurement was made under and the default is now looks.
+  6. Fragments reinforce an existing candidate and never create one. A tracker that keeps losing
+     a target leaves pieces shorter than the track gate; with reinforce_with_fragments they may
+     join the candidate a lasting track opened, by the same rules as any merge. Three contrasts,
+     each of which fails if the rule is wrong: the same fragment joins ONLY with the option on,
+     a fragment alone opens nothing even with it on, and a fragment in the right place with
+     another appearance stays out. Span is asked for explicitly here too, because a fragment is
+     defined against the span rule's track gate.
+  7. Looks: confirms sooner, does not open on an instant, and the radius never falls below the
+     bias. Each contrast runs the same observations through BOTH modes, so it fails if the modes
+     stop behaving differently where they are supposed to. The last case checks the default bar
+     itself: ten seconds seen are not enough and twenty-five are.
+  8. A moving target detected in bursts: the current position is fitted against the CLOCK. A
+     target in frame is detected in a minority of frames, in bursts, and fitting against the
+     observation index treats every sighting as one equal step while fitting against time does
+     not.
+  9. Radius and distance: the margin grows with how far away the thing is looked at. A heading
+     error moves the impact by range times angle, so the same target seen for the same time must
+     carry a wider margin from far away than from close, and at the range the error floor was
+     measured at the model must give back the radius every earlier report carried.
+ 10. Patrol: a target that goes back and forth is described by its RECENT past. Over its whole
+     life its median is the middle of the patrol and a line through its last quarter crosses the
+     turns, so span reports it far from where it is and looks must report it close.
+ 11. Between sightings: a mover is reported where it is AT REPORT TIME. The report goes out on
+     its own clock and the last sighting of a moving target is already old by then.
+ 12. Unseen, the margin grows: the radius of a mover says how far it can have gone. A target
+     that turns back right after its last sighting ends up far off the extrapolated line, and a
+     radius frozen at the last sighting claims to hold it and does not.
+ 13. Short pieces of something standing still: NOISE IS NOT MOTION. A standing person leaves
+     short tracks whose ground points jump by metres and whose fitted speed clears the speed
+     test, and because a mobile is never merged, one standing person became several points on
+     the map. Here a standing person seen as eight short jittery tracks must be ONE static
+     candidate, and a person who really walks must stay mobile.
+ 14. Age: the report says how long ago the candidate was last seen. A lost candidate keeps being
+     reported at the same point, and without this nothing in the report tells a consumer it is
+     old news -- an escorting drone chased points tens of metres away. The same candidate
+     reported half a second and twenty seconds after its last sighting must say so, and span
+     mode keeps its report unchanged.
+ 15. Evidence: the report says how much is MISSING to be reported, not only how much there is.
+     The station used to print a count with no threshold beside it, so neither an operator nor
+     this repository could see how far from reportable anything was. The fraction has to be the
+     count over the threshold IN FORCE, which the third case proves: the same five looks read
+     one value against a bar of 20 and another against a bar of 10, so a field that always
+     returned the first would pass the first two cases and fail that one. The last assertion
+     ties the bar and the verdict together: today both read one axis so the equivalence is free,
+     but the moment a second axis joins the rule, evidence has to be the MINIMUM over every axis
+     or a card will say a thing is reportable about something the layer refuses to report.
+ 16. Density: in what fraction of the frames a detection was produced in the candidate was seen.
+     A static false positive is a flicker spread thin while a person being tracked is dense
+     while they are in view. Sightings per second separates the same rows and is THE WRONG
+     QUANTITY, because it is not scale free, and the third case is the proof: the same target,
+     the same seconds, twice the frame rate, and sightings per look doubles while the density
+     does not move. On a steady board a threshold set on sightings per second would never fire.
+
+The measured numbers behind sections 5, 13, 14, 15 and 16 are in NOTES.md.
 
 Run with: python tests/test_identity.py
 """
@@ -21,7 +85,7 @@ from uav_vision.identity import IncrementalIdentity
 
 RNG = np.random.default_rng(7)
 FPS = 5.0
-SIGMA = 1.2          # ground projection noise, m
+SIGMA = 1.2
 
 
 def emb_de(base: int) -> np.ndarray:
@@ -39,7 +103,7 @@ print("=" * 64)
 ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
 VERDAD = np.array([2.0, -3.0])
 e1 = emb_de(1)
-for f in range(300):                                   # 60 s a 5 Hz
+for f in range(300):
     ident.observe(f, 10, VERDAD + ruido(), 0.7, e1 + 0.05 * RNG.normal(size=512))
 c = ident.candidates()
 assert len(c) == 1, f"fragmento en {len(c)} candidates"
@@ -56,13 +120,12 @@ e2 = emb_de(2)
 pos_final = None
 for f in range(300):
     t = f / FPS
-    real = np.array([-10.0 + 1.0 * t, 4.0])            # 1 m/s hacia el este
+    real = np.array([-10.0 + 1.0 * t, 4.0])
     pos_final = real
     ident.observe(f, 20, real + ruido(), 0.6, e2 + 0.05 * RNG.normal(size=512))
 c = ident.candidates()
 assert len(c) == 1 and c[0]["mobile"], f"no salio MOVIL: {c}"
 err_fit = math.hypot(c[0]["x"] - pos_final[0], c[0]["y"] - pos_final[1])
-# el estimador ingenuo que reemplazamos: mediana de la ventana reciente
 imps = np.array([( -10.0 + (f / FPS), 4.0) for f in range(300)])
 q = max(2, len(imps) // 4)
 naive = np.median(imps[-q:], axis=0)
@@ -95,7 +158,7 @@ P = np.array([-1.0, 5.0])
 ep = emb_de(5)
 for f in range(300):
     ident.observe(f, 40, P + ruido(), 0.7, ep + 0.03 * RNG.normal(size=512))
-    if f % 2 == 0:      # el detector duplica la caja la mitad del tiempo
+    if f % 2 == 0:
         ident.observe(f, 41, P + ruido(), 0.5, ep + 0.03 * RNG.normal(size=512))
 c = ident.candidates()
 print(f"  candidates: {len(c)} con n_obs={[p['n_obs'] for p in c]}")
@@ -105,15 +168,10 @@ print()
 print("=" * 64)
 print("5. PASADA CORTA: nada mature, pero SI un preliminar que verificar")
 print("=" * 64)
-# The sweep case, measured on flight 3: a pass of 30 s never matures a candidate. A track
-# forms and then the drone is gone. Without preliminaries the system says nothing at all
-# about a person it tracked perfectly well for half a minute.
-# This section documents the span rule, the one that measured it; the default is now maturity by
-# looks, under which a 20 s pass does mature (section 7). Asked for explicitly so it keeps testing it.
 ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, report_dur_s=36.0, maturity="span")
 P = np.array([4.0, -2.0])
 ep = emb_de(9)
-n_pasada = int(20 * FPS)          # 20 s of pass, well under the 36 s report bar
+n_pasada = int(20 * FPS)
 for f in range(n_pasada):
     ident.observe(f, 70, P + ruido(), 0.6, ep + 0.03 * RNG.normal(size=512))
 
@@ -128,8 +186,6 @@ print(f"  preliminar en ({todos[0]['x']}, {todos[0]['y']}), a {d:.2f} m del real
       f"n_obs={todos[0]['n_obs']}")
 assert d < 1.0, "el preliminar apunta al lugar equivocado"
 
-# And the guarantee that keeps preliminaries honest: once evidence accumulates, the same
-# candidate matures, and the two calls agree.
 for f in range(n_pasada, int(60 * FPS)):
     ident.observe(f, 70, P + ruido(), 0.6, ep + 0.03 * RNG.normal(size=512))
 maduros = ident.candidates()
@@ -140,27 +196,20 @@ print()
 print("=" * 64)
 print("6. FRAGMENTOS: refuerzan un candidato existente, nunca crean uno")
 print("=" * 64)
-# A tracker that keeps losing a target leaves pieces shorter than track_dur_s. With
-# reinforce_with_fragments they may join the candidate a lasting track opened, by the same
-# rules as any merge. Three contrasts, each of which fails if the rule is wrong: the same
-# fragment joins only with the option on; a fragment alone opens nothing even with it on;
-# a fragment in the right place with another appearance stays out.
 
 
 def escena(refuerzo, con_pista_larga=True):
-    # A fragment is defined against the span rule's 8.6 s track gate; under looks, four seconds
-    # of sightings are already a track. So this section asks for span explicitly.
     ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity="span",
                                 reinforce_with_fragments=refuerzo)
     P, Q = np.array([0.0, 0.0]), np.array([30.0, 30.0])
     e_p, e_otro = emb_de(11), emb_de(12)
     if con_pista_larga:
-        for f in range(300):                                 # 60 s: a lasting track
+        for f in range(300):
             ident.observe(f, 80, P + ruido(), 0.7, e_p + 0.03 * RNG.normal(size=512))
-    for f in range(300, 320):                                # 4 s, same person, new id
+    for f in range(300, 320):
         ident.observe(f, 81, P + ruido(), 0.7, e_p + 0.03 * RNG.normal(size=512))
         ident.observe(f, 82, Q + ruido(), 0.7, e_p + 0.03 * RNG.normal(size=512))
-    for f in range(320, 340):                                # 4 s, right place, other look
+    for f in range(320, 340):
         ident.observe(f, 83, P + ruido(), 0.7, e_otro + 0.03 * RNG.normal(size=512))
     return ident.candidates(preliminary=True, with_tracks=True)
 
@@ -182,13 +231,10 @@ print()
 print("=" * 64)
 print("7. MIRADAS: confirma pronto, no abre con un instante, y el radio no baja del sesgo")
 print("=" * 64)
-# maturity="looks" counts independent looks instead of the time between first and last
-# sighting. Each contrast runs the same observations through both modes, so it fails if the
-# modes stop behaving differently where they are supposed to.
 
 
 def seguido(maturity, segundos, hz=FPS, t0=0.0, tid=90, **kw):
-    kw.setdefault("report_min_looks", 5)      # this section was written for 5; the default is checked below
+    kw.setdefault("report_min_looks", 5)
     ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS, maturity=maturity, **kw)
     P = np.array([1.0, 1.0])
     e = emb_de(13)
@@ -224,7 +270,6 @@ assert c5[0]["radius_m"] > c60[0]["radius_m"], "mas miradas tienen que achicar e
 assert c60[0]["radius_m"] >= round(suelo, 2) - 0.01, "el radio no puede bajar del sesgo compartido"
 assert "radius_m" not in seguido("span", 60)[1][0], "el modo span no cambia el reporte"
 
-# The default itself: 20 looks. Ten seconds seen are not enough, twenty-five are.
 def por_defecto(segundos):
     ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
     e = emb_de(14)
@@ -241,9 +286,6 @@ print()
 print("=" * 64)
 print("8. BLANCO MOVIL DETECTADO A RAFAGAS: la posicion actual se ajusta contra el reloj")
 print("=" * 64)
-# A target in frame is detected in 4.6-38 % of frames on flight 3, in bursts. Here a boat-like
-# target crosses at 6 m/s and is seen in bursts of five frames with long gaps. Fitting against
-# the observation index treats every sighting as one equal step; fitting against time does not.
 from uav_vision.identity import _current_position
 
 vel = np.array([6.0, 0.0])
@@ -273,9 +315,6 @@ print()
 print("=" * 64)
 print("9. RADIO Y DISTANCIA: el margen crece con lo lejos que se mira")
 print("=" * 64)
-# A heading error moves the impact by range times angle. The same target, seen for the same time,
-# must carry a wider margin from 90 m than from 12 m; at the range the 2.4 m floor was measured at,
-# the model must give back the radius every earlier report carried.
 from uav_vision.identity import RANGO_REFERENCIA_M
 
 
@@ -299,9 +338,6 @@ print()
 print("=" * 64)
 print("10. PATRULLA: un blanco que va y vuelve se describe por su pasado reciente")
 print("=" * 64)
-# A boat patrolling x in [-25, 25] at 6 m/s, seen in bursts. Over its whole life its median is the
-# middle of the patrol and a line through its last quarter crosses the turns. The same sightings
-# through both modes: span reports it far from where it is, looks must report it close.
 
 
 def patrulla(maturity, v=6.0, quieto=False):
@@ -309,7 +345,7 @@ def patrulla(maturity, v=6.0, quieto=False):
     rng = np.random.default_rng(5)
     e = emb_de(51)
     k, real = 0, None
-    for t0 in np.arange(0.0, 90.0, 3.0):                 # a burst of 5 sightings every 3 s
+    for t0 in np.arange(0.0, 90.0, 3.0):
         for j in range(5):
             t = t0 + 0.2 * j
             s_ = (v * t) % 100.0
@@ -336,12 +372,10 @@ print()
 print("=" * 64)
 print("11. ENTRE AVISTAMIENTOS: un movil se reporta donde esta al reportar")
 print("=" * 64)
-# The report goes out on its own clock; the last sighting of a moving target is already old. A
-# target at 6 m/s last seen 1.5 s before the report is 9 m past that sighting.
 ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
 e = emb_de(61)
 vel = np.array([6.0, 0.0])
-for k in range(200):                                     # 40 s at 5 Hz, straight line
+for k in range(200):
     ident.observe(k, 101, vel * (0.2 * k) + RNG.normal(0, 1.0, size=2), 0.7,
                   e + 0.03 * RNG.normal(size=512), t=0.2 * k)
 t_ultimo = 0.2 * 199
@@ -370,8 +404,6 @@ print()
 print("=" * 64)
 print("12. SIN VERLO, EL MARGEN CRECE: el radio de un movil dice cuanto puede haberse ido")
 print("=" * 64)
-# A target at 6 m/s turns back right after its last sighting. Four seconds later the report is 48 m
-# off the extrapolated line's end; a radius frozen at the last sighting claims to hold it and does not.
 ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
 e = emb_de(71)
 vel = np.array([6.0, 0.0])
@@ -380,7 +412,7 @@ for k in range(200):
                   e + 0.03 * RNG.normal(size=512), t=0.2 * k)
 t_ultimo = 0.2 * 199
 ahora = t_ultimo + 4.0
-real = vel * t_ultimo - vel * 4.0                        # it turned round and came back
+real = vel * t_ultimo - vel * 4.0
 fijo = ident.candidates(preliminary=True)[0]
 vivo = ident.candidates(preliminary=True, now=ahora)[0]
 d_vivo = float(np.hypot(vivo["x"] - real[0], vivo["y"] - real[1]))
@@ -397,10 +429,6 @@ print()
 print("=" * 64)
 print("13. TRAMOS CORTOS DE UNO QUIETO: el ruido no es movimiento")
 print("=" * 64)
-# Measured on flight 3: the operator, standing, left tracks of 6-21 sightings over 1-5 s whose ground points
-# jump 1-3 m, and their fitted speed (0.75-1.95 m/s) cleared the speed test, so each became a separate mobile
-# candidate. A mobile is never merged, so one standing person was eight points. Here: a standing person seen as
-# eight short tracks with that jitter must be one static candidate, and a person who really walks must stay mobile.
 
 
 def tramos_cortos(caminando):
@@ -410,7 +438,7 @@ def tramos_cortos(caminando):
     k = 0
     for tramo in range(8):
         t0 = tramo * 6.0
-        for j in range(15):                                   # 15 sightings over 2.8 s: three looks, a track
+        for j in range(15):
             t = t0 + 0.2 * j
             real = np.array([-10.0 + 1.4 * t, 3.0]) if caminando else np.array([2.0, 3.0])
             salto = rng.normal(0, 1.2, size=2) + (rng.normal(0, 2.5, size=2) if rng.random() < 0.2 else 0.0)
@@ -432,12 +460,9 @@ print()
 print("=" * 64)
 print("14. EDAD: el reporte dice hace cuanto se vio el candidato por ultima vez")
 print("=" * 64)
-# Measured in the escort simulation: a lost candidate keeps being reported at the same point every two seconds, and
-# nothing in the report tells a consumer that it is old news -- the escorting drone chased points 67-97 m away. The
-# same candidate, reported 0.5 s and 20 s after its last sighting, must say so; span mode keeps its report unchanged.
 ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
 e = emb_de(97)
-for k in range(50):                                              # seen from t=0 to t=9.8 s
+for k in range(50):
     ident.observe(k, 500, np.array([1.0, 1.0]) + RNG.normal(0, 0.5, size=2), 0.7, e + 0.03 * RNG.normal(size=512), t=0.2 * k)
 reciente = ident.candidates(preliminary=True, now=10.3)[0]
 viejo = ident.candidates(preliminary=True, now=29.8)[0]
@@ -455,13 +480,6 @@ print()
 print("=" * 64)
 print("15. EVIDENCIA: el reporte dice cuanta falta para reportar, no solo cuanta hay")
 print("=" * 64)
-# Measured on the 02ago replay against the letters a human put on every box: of the four mature
-# candidates three were nobody and one was the operator, while the real people B, C, G and H never
-# matured. The station already printed "22 miradas" with no threshold beside it, so neither an
-# operator nor this repository could see how far from reportable anything was. The fraction has to
-# be the count over the threshold IN FORCE, which is what the third case below proves: the same
-# five looks read 0.25 against a bar of 20 and 0.50 against a bar of 10. A field that always said
-# 0.25 would pass the first two cases and fail that one.
 e = emb_de(31)
 
 def con_miradas(n_looks, min_looks=20, modo="looks"):
@@ -488,10 +506,6 @@ assert not pocas["mature"] and muchas["mature"],     "el contraste: con un cuart
 assert muchas["evidence"] == 1.0, "la barra llena es exactamente 1.0, no 1.05"
 assert bar_baja["evidence"] == 0.5,     "la fraccion se mide contra el umbral vigente, no contra un 20 escrito a mano"
 assert "evidence" not in span and "looks_min" not in span, "el modo span no cambia su reporte"
-# The bar and the verdict have to be the same statement. Today both read one axis, so the
-# equivalence is free; the moment a second axis joins the rule, evidence has to be the MINIMUM
-# over every axis or the card will say "alcanza para reportar" about something the layer refuses
-# to report. This assertion is what makes that a failure instead of a surprise.
 for caso in (con_miradas(3), pocas, con_miradas(19), muchas, con_miradas(40), bar_baja,
              con_miradas(10, min_looks=10)):
     assert (caso["evidence"] >= 1.0) == caso["mature"],         "la barra llena y el veredicto tienen que decir lo mismo, siempre"
@@ -500,13 +514,6 @@ print()
 print("=" * 64)
 print("16. DENSIDAD: en que fraccion de los cuadros con deteccion se vio al candidato")
 print("=" * 64)
-# Measured on the 02ago replay against the letters a human put on every box: the six ghosts top
-# out at a density of 0.397 and the seven real-person candidates floor at 0.714, nothing in
-# between, because a static false positive is a flicker spread thin while a person being tracked
-# is dense while she is in view. Sightings per second separates the same rows on that flight and
-# is the wrong quantity, because it is not scale free. The third case below is the proof: the same
-# target, the same seconds, twice the frame rate, and sightings per look DOUBLES while the density
-# does not move. On a steady 3 FPS board a threshold set on sightings per second would never fire.
 e_obj, e_esc = emb_de(41), emb_de(42)
 
 def densidad(fps_cam, parpadea, segundos=20):
@@ -521,7 +528,6 @@ def densidad(fps_cam, parpadea, segundos=20):
     n_frames = int(segundos * fps_cam)
     for k in range(n_frames):
         sello = k / fps_cam
-        # The rest of the scene: what makes a frame count as one detection was produced in.
         ident.observe(k, 801, np.array([50.0, 50.0]), 0.6, e_esc, t=sello)
         if (not parpadea) or int(sello) % 4 == 0:
             ident.observe(k, 800, np.array([2.0, -1.0]) + RNG.normal(0, 0.2, size=2), 0.7,
@@ -529,9 +535,9 @@ def densidad(fps_cam, parpadea, segundos=20):
     return [c for c in ident.candidates(preliminary=True, now=float(segundos))
             if abs(c["x"] - 2.0) < 3.0][0]
 
-denso = densidad(2.0, parpadea=False)   # seen in every frame of its life
-tirones = densidad(2.0, parpadea=True)  # present for twenty seconds, seen in a quarter of them
-rapido = densidad(4.0, parpadea=True)   # the same flicker, same seconds, twice the frame rate
+denso = densidad(2.0, parpadea=False)
+tirones = densidad(2.0, parpadea=True)
+rapido = densidad(4.0, parpadea=True)
 for nom, c in (("visto siempre     ", denso), ("parpadea a 2 FPS  ", tirones),
                ("parpadea a 4 FPS  ", rapido)):
     print(f"  {nom}: duty={c['duty']:<6} looks={c['looks']:<4} n_obs={c['n_obs']:<4} "

@@ -1,5 +1,4 @@
-"""
-Replays a recorded real flight through VisionProtocol, no drone needed.
+"""Replays a recorded real flight through VisionProtocol, no drone needed.
 
 The recording provides everything the protocol would get live: frames.csv has the pose per
 frame and the cached detections are what the detector saw. A replay camera hands those
@@ -16,6 +15,9 @@ Two-stage verification, in order of trust:
 
 Run from the repo root: python scripts/replay_vuelo3.py
 Needs ../gradys-embedded and ../drone-geolocation next to this repo.
+
+Where the inputs come from, every switch this script accepts, and how the two modes
+differ: docs/ARQUITECTURA.md.
 """
 import csv
 import json
@@ -29,17 +31,18 @@ _LAC = os.path.dirname(_HERE)
 sys.path.insert(0, os.path.join(_LAC, "gradys-embedded"))
 
 import numpy as np
-
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
-from uav_vision.camera import (BANDA_BAJA, EMB_DIST_OBJETIVO, OnboardCamera,
-                                dentro_del_foco, se_parece_al_objetivo)
+from uav_vision.camera import (
+    BANDA_BAJA,
+    EMB_DIST_OBJETIVO,
+    OnboardCamera,
+    dentro_del_foco,
+    se_parece_al_objetivo,
+)
 from uav_vision.camera_config import ARDUCAM_MODULE_3
 from uav_vision.vision_protocol import VisionProtocol
 
-# The three inputs live in the flight archive by default. demo/demo.py points
-# UAV_VISION_DATOS at a self-contained copy so the replay runs from a clone,
-# with no archive and no drone.
 _DATOS = os.environ.get("UAV_VISION_DATOS")
 if _DATOS:
     FRAMES_CSV = os.path.join(_DATOS, "frames.csv")
@@ -54,42 +57,27 @@ else:
     EMBS_NPY = os.path.join(_LAC, "drone-geolocation", "entrenamiento",
                             "embs_osnet.npy")
 
-# Vehicles are opt-in. The people-only run is the equivalence gate of this repo
-# -- it must keep printing 2.39 m -- so nothing about it changes unless asked.
-# ------------------------------------------------------- ground station --
-# Off unless asked for. With UAV_VISION_GS set, the reports the protocol
-# produced are pushed to a running gs_mapa, paced so the map fills the way it
-# would during the flight instead of appearing all at once. Declared up here
-# because --vivo needs it inside the flight loop, not after it.
 _GS = os.environ.get("UAV_VISION_GS")
 
-# Which drone this replay claims to be, and which half of the flight it flies. The flight
-# made two passes over the same ground several minutes apart, and the paper measures that the
-# GPS bias between them is independent -- so pass 1 and pass 2 stand in for two aircraft. It is
-# the pseudo-swarm protocol, used here to exercise two drones with one camera.
 DRON = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--dron=")), 1)
 PASADA = next((int(a.split("=")[1]) for a in sys.argv if a.startswith("--pasada=")), 0)
 
 VIVO = "--vivo" in sys.argv
 ROLL_SIGNO = next((float(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--actitud-roll=")), 0.0)
-# --vivo only makes sense with something to switch to, so it implies --vehiculos.
 CON_VEHICULOS = "--vehiculos" in sys.argv or VIVO
-# How much faster than the wall clock the flight is replayed. The flight lasted
-# about 11 min; 20x puts it under 35 s, long enough to click during it.
 VELOCIDAD = next((float(a.split("=")[1]) for a in sys.argv
                   if a.startswith("--velocidad=")), 20.0)
 VEHICULOS_NPZ = os.path.join(_DATOS or os.path.join(_HERE, "demo", "data"),
                              "vehiculos.npz")
 
-# ENU origin: the GT post used by every flight-3 analysis.
 LAT0, LNG0 = -22.978029946, -43.23214256266666
 R_EARTH = 6378137.0
 
-PIES = np.array([-1.3, 8.8])      # operator (ground truth)
-OBJ = np.array([2.5, 4.4])        # equipment box (the flight-3 thief)
+PIES = np.array([-1.3, 8.8])
+OBJ = np.array([2.5, 4.4])
 
 PITCH = -55.0
-CONF_MIN = 0.25                   # same cut the identity analysis uses
+CONF_MIN = 0.25
 
 
 def enu(lat, lng):
@@ -109,36 +97,40 @@ class CamaraReplay:
     cls is None in the people-only replay, which is what the cached
     detections of the original run recorded: they predate the class
     reaching the report, and the protocol treats None as "no opinion".
+
+    banda_baja holds the boxes the detector scored between the camera's floor and the reporting
+    threshold and threw away. They enter only through the window the operator's verdict opens,
+    which is the whole point of the fixed-target mode: no extra inference, just evidence that
+    was already computed. A box is kept when it is inside the window AND above its floor, OR
+    when it looks like the target, and the second is not a second window, because it does not
+    ask where the box is.
+
+    set_focus is the real camera's, so what is measured here is what would fly. set_classes is
+    the real camera's behaviour too: the real one receives every class the detector knows and
+    drops the ones nobody asked for, and this stand-in serves cached detections, so it has to
+    do the same or the switch would be a lie -- the operator would see the drawing change while
+    the sensor kept reporting everything. _ALIAS exists because this replay labels people
+    "pedestrian", to keep them apart from the vehicle path, while the operator's console speaks
+    the names the detector emits. A cached source whose cls is None has no OPINION on class and
+    is served whatever is asked, exactly as the protocol treats a missing cls.
     """
 
     def __init__(self, dets_por_frame, camera, banda_baja=None):
         self.dets_por_frame = dets_por_frame
-        # The boxes the detector scored between 0.10 and the reporting threshold and threw away.
-        # They enter only through the window the operator's verdict opens, which is the whole point
-        # of the fixed-target mode: no extra inference, just evidence that was already computed.
         self.banda_baja = banda_baja or {}
         self.foco = None
         self.camera = camera
         self.frame = None
         self._servido = True
         self.clases = None
-        self.servidas = {}      # what actually reached the protocol, by class
+        self.servidas = {}
 
-    # The same window contract the real camera has, so what is measured here is what would fly.
     set_focus = OnboardCamera.set_focus
 
     def set_frame(self, frame):
         self.frame = frame
         self._servido = False
 
-    # The real camera receives every class the detector knows and drops the ones
-    # nobody asked for. This stand-in serves cached detections, so it has to do
-    # the same or the switch would be a lie: the operator would see the drawing
-    # change while the sensor kept reporting everything.
-    #
-    # The alias exists because this replay labels people "pedestrian" to keep
-    # them apart from the vehicle path, while the operator's console speaks the
-    # names the detector emits.
     _ALIAS = {"person": "pedestrian"}
 
     def set_classes(self, classes=None):
@@ -153,8 +145,6 @@ class CamaraReplay:
         return self.clases
 
     def _pasa(self, cls):
-        # None means "this source has no opinion on class": it is served
-        # whatever is asked, exactly as the protocol treats a missing cls.
         return self.clases is None or cls is None or cls in self.clases
 
     def detect(self, pos, yaw):
@@ -170,7 +160,7 @@ class CamaraReplay:
             x1, y1, x2, y2 = d[2:6]
             det = {
                 "px": float((x1 + x2) / 2),
-                "py": float(y2),          # bottom edge: the point touching the ground
+                "py": float(y2),
                 "conf": float(d[1]),
                 "track_id": tid,
                 "emb": emb,
@@ -185,8 +175,6 @@ class CamaraReplay:
                 x1, y1, x2, y2 = d[2:6]
                 det = {"px": float((x1 + x2) / 2), "py": float(y2), "conf": float(d[1]),
                        "emb": emb}
-                # Inside the window above its floor, OR it looks like the target. The second is
-                # not a second window: it does not ask where the box is.
                 en_ventana = (dentro_del_foco(det, self.foco)
                               and det["conf"] >= self.foco["umbral"])
                 if not en_ventana and not se_parece_al_objetivo(det, self.foco):
@@ -228,7 +216,6 @@ class FakeProvider:
             protocol.handle_timer(name)
 
 
-# ---------------------------------------------------------------- data --
 poses = {}
 with open(FRAMES_CSV) as f:
     for r in csv.DictReader(f):
@@ -238,7 +225,6 @@ D = np.load(DETS_NPZ)
 dets_all = D["dets"]
 sel = dets_all[:, 1] >= CONF_MIN
 dets = dets_all[sel]
-# embs_osnet.npy rows correspond, in order, to dets[conf >= 0.25]
 embs = np.load(EMBS_NPY).astype(np.float32)
 embs /= (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9)
 assert len(embs) == len(dets), "embs no alineadas con las detecciones"
@@ -253,11 +239,6 @@ frames_aire = sorted(
 print(f"{len(dets)} detecciones (conf>={CONF_MIN}) en "
       f"{len(frames_aire)} frames de vuelo")
 
-# Greedy pixel-continuity tracker to assign track ids, standing in for
-# the BoT-SORT the real camera runs. Its gates are valid for THIS
-# flight only (90 px per step assumes the 02ago altitude and cadence;
-# gap of 4 served frames assumes its capture rate) -- which is fine
-# here: this script replays exactly that flight.
 MAX_PX = 90.0
 MAX_GAP = 4
 
@@ -270,9 +251,15 @@ def pistas(dets, idx_por_frame, frames, base_id=0):
     only knows pixels, and a track that changes class is exactly what the
     identity layer's class vote exists to prevent. base_id keeps the ids of
     separate runs from colliding.
+
+    Its gates are valid for THIS FLIGHT ONLY: MAX_PX assumes the 02ago altitude and cadence,
+    and MAX_GAP assumes its capture rate. That is fine here, because this script replays
+    exactly that flight.
+
+    Each entry of 'activos' is [id, last_seq, last_center].
     """
     track_de = -np.ones(len(dets), dtype=int)
-    activos = []                      # [id, last_seq, last_center]
+    activos = []
     n = 0
     for seq, f in enumerate(frames):
         for i in idx_por_frame.get(f, []):
@@ -299,9 +286,6 @@ def pistas(dets, idx_por_frame, frames, base_id=0):
 track_de, n_tracks = pistas(dets, idx_por_frame, frames_aire)
 print(f"tracker de replay: {n_tracks} pistas")
 
-# --pistas=file.npz replaces the stand-in with track ids computed elsewhere; scripts/botsort_pistas.py
-# writes the ones the flight's BoT-SORT gives. A detection that tracker left without an id reaches
-# the protocol without one, exactly as on the drone, and the identity layer never sees it.
 PISTAS = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--pistas=")), None)
 if PISTAS:
     track_de = np.load(PISTAS)["track"]
@@ -310,38 +294,18 @@ if PISTAS:
     print(f"pistas externas ({os.path.basename(PISTAS)}): {len(set(track_de[track_de >= 0]))} "
           f"pistas, {int((track_de >= 0).sum())}/{len(track_de)} detecciones con id")
 
-# The cached people detections predate the class reaching the report, so they
-# carry no class of their own. Naming them costs nothing when they are alone --
-# one class never disagrees with itself -- and is what lets the ground station
-# tell them apart from the vehicles once both are on the same map.
 _CLASE_PERSONA = "pedestrian" if CON_VEHICULOS else None
 
-# --evidencia-min=X separates ASSOCIATING from EVIDENCE. The tracker has already seen every box and
-# given ids with all of them; a box below X keeps the id it helped build but never reaches the
-# protocol, so it adds neither an observation to the identity layer nor an impact to the
-# geolocation. The flown frames and the cadence are left as they are, so the evidence floor is
-# the only thing that changes. Off by default: the people-only run is the equivalence gate.
 EVIDENCIA_MIN = next((float(a.split("=", 1)[1]) for a in sys.argv
                       if a.startswith("--evidencia-min=")), None)
 
-# --foco=x,y fixes a target the way the operator's "es lo que busco" does, so the fixed-target
-# mode can be judged by people and phantoms and not only by boxes. Absent, nothing below the
-# reporting threshold is ever loaded and the run is byte for byte the one the gate pins.
 FOCO = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--foco=")), None)
-# --plantilla=f.npy adds the other half of the operator's click: what the target LOOKS like. With
-# it a doubted box is kept wherever it falls and not only inside the projected window, which is
-# the mode measured at 94.4 % recall on the target against 91.1 %. The vector is read from a file
-# so this script keeps knowing nothing about who the letters of the flight belong to; building the
-# template from the hand labels is the measuring script's job, not the replay's.
 PLANTILLA = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--plantilla=")), None)
 EMB_DIST = next((float(a.split("=", 1)[1]) for a in sys.argv
                  if a.startswith("--emb-dist=")), None)
 _plantilla = np.load(PLANTILLA).astype(np.float32) if PLANTILLA else None
 banda_baja = {}
 if FOCO is not None:
-    # The floor is the camera's, imported and not written out again: the replay used to load from
-    # 0.10, below both the camera's band and the tracker's own track_low_thresh, so it served boxes
-    # the drone would never have fed to a tracker in the first place.
     baja = dets_all[(dets_all[:, 1] < CONF_MIN) & (dets_all[:, 1] >= BANDA_BAJA)]
     embs_all = D["embs"].astype(np.float32)
     embs_all /= (np.linalg.norm(embs_all, axis=1, keepdims=True) + 1e-9)
@@ -383,12 +347,6 @@ if CON_VEHICULOS:
         f for f, p in poses.items()
         if float(p["alt_agl"]) > 3.0 and f in por_frame)
 
-# --sintetico=V adds a target with known ground truth that patrols east-west at V m/s across the
-# scene, for the whole flight. It is projected into every airborne frame with the flight's own
-# poses, and a frame that has it in view detects it with the probability measured for a real
-# target in view on this flight (28 %), with 2 px of noise, under one track id -- the stand-in for
-# a tracker that holds it, named 'boat' so its reports can be told from the flight's own. Nothing downstream knows it is synthetic, so what comes out is what the
-# chain does with a moving target: whether it reports it, when, where, and in how many pieces.
 SINTETICO_V = next((float(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--sintetico=")), None)
 SINTETICO_ID = 900000
 SINTETICO_X0, SINTETICO_X1, SINTETICO_Y = -25.0, 25.0, 25.0
@@ -430,7 +388,6 @@ if SINTETICO_V is not None:
     frames_aire = sorted(f for f, q in poses.items() if float(q["alt_agl"]) > 3.0 and f in por_frame)
     print(f"blanco sintetico a {SINTETICO_V} m/s: en cuadro en {_n_vista} frames, detectado en {_n_det}")
 
-# --------------------------------------------- stage 1: the ray check --
 camara_cfg = ARDUCAM_MODULE_3.rotated_180()
 
 t_ini = float(poses[frames_aire[0]]["t_mono"])
@@ -444,26 +401,15 @@ Protocolo = VisionProtocol.with_config(
     camera=CamaraReplay(por_frame, camara_cfg, banda_baja),
     pitch_deg=PITCH,
     yaw_source=lambda: state["yaw"],
-    # --actitud feeds the body pitch recorded in frames.csv into each ray; --actitud-roll=+1/-1
-    # adds the roll with that sign (the August analysis could not settle it from this flight).
     attitude_source=((lambda: (ROLL_SIGNO * state["roll"], state["pitch"]))
                      if "--actitud" in sys.argv else None),
     see_period_s=0.1,
     report_period_s=2.0,
-    # fusion_radius_m: expected ground noise of THIS scene (gps sigma +
-    # slant_range * yaw error at 35 m), the value validated offline.
-    # --refuerzo lets tracks too short to open a candidate reinforce one that a lasting track
-    # already opened. Off by default: the people-only run is the equivalence gate.
     identity=IncrementalIdentity(fusion_radius_m=3.5, fps=fps_replay,
                                  reinforce_with_fragments="--refuerzo" in sys.argv,
-                                 # Maturity by independent looks is the default. --span reproduces the
-                                 # rule every number before it was measured with (the 2.39 m gate).
                                  maturity="span" if "--span" in sys.argv else "looks",
                                  report_min_looks=next((int(a.split("=", 1)[1]) for a in sys.argv
                                                         if a.startswith("--miradas-min=")), 20)),
-    # --preliminares shows the candidates that formed but did not mature. Off by
-    # default: for a loitering drone they are noise. A vehicle the drone crosses
-    # once on a sweep is exactly the case they exist for.
     report_preliminary="--preliminares" in sys.argv,
 )
 state = {"yaw": 0.0, "roll": 0.0, "pitch": 0.0}
@@ -480,7 +426,7 @@ for f in frames_aire[::10]:
     yaw = float(p["yaw"])
     for d, _tid, _e, _c in por_frame[f]:
         if len(d) < 13:
-            continue      # a vehicle row: the flight recorded no ray for it
+            continue
         px, py = (d[2] + d[4]) / 2, d[5]
         _, dir_mio = pixel_to_ray(
             pos, yaw, (px, py), PITCH,
@@ -499,14 +445,10 @@ if np.median(errores_ang) > 0.5:
     sys.exit(1)
 print("  >> rayos del protocolo coinciden con los del vuelo real")
 
-# --------------------------------------------- stage 2: the replay -----
 provider = FakeProvider()
 protocol = Protocolo.instantiate(provider)
 protocol.initialize()
 if FOCO is not None:
-    # The operator points at what the MAP showed, not at the surveyed truth: fixing the true
-    # position would measure a mode nobody can use. The point passed here is the one the baseline
-    # run reported for the operator, 2.29 m from the survey.
     _fx, _fy = (float(v) for v in FOCO.split(","))
     protocol.fix_target(_fx, _fy, plantilla=_plantilla,
                         emb_dist=(EMB_DIST if EMB_DIST is not None
@@ -516,8 +458,6 @@ camera = protocol.camera
 t0 = float(poses[frames_aire[0]]["t_mono"])
 
 if PASADA:
-    # Split at the midpoint of the flight time. Not at a frame count: the cadence varies, and
-    # half the frames is not half the flight.
     ts = [float(poses[f]["t_mono"]) - t0 for f in frames_aire]
     corte = (ts[0] + ts[-1]) / 2.0
     frames_aire = [f for f, t in zip(frames_aire, ts)
@@ -525,14 +465,6 @@ if PASADA:
     print(f"pasada {PASADA}: {len(frames_aire)} frames "
           f"({'antes' if PASADA == 1 else 'despues'} del segundo {corte:.0f})")
 
-# --------------------------------------------------------- the live mode ---
-# Without --vivo nothing below changes: the loop runs as fast as it can and the
-# reports are posted at the end, which is what the equivalence gate measures.
-#
-# With --vivo the flight is paced against the wall clock, the drone asks the
-# station what it should be looking for, and each report leaves as it is
-# produced. That last part is what makes the switch visible: a batch sent at the
-# end would show the final answer and hide the moment it changed.
 def _consultar_orden():
     """Ask the station what to look for. A dead link leaves things as they are."""
     import urllib.request
@@ -541,12 +473,8 @@ def _consultar_orden():
             d = json.loads(r.read())
     except Exception:
         return
-    # The protocol's own handler, the one a drone runs: the replay exercises the flying code
-    # path instead of a copy of it, and a stale or repeated order is ignored the same way.
     if not protocol.apply_search_order(d.get("clases"), d.get("v"), d.get("epoca")):
         return
-    # The flight second matters more than the wall clock: whether an order
-    # arrived in time is a question about the flight, not about the operator.
     print("  [operador] segundo %.0f del vuelo: ahora se busca %s"
           % (provider.time, d.get("clases") or "(todo)"), flush=True)
 
@@ -608,7 +536,6 @@ if VIVO:
     for i, f in enumerate(frames_aire):
         p = poses[f]
         provider.time = float(p["t_mono"]) - t0
-        # Pace against the wall clock so there is time to click mid-flight.
         _retraso = provider.time / VELOCIDAD - (_t.time() - _reloj)
         if _retraso > 0:
             _t.sleep(min(_retraso, 0.25))
@@ -643,17 +570,9 @@ reportes = [json.loads(c.message) for c in provider.sent]
 assert reportes, "el protocolo no reporto nada"
 pois = reportes[-1]["pois"]
 
-# What the report leaves out is as informative as what it carries: a candidate
-# that formed but never matured is a target the drone crossed once and did not
-# dwell on, which is a property of the flight path, not of the detector.
 todos = protocol.identity.candidates(preliminary=True)
 maduros = sum(1 for c in todos if c.get("mature"))
 
-# --candidatos=file.json writes every candidate together with the ids of the tracks merged into
-# it. That link is what lets a candidate be traced back to the detections that fed it, and from
-# there to the label a human gave each box, which is how scripts/personas_encontradas.py scores
-# the chain by person instead of by box. It is written from the live run rather than kept as a
-# file on disk, so the score always describes the identity layer as it stands, not as it once was.
 _CANDS = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--candidatos=")), None)
 if _CANDS:
     _guardables = ("x", "y", "n_obs", "conf", "mature", "tracks", "mobile", "cls",
@@ -697,15 +616,12 @@ print("  El operador y la caja salen como POIs SEPARADOS: el fallo del")
 print("  vuelo 3 (un solo consenso mezclado) queda resuelto en linea.")
 
 
-# ------------------------------------------------------- ground station --
 if _GS and not VIVO:
     import time
     import urllib.request
 
     enviados = 0
     for r in reportes:
-        # The ground station speaks the transport's envelope, not the raw
-        # report: {"message": <json string>, "source": <node id>}.
         cuerpo = json.dumps({"message": json.dumps(r), "source": DRON}).encode("utf-8")
         pedido = urllib.request.Request(
             _GS, data=cuerpo, headers={"Content-Type": "application/json"})

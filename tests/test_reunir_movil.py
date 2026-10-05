@@ -19,6 +19,10 @@ Las tres secciones son el argumento entero, y la tercera es la que decide el val
      una persona son 0,07 en una escala donde pedazos de la misma persona llegan a 0,81.
 
 Run: python tests/test_reunir_movil.py
+
+The three sections: off is off, so the configuration that flies must not have changed; on, with
+the numbers measured on this flight; and WHY it is off, which is that a little looser and
+somebody stops existing for the operator.
 """
 import contextlib
 import io
@@ -37,7 +41,7 @@ os.environ.pop("UAV_VISION_GS", None)
 REPLAY = os.path.join(RAIZ, "scripts", "replay_vuelo3.py")
 PISTAS = os.path.join(DATOS, "pistas_bot_cmc_sof.npz")
 
-import uav_vision.identity as I  # noqa: E402
+import uav_vision.identity as I
 
 _ini = I.IncrementalIdentity.__init__
 _tmp = tempfile.mkdtemp()
@@ -66,16 +70,14 @@ def corrida(nombre, **ajustes):
     return encontradas, fantasmas
 
 
-import personas_encontradas as P  # noqa: E402
+import personas_encontradas as P
 
 print()
-# 1. off is off: the configuration that flies must not have changed
 apagado, fant_apagado = corrida("como viene (apagado)")
 assert set(apagado) == set("ABCGH"), "cambio lo que encuentra el sistema por defecto"
 assert len(apagado["G"]) == 3, "la que camina ya no sale partida en tres sin encender nada"
 assert len(fant_apagado) == 6, "cambiaron los fantasmas del sistema por defecto"
 
-# 2. on, with the numbers measured on this flight
 unida, fant_unida = corrida("encendido (0.63, 30 s)", rejoin_mobile=True,
                             emb_dist_rejoin=I.EMB_DIST_REUNE, rejoin_max_gap_s=30.0)
 assert set(unida) == set(apagado), "encenderlo tiene que conservar las mismas personas: %s" % sorted(unida)
@@ -83,7 +85,6 @@ assert len(unida["G"]) == 1, "no la re-unio: sigue en %d puntos" % len(unida["G"
 assert len(fant_unida) == len(fant_apagado), "aparecieron fantasmas nuevos: %d" % len(fant_unida)
 assert all(len(unida[l]) == len(apagado[l]) for l in "ABCH"), "movio a alguien que no habia que mover"
 
-# 3. and why it is off: a little looser and somebody stops existing for the operator
 suelto, _ = corrida("un poco mas suelto (0.70)", rejoin_mobile=True, emb_dist_rejoin=0.70,
                     rejoin_max_gap_s=30.0)
 assert "C" not in suelto, ("con 0.70 el chico del balcon tenia que desaparecer, y no lo hizo: si esto "

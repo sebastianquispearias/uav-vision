@@ -1,25 +1,33 @@
-# -*- coding: utf-8 -*-
 """Reproyecta el POI del coche sobre los frames reales del vuelo.
 
 El POI sale del replay como una coordenada en el suelo. Para comprobar que
 corresponde a un coche de verdad se hace el camino inverso: se lleva esa
 coordenada a la imagen con el mismo modelo de camara y se mira si cae sobre
 la caja que detecto el detector.
+
+The position is the car the replay reported. The bottom edge of the box is where it touches the
+ground, and the second number says how centred it is in the image.
 """
-import csv, math, os, sys
-import numpy as np, cv2
+import csv
+import math
+import os
+import sys
+
+import cv2
+import numpy as np
 
 RAIZ = r'C:/Users/User/Desktop/lac'
 sys.path.insert(0, os.path.join(RAIZ, 'uav_vision'))
-from uav_vision.pinhole_local import project_to_pixel
 from uav_vision.camera_config import DEFAULT_CAMERA as CAM
+from uav_vision.pinhole_local import project_to_pixel
 
 BASE = os.path.join(RAIZ, 'drone-geolocation/data/flight_02ago/20260802_133309')
 LAT0, LNG0, R = -22.978029946, -43.23214256266666, 6378137.0
 PITCH = -55.0
-POI = (-12.24, 13.06, 0.0)          # el coche que reporto el replay
+POI = (-12.24, 13.06, 0.0)
 
-enu = lambda la, ln: (math.radians(ln-LNG0)*R*math.cos(math.radians(LAT0)),
+def enu(la, ln):
+    return (math.radians(ln-LNG0)*R*math.cos(math.radians(LAT0)),
                       math.radians(la-LAT0)*R)
 
 poses = {int(r['frame']): r for r in csv.DictReader(open(os.path.join(BASE,'frames.csv')))}
@@ -40,9 +48,9 @@ for det, cl in zip(dets, clases):
                           CAM.focal_length_px, CAM.image_width, CAM.image_height, pp)
     if px is None: continue
     x1, y1, x2, y2 = det[2:6]
-    base = ((x1+x2)/2.0, y2)                       # borde inferior = contacto con el suelo
+    base = ((x1+x2)/2.0, y2)
     res = math.hypot(px[0]-base[0], px[1]-base[1])
-    exc = math.hypot(px[0]-pp[0], px[1]-pp[1])     # cuan centrado esta en la imagen
+    exc = math.hypot(px[0]-pp[0], px[1]-pp[1])
     filas.append((exc, res, f, alt, det, px, base))
 
 filas.sort()
@@ -51,7 +59,7 @@ r = np.array([x[1] for x in filas])
 print('residuo de reproyeccion: mediana %.1f px, p90 %.1f px' % (np.median(r), np.percentile(r,90)))
 print()
 print('%-8s %-7s %-8s %-9s %s' % ('frame','alt_m','residuo','excentr','conf'))
-for exc, res, f, alt, det, px, base in filas[:6]:
+for exc, res, f, alt, det, _px, _base in filas[:6]:
     print('%-8d %-7.1f %-8.1f %-9.0f %.2f' % (f, alt, res, exc, det[1]))
 
 exc, res, f, alt, det, px, base = filas[0]

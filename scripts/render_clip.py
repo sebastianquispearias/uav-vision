@@ -7,6 +7,9 @@ the detector hold a target across the gaps instead of being told that it does.
     python scripts/render_clip.py --desde 3000 --hasta 3700
 
 Writes docs/clip_vuelo.mp4. Needs the recording in the sibling repo; nothing here ships it.
+
+The colours are BGR, and they are the same pair the ground station uses for the two classes, so
+a viewer who sees both does not have to learn two colour schemes.
 """
 import argparse
 import os
@@ -22,8 +25,6 @@ FRAMES = os.path.join(VUELO, "frames")
 PERSONAS = os.path.join(RAIZ, "demo", "data", "examen_v3_datos.npz")
 VEHICULOS = os.path.join(RAIZ, "demo", "data", "vehiculos.npz")
 
-# BGR. The same pair the ground station uses for the two classes, so a viewer who sees both
-# does not have to learn two colour schemes.
 COLOR = {"person": (201, 95, 128), "car": (62, 155, 190), "van": (62, 155, 190),
          "truck": (62, 155, 190), "bus": (62, 155, 190)}
 

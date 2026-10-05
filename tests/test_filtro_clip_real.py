@@ -22,7 +22,10 @@ Needs open_clip, which only the training venv has; any other python prints SALTA
 
     ../drone-geolocation/entrenamiento/venv/Scripts/python.exe tests/test_filtro_clip_real.py
 """
-import importlib.util, json, os, sys
+import importlib.util
+import json
+import os
+import sys
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
@@ -40,16 +43,16 @@ if faltan:
     print('TODO OK')
     raise SystemExit(0)
 
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-import open_clip  # noqa: E402
-import torch  # noqa: E402
-from PIL import Image  # noqa: E402
+import cv2
+import numpy as np
+import open_clip
+import torch
+from PIL import Image
 
 sys.path.insert(0, os.path.join(RAIZ, 'scripts'))
 sys.path.insert(0, os.path.join(RAIZ, 'scripts', 'banco_embedded'))
-import medir_filtro_clip as m  # noqa: E402
-import filtro_clip  # noqa: E402
+import filtro_clip
+import medir_filtro_clip as m
 
 d = np.load(os.path.join(RAIZ, 'demo', 'data', 'examen_v3_datos.npz'))['dets']
 d = d[d[:, 1] >= 0.25]

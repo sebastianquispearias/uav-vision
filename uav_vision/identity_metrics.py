@@ -13,6 +13,10 @@ the system under test gave it. A box the system left without an id (a tracker th
 confirmed it) is not a hypothesis: it adds to the misses and to nothing else. Boxes whose ground
 truth is not an identity -- not a person, or undecidable -- are left out before scoring and counted
 separately, because an identity score has nothing to say about them.
+
+NO_IDENTITY holds the labels that are not an identity. Case does not matter there: "X" and "x"
+both mean "not a person", because a labeller holding shift must not turn every false positive
+into a person named X.
 """
 
 from __future__ import annotations
@@ -21,8 +25,6 @@ from typing import Dict, Hashable, List, Optional, Sequence
 
 import numpy as np
 
-# Labels that are not an identity. Case does not matter: "X" and "x" both mean "not a person",
-# because a labeller holding shift must not turn every false positive into a person named X.
 NO_IDENTITY = frozenset({"x", "?"})
 
 

@@ -9,6 +9,9 @@ policy about who decides, not a tuning constant.
 
 The demoting order matters as much as the filtering: a doubted point must go last without dragging a
 point that has no score at all down with it, since no score means nobody looked, not that it is doubtful.
+
+The scene is a person, unscored, and a bag, scored and approved. A POINT FROM A DRONE THAT WENT
+QUIET IS GONE whatever CLIP said: the filter must not resurrect it.
 """
 import os
 import sys
@@ -22,9 +25,9 @@ ahora = time.time()
 G.ESTADO['drones'] = {1: {'t': ahora}}
 G.ESTADO['origen'] = (-22.978029946, -43.23214256266666)
 G.ESTADO['pois_por_dron'] = {1: [
-    {'x': 0.0, 'y': 6.0, 'n_obs': 400, 'conf': 0.8},                          # la persona, sin puntuar
-    {'x': 3.0, 'y': 1.0, 'n_obs': 200, 'conf': 0.7, 'clip_no_persona': True},  # la bolsa
-    {'x': 9.0, 'y': 5.0, 'n_obs': 50, 'conf': 0.6, 'clip': 2.4},               # puntuada y aprobada
+    {'x': 0.0, 'y': 6.0, 'n_obs': 400, 'conf': 0.8},
+    {'x': 3.0, 'y': 1.0, 'n_obs': 200, 'conf': 0.7, 'clip_no_persona': True},
+    {'x': 9.0, 'y': 5.0, 'n_obs': 50, 'conf': 0.6, 'clip': 2.4},
 ]}
 
 G.CLIP_DESCARTA = False
@@ -42,7 +45,6 @@ assert any(abs(q['x'] - 0.0) < 1e-6 for q in con), "se llevo puesta a la persona
 assert any(abs(q['x'] - 9.0) < 1e-6 for q in con), "se llevo puesta a la que CLIP aprobo"
 print("  con --clip-descarta: queda %d de 3, sobreviven la persona sin puntuar y la aprobada" % len(con))
 
-# a point from a drone that went quiet is gone whatever CLIP said: the filter must not resurrect it
 G.ESTADO['drones'] = {1: {'t': ahora - G.DRON_CALLADO_S - 10}}
 assert not G.pois_vigentes(ahora), "mostro puntos de un dron que dejo de hablar"
 print("  un dron callado no deja puntos vivos, con filtro o sin el")

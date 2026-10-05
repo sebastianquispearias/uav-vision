@@ -1,5 +1,6 @@
 """Does the appearance gap survive when the people are small? Measured on the 02-ago flight."""
-import sys, os
+import sys
+
 import numpy as np
 
 sys.path.insert(0, "scripts")

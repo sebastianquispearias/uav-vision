@@ -29,41 +29,42 @@ Los cinco metodos (estan en gradys_embedded/protocol/interface.py:88):
 
 Los cinco son obligatorios. Si no usas alguno, lo dejas vacio con "pass".
 ------------------------------------------------------------------
+
+MissionMobilityPlugin is a helper that ALREADY COMES with gradys-embedded, in
+gradys_embedded/protocol/plugin/mission_mobility.py. Give it a list of points and it goes from
+one to the next: it watches the telemetry, sees whether you arrived, and sends the next one. It
+hooks itself onto the telemetry, so nothing else has to.
+
+THE POINTS ARE METRES, not lat/lon, and the frame is fixed by whoever loads the mission through
+x_axis_degrees. With x_axis_degrees = 0, verified in protocol/position.py, x is north and y is
+east, so "100 m west" is y = -100.
+
+There is NO third point for landing; see the note at the bottom of the file.
 """
 
 from gradys_embedded.protocol.interface import IProtocol
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 from gradys_embedded.protocol.plugin.mission_mobility import (
-    MissionMobilityPlugin,
     MissionMobilityConfiguration,
+    MissionMobilityPlugin,
 )
 
-ALTURA = 30.0   # metros
+ALTURA = 30.0
 
 
 class MisionCienMetros(IProtocol):
 
     def initialize(self):
-        # MissionMobilityPlugin es un ayudante que YA VIENE en gradys-embedded
-        # (gradys_embedded/protocol/plugin/mission_mobility.py:42).
-        # Le das una lista de puntos y el se encarga de ir de uno al otro:
-        # mira la telemetria, ve si llegaste, y manda el siguiente.
         self.vuelo = MissionMobilityPlugin(self, MissionMobilityConfiguration())
 
-        # Los puntos son METROS, no lat/lon.
-        # El marco lo fija el que carga la mision con x_axis_degrees.
-        # Con x_axis_degrees = 0 (verificado en protocol/position.py:44-47):
-        #     x = norte      y = este
-        # asi que "100 m al oeste" es y = -100.
         self.vuelo.start_mission([
-            (100.0,    0.0, ALTURA),   # 100 m al norte
-            (100.0, -100.0, ALTURA),   # y desde ahi, 100 m al oeste
+            (100.0,    0.0, ALTURA),
+            (100.0, -100.0, ALTURA),
         ])
 
-        # NO hay un tercer punto "aterrizar". Ver la nota de abajo.
 
     def handle_telemetry(self, telemetry: Telemetry):
-        pass    # el plugin ya se engancha solo a la telemetria
+        pass
 
     def handle_timer(self, timer: str):
         pass

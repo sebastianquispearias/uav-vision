@@ -19,6 +19,10 @@ under test behaves like the other one:
   4. The crop rule decides a photograph, never a position: both rules report the same points.
 
 Run with: python tests/test_recorte_representativo.py
+
+The four sections are one track, two tracks forming one candidate, the case with no appearance
+vectors at all, and the guarantee that the positions do not change. The interesting case is two
+people in one box: half of what the track looks like, and the detector is sure about it.
 """
 import os
 import sys
@@ -56,7 +60,6 @@ def nueva(regla):
     return IncrementalIdentity(fusion_radius_m=3.5, fps=1.0, crop_choice=regla)
 
 
-# ================================================================ 1. una pista
 print("=" * 64)
 print("1. Una pista con una vista rara y muy confiada")
 print("=" * 64)
@@ -67,7 +70,6 @@ def escena_pista(ident):
         ident.observe(frame=f, track_id=1, ground_xy=(10.0, 5.0), conf=0.55,
                       emb=parecido_a(A), crop=b"parecida-%d" % f, t=float(f))
         if f == 15:
-            # Two people in one box: half of what the track looks like, and the detector is sure.
             ident.observe(frame=f, track_id=1, ground_xy=(10.0, 5.0), conf=0.95,
                           emb=unitario(A + B), crop=b"doble", t=float(f) + 0.5)
     return ident.candidates(preliminary=True)
@@ -83,7 +85,6 @@ if vieja and nueva_:
     revisar(bool(nueva_[0]["crop"]) and nueva_[0]["crop"].startswith(b"parecida-"),
             "'appearance' manda una vista parecida al resto de la pista", repr(nueva_[0]["crop"]))
 
-# ========================================================== 2. dos pistas, un candidato
 print()
 print("=" * 64)
 print("2. Dos pistas fusionadas: la minoria trae los recortes mas confiados")
@@ -114,7 +115,6 @@ if vieja and nueva_:
             "'appearance' manda el de la pista que es la mayor parte de la evidencia",
             repr(nueva_[0]["crop"]))
 
-# ============================================================ 3. sin vectores
 print()
 print("=" * 64)
 print("3. Sin vectores de apariencia: vuelve a la confianza, no pierde el recorte")
@@ -129,7 +129,6 @@ sin = ident.candidates(preliminary=True)
 revisar(len(sin) == 1 and sin[0]["crop"] == b"nitido",
         "gana la vista mas confiada", repr([c["crop"] for c in sin]))
 
-# ======================================================= 4. las posiciones no cambian
 print()
 print("=" * 64)
 print("4. La regla elige una foto, no un punto")
@@ -138,7 +137,8 @@ RNG = np.random.default_rng(11)
 vieja = escena_candidato(nueva("confidence"))
 RNG = np.random.default_rng(11)
 nueva_ = escena_candidato(nueva("appearance"))
-sin_crop = lambda cs: [{k: v for k, v in c.items() if k not in ("crop", "emb")} for c in cs]
+def sin_crop(cs):
+    return [{k: v for k, v in c.items() if k not in ("crop", "emb")} for c in cs]
 revisar(sin_crop(vieja) == sin_crop(nueva_), "mismo informe salvo el recorte",
         "%s" % sin_crop(nueva_))
 revisar(vieja[0]["crop"] != nueva_[0]["crop"], "y el recorte si difiere, o la comparacion no prueba nada")

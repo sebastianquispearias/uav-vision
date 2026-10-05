@@ -17,29 +17,52 @@ What the system does NOT do is as important: it never turns one sighting into a 
 box is a guess, and a guess on a search map sends someone to the wrong place.
 
 Run: python scripts/sistema_esencial.py
+
+THE NUMBERS ARE DECISIONS, NOT PHYSICS
+    They encode the cost of being wrong, and they change per mission. The flight they were
+    fixed on flew at 20-40 m over a campus.
+
+    UMBRAL_DETECTOR
+        Below this the detector is guessing more than it is seeing.
+
+    MIN_MEDICIONES
+        Sightings before a candidate may be reported at all.
+
+    RADIO_FUSION_M
+        gps sigma plus slant range times yaw error: how far two sightings of one thing can land
+        apart. Its formula is in identity.py's docstring.
+
+    EMB_DIST_MAX
+        OSNet distance above which two crops are different people.
+
+    COOCURRENCIA_MIN
+        Seen together in this many frames means two things, whatever else says.
+
+    DUTY_MIN
+        A track must be detected in at least this fraction of its own span.
+
+    NOTES.md has the measurement behind each one.
 """
 import math
 
 import numpy as np
 
-# --- Numbers that are decisions, not physics ---------------------------------------------------
-# These encode the cost of being wrong, and they change per mission. The flight they were fixed on
-# is the 02ago flight, at 20-40 m over a campus.
-UMBRAL_DETECTOR = 0.25      # below this the detector is guessing more than it is seeing
-MIN_MEDICIONES = 8          # sightings before a candidate may be reported at all
-RADIO_FUSION_M = 3.5        # gps sigma + slant range x yaw error: how far two sightings of one
-                            # thing can land apart. Its formula is in identity.py's docstring
-EMB_DIST_MAX = 0.95         # OSNet distance above which two crops are different people
-COOCURRENCIA_MIN = 3        # seen together in this many frames = two things, whatever else says
-DUTY_MIN = 0.10             # a track must be detected in at least this fraction of its own span
+UMBRAL_DETECTOR = 0.25
+MIN_MEDICIONES = 8
+RADIO_FUSION_M = 3.5
+EMB_DIST_MAX = 0.95
+COOCURRENCIA_MIN = 3
+DUTY_MIN = 0.10
 
 
-# --- 1. Geometry: a pixel is a direction, not a position ---------------------------------------
 def rotacion_mundo_a_camara(yaw_deg, pitch_deg):
-    """Rows are the camera axes in world coordinates: X right, Y down, Z along the optical axis."""
+    """Rows are the camera axes in world coordinates: X right, Y down, Z along the optical axis.
+
+    'rumbo' is where the drone faces and 'derecha' is 90 degrees clockwise from it.
+    """
     y, p = math.radians(yaw_deg), math.radians(pitch_deg)
-    rumbo = np.array([math.sin(y), math.cos(y), 0.0])          # where the drone faces
-    derecha = np.array([math.cos(y), -math.sin(y), 0.0])       # 90 degrees clockwise from it
+    rumbo = np.array([math.sin(y), math.cos(y), 0.0])
+    derecha = np.array([math.cos(y), -math.sin(y), 0.0])
     eje = rumbo * math.cos(p) + np.array([0, 0, 1.0]) * math.sin(p)   # pitch -90 looks straight down
     return np.array([derecha, np.cross(eje, derecha), eje])
 
@@ -51,18 +74,20 @@ def pixel_a_suelo(pos_dron, yaw_deg, pixel, pitch_deg, focal_px, ancho, alto, su
     on the roof at 25 m. What closes the problem is assuming the target touches the ground, so the
     ray is intersected with the plane z = suelo_z. That assumption is why the box's BOTTOM edge is
     used as the pixel, and why a person on a balcony lands further away than they are.
+
+    The rotation is transposed to invert it, which it is allowed to be because it is
+    orthogonal. A ray that runs parallel to the ground or points up never meets the plane.
     """
     cx, cy = ancho / 2.0, alto / 2.0
     d_cam = np.array([(pixel[0] - cx) / focal_px, (pixel[1] - cy) / focal_px, 1.0])
     d = rotacion_mundo_a_camara(yaw_deg, pitch_deg).T @ d_cam    # R is orthogonal, so R.T inverts it
     d /= np.linalg.norm(d)
-    if d[2] >= -1e-9:                                           # ray parallel to the ground or up
+    if d[2] >= -1e-9:                                           # the ray never meets the ground
         return None
     t = (suelo_z - pos_dron[2]) / d[2]
     return np.array([pos_dron[0] + t * d[0], pos_dron[1] + t * d[1]])
 
 
-# --- 2. Identity: several sightings are one thing, or they are not ------------------------------
 def resumir_pista(pista):
     """One track's estimate: where it is, what it looks like, how solid the evidence is.
 
@@ -86,11 +111,15 @@ def fusionar(pistas):
     however alike their crops look at 35 m. Co-occurrence second, because nothing appears twice in
     the same photograph: two tracks seen together are two things, whatever position and appearance
     say. Only then distance, and only then appearance.
+
+    A track whose duty cycle is under the floor is evidence spread too thin and is dropped
+    before any of that. When a track joins a candidate, the position is reweighted by how much
+    evidence each side brings.
     """
     candidatos = []
     for tk in sorted((resumir_pista(p) for p in pistas), key=lambda t: -t["n"]):
         if tk["ciclo"] < DUTY_MIN:
-            continue                                            # evidence spread too thin
+            continue
         mejor, puntaje_min = None, math.inf
         for c in candidatos:
             if tk["cls"] is not None and c["cls"] is not None and tk["cls"] != c["cls"]:
@@ -109,7 +138,7 @@ def fusionar(pistas):
         if mejor is None:
             candidatos.append(dict(tk, tids=[tk["tid"]]))
             continue
-        peso = mejor["n"] / (mejor["n"] + tk["n"])              # position weighted by evidence
+        peso = mejor["n"] / (mejor["n"] + tk["n"])
         mejor["pos"] = peso * mejor["pos"] + (1 - peso) * tk["pos"]
         mejor["n"] += tk["n"]
         mejor["frames"] |= tk["frames"]
@@ -117,18 +146,18 @@ def fusionar(pistas):
     return candidatos
 
 
-# --- 3. The loop the aircraft actually runs -----------------------------------------------------
 def volar(camara, telemetria, camara_cfg, pitch_deg, periodo_reporte_s=2.0, emitir=print):
     """Frame by frame: see, project, accumulate. Every two seconds: merge and report.
 
     The reporting period is not the detection period. The aircraft looks at three frames a second
     and speaks every two seconds, because what travels is a decision and not a video: one report is
     4.5 KB against the 9 Mbit/s the same view would cost as a stream.
+
+    A detection the tracker did not claim is a guess, so it never reaches the identity layer.
     """
     pistas, proximo_reporte = {}, periodo_reporte_s
     for marco, (pos, yaw, t) in enumerate(telemetria):
         for det in camara.detectar(marco):
-            # A detection the tracker did not claim is a guess: it never reaches the identity layer.
             if det["conf"] < UMBRAL_DETECTOR or det.get("track_id") is None:
                 continue
             suelo = pixel_a_suelo(pos, yaw, det["pixel"], pitch_deg, camara_cfg["focal_px"],
@@ -151,15 +180,19 @@ def volar(camara, telemetria, camara_cfg, pitch_deg, periodo_reporte_s=2.0, emit
     return pistas
 
 
-# --- A flight, so the file can be read by running it --------------------------------------------
 if __name__ == "__main__":
     rng = np.random.default_rng(0)
     CFG = {"focal_px": 1400.0, "ancho": 1920, "alto": 1080}
-    PERSONAS = {"A": np.array([0.0, 8.0]), "B": np.array([12.0, 16.0])}  # where they really are
+    PERSONAS = {"A": np.array([0.0, 8.0]), "B": np.array([12.0, 16.0])}
     HUELLAS = {k: rng.normal(size=8) for k in PERSONAS}
 
     class CamaraFalsa:
-        """Projects the real people back into the image, with the noise a real detector has."""
+        """Projects the real people back into the image, with the noise a real detector has.
+
+        PERSONAS holds where they really are, which is what the printed answer is judged
+        against. The detector is made to miss about half the frames, which is the order of what
+        a real one does on this material.
+        """
 
         def detectar(self, marco):
             pos, yaw, _ = TELEMETRIA[marco]
@@ -173,7 +206,7 @@ if __name__ == "__main__":
                 py = CFG["focal_px"] * d[1] / d[2] + CFG["alto"] / 2
                 if not (0 <= px < CFG["ancho"] and 0 <= py < CFG["alto"]):
                     continue
-                if rng.random() > 0.55:                      # the detector misses about half
+                if rng.random() > 0.55:
                     continue
                 h = HUELLAS[k] + rng.normal(scale=0.05, size=8)
                 salida.append({"pixel": (px + rng.normal(scale=3), py + rng.normal(scale=3)),

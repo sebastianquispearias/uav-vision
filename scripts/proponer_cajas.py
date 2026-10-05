@@ -30,6 +30,11 @@ frame looked at, so the frame review also shows the frames where no detector pro
         --frames ../drone-geolocation/data/20260726_195524/frames --paso 10 \\
         --salida ../drone-geolocation/entrenamiento/candidatas_26jul
     -> candidatas_26jul.csv, candidatas_26jul_embs.npy
+
+A box thinner than the minimum, in pixels, cannot be judged by a person either. VisDrone
+classes 0 and 1 are pedestrian and people, the two the flight reports as a person, while
+RF-DETR uses the COCO ids with background at 0, so there 1 is person. Every frame looked at is
+written, with or without candidates, because the review shows them all.
 """
 import argparse
 import csv
@@ -45,7 +50,7 @@ PESOS_VUELO = os.path.join(_ENT, "runs", "detect", "runs", "y26n_visdrone_1280",
 PESOS_COCO = os.path.join(_ENT, "modelos_propuesta", "yolo11m.pt")
 PESOS_REID = os.path.join(_ENT, "venv", "Lib", "site-packages", "models", "osnet_x0_25_msmt17.pt")
 TILES = [(0, 0, 1920, 1080)] + [(x, y, x + 1100, y + 640) for x in (0, 820) for y in (0, 440)]
-LADO_MIN = 6          # px: a box thinner than this cannot be judged by a person either
+LADO_MIN = 6
 
 
 def iou(b, B):
@@ -111,9 +116,9 @@ def main():
     args = ap.parse_args()
 
     import cv2
-    from ultralytics import YOLO
-    from rfdetr import RFDETRBase
     from boxmot.reid.core.reid import ReID
+    from rfdetr import RFDETRBase
+    from ultralytics import YOLO
 
     alturas = leer_alturas(args.frames) if args.alt_min is not None else None
     frames = frames_de(args.frames, args.paso, args.desde, args.hasta, alturas, args.alt_min)
@@ -157,7 +162,6 @@ def main():
         w.writerow(["frame", "conf", "x1", "y1", "x2", "y2", "fuentes"])
         w.writerows(filas)
     np.save(args.salida + "_embs.npy", np.concatenate(embs) if embs else np.zeros((0, 512), "float32"))
-    # Every frame looked at, with or without candidates: the review shows them all.
     with open(args.salida + "_frames.txt", "w", encoding="utf-8") as fh:
         fh.writelines("%d\n" % f for f in frames)
     print("hecho: %d frames, %d candidatas, fuentes antes de fusionar %s, %.0f s -> %s.csv"

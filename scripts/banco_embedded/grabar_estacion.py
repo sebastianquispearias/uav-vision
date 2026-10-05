@@ -14,6 +14,10 @@ opinion button in the per-drone strip. A label changes often; an attribute is a 
 It needs selenium and a Chrome on the laptop, and the station already answering on 8300. The
 frames land in capturas_vivo/ next to this file and are turned into a video separately, so a run
 that is interrupted still leaves everything it captured.
+
+GUION is the script of the recording, in seconds from the start, as (when, what to do) pairs.
+It holds still long enough for the map and the cards to be seen as they are, then asks drone 1
+for a second opinion, then drone 2, so that both answers end up on screen at once.
 """
 import json
 import os
@@ -31,12 +35,11 @@ CAPT = os.path.join(AQUI, "capturas_vivo")
 FPS_CAPTURA = 2.0
 ANCHO, ALTO = 1100, 1500
 
-# The script, in seconds from the start: (when, what to do)
 GUION = [
-    (0.0, None),                 # let the map and the cards be seen as they are
-    (8.0, "mirar:1"),            # second opinion from drone 1
-    (26.0, "mirar:2"),           # and from drone 2
-    (46.0, None),                # both answers on screen at once
+    (0.0, None),
+    (8.0, "mirar:1"),
+    (26.0, "mirar:2"),
+    (46.0, None),
 ]
 DURACION = float(sys.argv[1]) if len(sys.argv) > 1 else 56.0
 

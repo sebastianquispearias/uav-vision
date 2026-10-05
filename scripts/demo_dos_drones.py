@@ -11,6 +11,9 @@ twice, and one only a single drone saw is offered for a second look.
     python scripts/demo_dos_drones.py
 
 The station stays up when the flight ends. Ctrl+C closes it.
+
+The two drones are staggered so the map fills the way a real fleet would, with one reporting
+first.
 """
 import os
 import subprocess
@@ -66,7 +69,6 @@ def main():
             [sys.executable, REPLAY, "--vehiculos", "--preliminares",
              "--dron=%d" % dron, "--pasada=%d" % pasada],
             env=entorno))
-        # Staggered so the map fills the way a real fleet would, one drone reporting first.
         time.sleep(2)
 
     try:

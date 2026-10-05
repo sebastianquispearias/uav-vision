@@ -5,8 +5,17 @@ vivo que podria ir. Sin confirmar y visto por dos NO es un pedido: la segunda mi
 ocurrio y la respuesta siguio siendo "no estoy seguro", que es otro problema.
 
 Run: python tests/test_pedidos.py
+
+The four cases: one drone in the air has nobody to ask; the second arrives and the first's
+unconfirmed contact can now be delegated; a confirmed one is not asked about; and one seen by
+both and still unconfirmed is not asked either, because the second look already happened.
 """
-import json, os, subprocess, sys, time, urllib.request
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 GS = os.path.join(AQUI, '..', 'scripts', 'banco_embedded', 'gs_mapa.py')
@@ -38,12 +47,10 @@ try:
         except Exception:
             time.sleep(0.25)
 
-    # Un solo dron en el aire: no hay a quien pedirselo.
     reportar(1, [poi(0.0, 6.0, 'person', False)])
     assert pedir('/pedidos')['pedidos'] == [], 'con un dron no hay pedido posible'
     print('  un solo dron volando -> ningun pedido')
 
-    # Llega el segundo: ahora el POR VERIFICAR del primero si se puede delegar.
     reportar(2, [])
     d = pedir('/pedidos')['pedidos']
     assert len(d) == 1, d
@@ -51,12 +58,10 @@ try:
     assert d[0]['lat'] is not None, 'el pedido tiene que traer el punto al que ir'
     print('  entra el dron 2 -> 1 pedido: lo vio el 1, puede ir el 2')
 
-    # Confirmado no se pide.
     reportar(1, [poi(0.0, 6.0, 'person', True)])
     assert pedir('/pedidos')['pedidos'] == [], 'un CONFIRMADO no necesita segunda mirada'
     print('  el objetivo pasa a CONFIRMADO -> el pedido desaparece')
 
-    # Visto por los dos y aun sin confirmar: la segunda mirada ya ocurrio.
     reportar(1, [poi(0.0, 6.0, 'person', False)])
     reportar(2, [poi(0.2, 6.1, 'person', False)])
     e = pedir('/estado')

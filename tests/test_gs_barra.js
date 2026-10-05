@@ -16,6 +16,15 @@
  * page's own pintarLista against synthetic reports.
  *
  * Run with: node tests/test_gs_barra.js        (from the uav_vision root)
+
+  WHAT EACH SECTION PROVES
+
+  A ghost with its bar full, a real person at a quarter, and an old report with no fields at all.
+
+  The colour comes from the card's own class, so the ghost reads as confirmed and the person as
+  doubtful. That is the defect, drawn: the bar is honest about what the rule believes.
+
+  The margin row must keep its own wording: test_gs_veredicto.js counts the word and expects two.
  */
 'use strict';
 const fs = require('fs');
@@ -57,7 +66,6 @@ const lista = () => document.getElementById('lista').innerHTML;
 const tarjetas = () => lista().split('class="poi ').slice(1);
 const anchos = () => (lista().match(/width:([0-9]+)%/g) || []).map(s => parseInt(s.slice(6), 10));
 
-// A ghost with its bar full, a real person at a quarter, and an old report with no fields at all.
 estado = { pois: [
   poi(1, { mature: true,  looks: 20, looks_min: 20, evidence: 1 }),
   poi(2, { mature: false, looks: 5,  looks_min: 20, evidence: .25 }),
@@ -80,12 +88,9 @@ ok(lista().indexOf('enough to report') >= 0,
 ok(tarjetas()[1].indexOf('enough to report') < 0,
    'el contraste: la que va por un cuarto no puede decir que alcanza');
 
-// The colour comes from the card's own class, so the ghost reads as confirmed and the person as
-// doubtful. That is the defect, drawn: the bar is honest about what the rule believes.
 ok(tarjetas()[0].slice(0, 2) === 'ok' && tarjetas()[1].slice(0, 4) === 'duda',
    'el color de la barra sale de la clase de la tarjeta');
 
-// The margin row must keep its own wording: test_gs_veredicto.js counts the word and expects two.
 ok((tarjetas()[0].match(/margin/g) || []).length === 1,
    'la barra no puede agregar otra aparicion de la palabra margin');
 `;

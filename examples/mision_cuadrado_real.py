@@ -13,13 +13,14 @@ mi_mision_cuadrado.py. El runner carga desde AHI, no desde ~/uav_vision/.
 
 Se carga con:
     POST /mission/load  {"protocol": "mision_cuadrado_real:MiProtocolo", ...}
-"""
 
-from uav_vision.camera import OnboardCamera
-from uav_vision.vision_protocol import UavApiYaw
+The yaw is the Pixhawk's REAL heading, not a simulated one.
+"""
 
 from mi_mision_cuadrado import construir
 
+from uav_vision.camera import OnboardCamera
+from uav_vision.vision_protocol import UavApiYaw
 
 MiProtocolo = construir(
     camara=OnboardCamera(
@@ -30,6 +31,6 @@ MiProtocolo = construir(
         fps=3.0,
         crops=True,
     ),
-    yaw_source=UavApiYaw("http://localhost:8000"),   # rumbo REAL del Pixhawk
+    yaw_source=UavApiYaw("http://localhost:8000"),
     velocidad=5.0,
 )

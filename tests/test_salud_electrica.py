@@ -16,6 +16,28 @@ fps_real and slots_perdidos, and the page puts it in the alarm bar AHEAD of ever
 the only thing on that screen that predicts a loss rather than describing one.
 
 Run: python tests/test_salud_electrica.py
+
+The function is imported on its own rather than through the class, because the protocol cannot
+be imported without the GrADyS runtime, which is not on the laptop. It is deliberately
+independent of the class for that reason.
+
+WHAT EACH SECTION PROVES
+    The LOW bit is NOW: acting on it means the aircraft is in trouble this second. The HIGH bit
+    is EVER SINCE BOOT and does NOT clear when the dip passes. That is the difference between
+    seeing the problem and not seeing it, because the dips last an instant and nobody is
+    watching in that instant.
+
+    A laptop replaying the recording does not have that file. A station that drew a warning for
+    a MISSING file would cry wolf on every desk run, and an alarm that always sounds stops being
+    read, which is worse than not having one.
+
+    The message name is checked as text: two copies of a name is how a drone and its station
+    stop understanding each other in silence.
+
+    THE WARNING COMES FIRST, and not because of the order things appear in. An origin
+    disagreement describes an error that is ALREADY visible on the map; low voltage PREDICTS an
+    aircraft that is going to be lost. An operator who only reads the first line has to read
+    that one. And it says what to DO, not only what happened.
 """
 import os
 import sys
@@ -24,13 +46,12 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.join(AQUI, "..")
 sys.path.insert(0, RAIZ)
 
-# El protocolo no se puede importar sin el runtime de GrADyS, que no esta en la laptop, asi que la
-# funcion se trae sola. Es deliberadamente independiente de la clase por esta razon.
 import importlib.util
 
 ruta = os.path.join(RAIZ, "uav_vision", "vision_protocol.py")
 fuente = open(ruta, encoding="utf-8").read()
 from typing import Optional
+
 ns = {"Optional": Optional}
 inicio = fuente.index("THROTTLED =")
 fin = fuente.index("class UavApiYaw:")
@@ -52,9 +73,6 @@ def con(valor):
 print("=" * 72)
 print("1. LOS DOS BITS SIGNIFICAN COSAS DISTINTAS Y HACEN FALTA LOS DOS")
 print("=" * 72)
-# El bit bajo es AHORA: actuar sobre el significa que la aeronave esta en problemas este segundo.
-# El alto es DESDE QUE ARRANCO y NO se apaga cuando la caida pasa. Esa es la diferencia entre ver
-# el problema y no verlo: las caidas duran un instante y nadie esta mirando en ese instante.
 limpio = con("0")
 print("  0x0        -> ahora=%s  alguna_vez=%s" % (limpio["ahora"], limpio["alguna_vez"]))
 assert limpio["ahora"] == [] and limpio["alguna_vez"] == [], limpio
@@ -80,9 +98,6 @@ print()
 print("=" * 72)
 print("2. SIN FIRMWARE DE RASPBERRY NO SE INVENTA UNA ALARMA")
 print("=" * 72)
-# Una laptop reproduciendo la grabacion no tiene ese archivo. Una estacion que dibujara una
-# advertencia por un archivo ausente gritaria en cada corrida de escritorio, y una alarma que
-# suena siempre deja de leerse, que es peor que no tenerla.
 sin = salud_electrica(os.path.join(TMP, "no-existe"))
 print("  archivo ausente -> %r" % sin)
 assert sin is None, "invento una lectura donde no hay firmware: %r" % sin
@@ -94,7 +109,6 @@ print()
 print("=" * 72)
 print("3. LA CADENA ENTERA NOMBRA LO MISMO EN LOS TRES SITIOS")
 print("=" * 72)
-# Dos copias de un nombre es como un dron y su estacion dejan de entenderse en silencio.
 gs = open(os.path.join(RAIZ, "scripts", "banco_embedded", "gs_mapa.py"), encoding="utf-8").read()
 assert '"salud": salud_electrica()' in fuente, "el dron no manda su salud en el reporte"
 print("  el dron la manda en cada reporte")
@@ -107,15 +121,11 @@ print()
 print("=" * 72)
 print("4. LA ALARMA DE CORRIENTE VA ANTES QUE LA DEL ORIGEN")
 print("=" * 72)
-# No es orden de aparicion: es que el desacuerdo de origen describe un error que ya esta a la
-# vista en el mapa, y el bajo voltaje PREDICE una aeronave que se va a perder. Un operador que
-# solo lee la primera linea tiene que leer esa.
 i_corriente = gs.index("POWER:")
 i_origen = gs.index("The origin the drone declares")
 print("  POWER en la posicion %d, el origen en la %d" % (i_corriente, i_origen))
 assert i_corriente < i_origen, (
     "el aviso de origen tapa al de corriente; el de corriente es el unico que predice una perdida")
-# Y dice que hacer, no solo que pasa.
 assert "Check its supply" in gs, "la alarma no dice que hacer"
 print("  y la alarma termina en que hacer, no solo en que pasa")
 

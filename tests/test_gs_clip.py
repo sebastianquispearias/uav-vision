@@ -17,15 +17,27 @@ test_filtro_clip_real.py). Contrasts:
     D  --clip without open_clip   the station warns and still serves
 
 Run: python tests/test_gs_clip.py
+
+The drone's order puts the doubtful one FIRST, so a station that does not reorder leaves it
+first. The four sections are: without a scorer, with a fake scorer, the cache, and --clip in a
+python that has no open_clip.
 """
-import base64, importlib.util, json, os, subprocess, sys, threading, time, urllib.request
+import base64
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
 from http import server
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 BANCO = os.path.join(AQUI, '..', 'scripts', 'banco_embedded')
 sys.path.insert(0, BANCO)
-import gs_mapa as gs  # noqa: E402
-import filtro_clip  # noqa: E402
+import filtro_clip
+import gs_mapa as gs
 
 P = 8398
 BASE = 'http://127.0.0.1:%d' % P
@@ -43,7 +55,6 @@ def b64(bytes_):
 srv = server.ThreadingHTTPServer(('127.0.0.1', P), gs.Handler)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
-# The drone's order: the doubtful one first, so a station that does not reorder leaves it first.
 REPORTE = {'type': 'vision_poi', 'frames_seen': 100, 'pois': [
     {'x': 0.0, 'y': 0.0, 'cls': 'person', 'mature': False, 'n_obs': 9,
      'crop': b64(b'\xff\xd8 maniqui \xff\xd9')},
@@ -58,7 +69,6 @@ print('======================================================================')
 print('PUNTAJE CLIP EN LA ESTACION: ordena y marca, no oculta')
 print('======================================================================')
 
-# -- A: without a scorer ------------------------------------------------------
 gs.CLIP = None
 gs.registrar(REPORTE, 1)
 pois = estado()['pois']
@@ -67,7 +77,6 @@ print('  A sin --clip     : orden x =', [p['x'] for p in pois], '| campos clip:'
 assert campos == [], 'sin --clip no puede aparecer ningun campo de CLIP: %s' % campos
 assert [p['x'] for p in pois] == [0.0, 20.0, 40.0, 60.0], 'sin puntaje el orden es el del dron'
 
-# -- B: a fake scorer ---------------------------------------------------------
 llamadas = []
 
 
@@ -95,7 +104,6 @@ assert 'clip' not in por_x[60.0], 'un coche no se puntua contra "persona"'
 assert [p['x'] for p in pois] == [20.0, 40.0, 60.0, 0.0], 'orden estable salvo el dudoso al final'
 assert len(pois) == 4, 'nada se oculta'
 
-# -- C: cache -----------------------------------------------------------------
 antes = len(llamadas)
 gs.registrar(REPORTE, 1)
 repetido = len(llamadas) - antes
@@ -107,7 +115,6 @@ print('  C cache          : %d puntajes en el primer reporte, %d al repetirlo, %
       % (antes, repetido, nuevo))
 assert antes == 2 and repetido == 0 and nuevo == 1
 
-# -- D: --clip in a python without open_clip ------------------------------------
 if importlib.util.find_spec('open_clip') is not None:
     print('  D --clip sin open_clip: SALTADO (este python tiene open_clip)')
 else:

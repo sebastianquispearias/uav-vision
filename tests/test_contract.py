@@ -15,7 +15,7 @@ from uav_vision.camera import OnboardCamera, SimulatedCamera
 
 def consumidor(camera, pos, yaw):
     """Codigo que NO sabe que camera le toco. Esto es el punto de todo."""
-    detecciones = camera.detect(pos, yaw)      # una sola llamada
+    detecciones = camera.detect(pos, yaw)
     total = 0.0
     for det in detecciones:
         total += det["conf"]

@@ -15,6 +15,8 @@ are genuinely in doubt. It never invents a box: it only labels boxes a detector 
 writes them to the same groups file the tool reads, so every one of them can still be changed by hand.
 
     python scripts/preetiquetar.py --vuelo 02ago_alto
+
+The two defaults come from the measurement that fixed them: 258 of 260 and 145 of 148.
 """
 import argparse
 import csv
@@ -29,9 +31,9 @@ def decidir(fuentes, conf):
     """The label the proposers already agree on, or None when a person has to look."""
     f = set(fuentes.split("+"))
     if conf >= 0.7 and {"coco", "rfdetr"} <= f:
-        return "persona"          # 258 of 260 in the measurement
+        return "persona"
     if f in ({"coco"}, {"vuelo"}, {"coco", "vuelo"}) and (conf >= 0.3 or f == {"coco"}):
-        return "no"               # 145 of 148 in the measurement
+        return "no"
     return None
 
 

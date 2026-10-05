@@ -5,6 +5,9 @@ era correcto: el ultimo reporte es el estado actual. Con dos, el reporte de B bo
 objetivos de A y el mapa parpadeaba entre las dos vistas.
 
 Run: python tests/test_dos_drones.py
+
+A drone that stops seeing something has to be able to withdraw it: its own list is replaced and
+the other drone's is not touched.
 """
 import json
 import os
@@ -55,8 +58,6 @@ try:
     assert drones == ['1', '2'], drones
     print('  el dron 2 reporta una persona: siguen los 2 POI, uno de cada dron')
 
-    # Un dron que deja de ver algo si tiene que poder retirarlo: su propia lista se
-    # reemplaza, la del otro no se toca.
     reportar(1, [])
     e = pedir('/estado')
     assert len(e['pois']) == 1 and e['pois'][0]['cls'] == 'person', e['pois']

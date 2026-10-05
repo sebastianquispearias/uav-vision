@@ -11,6 +11,14 @@ el escenario y arranca. El comportamiento esta en mi_mision_cuadrado.py,
 que es el mismo archivo que se usa en el dron real.
 
 AQUI es donde vive el main(). El protocolo nunca lleva uno.
+
+A TOY GROUND STATION, to see what the drone transmits. It is another protocol with the same
+interface of five methods. In reality that is gs_mapa.py running on the laptop, drawing a map.
+
+Only two things differ from the real drone: the camera is simulated and the yaw comes from the
+simulator instead of from the autopilot's HTTP service. The handlers are the services the
+simulator offers -- clocks, mobility and radio -- and on the real drone those come from the
+runner. add_node receives the CLASS and not an instance: the simulator builds the object.
 """
 
 import os
@@ -23,28 +31,19 @@ for _p in (_UAV_VISION, os.path.join(_LAC, "gradys-embedded")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from gradysim.simulator.handler.communication import (
-    CommunicationHandler, CommunicationMedium)
-from gradysim.simulator.handler.mobility import (
-    MobilityHandler, MobilityConfiguration)
+from gradysim.simulator.handler.communication import CommunicationHandler, CommunicationMedium
+from gradysim.simulator.handler.mobility import MobilityConfiguration, MobilityHandler
 from gradysim.simulator.handler.timer import TimerHandler
-from gradysim.simulator.simulation import (
-    SimulationBuilder, SimulationConfiguration)
+from gradysim.simulator.simulation import SimulationBuilder, SimulationConfiguration
+from mi_mision_cuadrado import ALTURA, construir
 
 from uav_vision.camera import SimulatedCamera
-from mi_mision_cuadrado import construir, ALTURA
+
+PERSONA = (30.0, 30.0, 0.0)
+VELOCIDAD = 5.0
+DURACION = 120.0
 
 
-PERSONA = (30.0, 30.0, 0.0)      # en el centro del cuadrado
-VELOCIDAD = 5.0                  # m/s
-DURACION = 120.0                 # segundos de simulacion
-
-
-# ===================================================================
-# UNA ESTACION DE TIERRA DE JUGUETE, PARA VER LO QUE EL DRON TRANSMITE.
-# Es otro protocolo: la misma interfaz de cinco metodos. En la realidad
-# esto es gs_mapa.py corriendo en la laptop, que pinta un mapa.
-# ===================================================================
 
 class EstacionTierra:
     """Escucha la radio e imprime lo que el dron reporta."""
@@ -88,26 +87,21 @@ def main():
           % (PERSONA[0], PERSONA[1], ALTURA))
     print("=" * 62)
 
-    # ---- LO UNICO QUE CAMBIA RESPECTO DEL DRON REAL: estos dos ----
     Protocolo = construir(
         camara=SimulatedCamera(target=PERSONA, pitch_deg=-55.0),
         yaw_source=lambda: 0.0,
         velocidad=VELOCIDAD,
     )
-    # ---------------------------------------------------------------
 
     config = SimulationConfiguration(duration=DURACION, execution_logging=False)
     builder = SimulationBuilder(config)
 
-    # Los "handlers" son los servicios que el simulador ofrece: relojes,
-    # movimiento y radio. En el dron real esos servicios los da el runner.
     builder.add_handler(TimerHandler())
     builder.add_handler(MobilityHandler(
         MobilityConfiguration(default_speed=VELOCIDAD)))
     builder.add_handler(CommunicationHandler(
         CommunicationMedium(transmission_range=500)))
 
-    # add_node recibe la CLASE, no una instancia: el simulador crea el objeto.
     builder.add_node(EstacionTierra, (0.0, 0.0, 0.0))
     builder.add_node(Protocolo, (0.0, 0.0, ALTURA))
 

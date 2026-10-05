@@ -1,5 +1,4 @@
-"""
-Labels person / not-person by groups of similar-looking boxes instead of one box at a time.
+"""Labels person / not-person by groups of similar-looking boxes instead of one box at a time.
 
 Measured on flight 3, window 3000-3700: its 852 boxes take 852 clicks one by one, 225 one track at
 a time, and 33 as 30 groups of OSNet appearance, with only 3 boxes disagreeing with their group.
@@ -22,10 +21,10 @@ network the identity layer uses, so what the network confuses is what a hurried 
 copy. A group that shows two people must be split, and a click on a crop opens the whole frame with
 the box drawn, to decide from context rather than from the crop.
 
-    python scripts/etiquetar_grupos.py \\
-        --cajas  ../drone-geolocation/entrenamiento/valida_ident_cajas_vuelo2a.csv \\
-        --embs   ../drone-geolocation/entrenamiento/valida_ident_embs_vuelo2a.npy \\
-        --frames ../drone-geolocation/data/flight_01ago/20260801_184259/frames \\
+    python scripts/etiquetar_grupos.py \
+        --cajas  ../drone-geolocation/entrenamiento/valida_ident_cajas_vuelo2a.csv \
+        --embs   ../drone-geolocation/entrenamiento/valida_ident_embs_vuelo2a.npy \
+        --frames ../drone-geolocation/data/flight_01ago/20260801_184259/frames \
         --salida ../drone-geolocation/entrenamiento/grupos_vuelo2a.json
     -> http://127.0.0.1:8412/
 
@@ -41,8 +40,8 @@ the boxes of another CSV, typically the flight's own detections, each with its l
 "etiqueta", or a JSON given with --contexto-etiquetas keyed by row of that CSV) or its confidence. That
 is what makes a lost person decidable: a person the flight already boxed was not lost.
 
-    python scripts/etiquetar_grupos.py ... \\
-        --contexto ../drone-geolocation/entrenamiento/identidad_cajas_02ago.csv \\
+    python scripts/etiquetar_grupos.py ... \
+        --contexto ../drone-geolocation/entrenamiento/identidad_cajas_02ago.csv \
         --contexto-etiquetas ../drone-geolocation/entrenamiento/identidad_gt_02ago.json
 
 A second page, /frames, reviews whole frames, which is what a detector needs: a frame can be used for
@@ -58,6 +57,9 @@ never undoes a reviewed frame.
 --lista-frames names the frames to review, one number per line, as proponer_cajas.py writes them. It
 matters for the frames with no candidate at all: a person missed by every detector can only be drawn
 on a frame that is shown.
+
+Which flights it opens, what the labeller sees and what the page keeps:
+docs/ARQUITECTURA.md.
 """
 import argparse
 import csv
@@ -74,37 +76,23 @@ ETIQUETAS = ("persona", "no")
 
 _ENT = os.path.join("..", "drone-geolocation", "entrenamiento")
 _DATOS = os.path.join("..", "drone-geolocation", "data", "flight_01ago")
-# Flights whose boxes and embeddings are already on disk: --vuelo fills the four paths.
 VUELOS = {
     "2a": (os.path.join(_ENT, "valida_ident_cajas_vuelo2a.csv"), os.path.join(_ENT, "valida_ident_embs_vuelo2a.npy"),
            os.path.join(_DATOS, "20260801_184259", "frames"), os.path.join(_ENT, "grupos_vuelo2a.json")),
     "2b": (os.path.join(_ENT, "valida_ident_cajas_vuelo2b.csv"), os.path.join(_ENT, "valida_ident_embs_vuelo2b.npy"),
            os.path.join(_DATOS, "20260801_185326", "frames"), os.path.join(_ENT, "grupos_vuelo2b.json")),
 }
-# Flights with detector candidates from proponer_cajas.py: --vuelo also fills --lista-frames and --nombre,
-# and the labels go to etiquetas_detector_<flight>.json, apart from any other labelling of that flight.
 _RAIZ_DATOS = os.path.join("..", "drone-geolocation", "data")
 for _nombre, _frames in (("26jul", os.path.join(_RAIZ_DATOS, "20260726_195524", "frames")),
                          ("01ago_2a", os.path.join(_DATOS, "20260801_184259", "frames")),
                          ("01ago_2b", os.path.join(_DATOS, "20260801_185326", "frames")),
-                         # The test flight, converted by scripts/convertir_02ago.py so it can be reviewed too.
                          ("02ago", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames")),
-                         # The airborne stretch of 14jun: the only material with a second person in it.
                          ("14jun", os.path.join(_RAIZ_DATOS, "flight_14jun", "20260614_225918", "frames")),
-                         # Frames 9315-9865 of the test flight: 25 m up, the only unlabelled high-altitude
-                         # material there is. Same day as the test, so training on it flatters the test score.
                          ("02ago_alto", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames")),
-                         # The frames between the test windows, which no proposer had ever seen. They are
-                         # glued to the test, so they serve to MEASURE and never to train: without them a
-                         # candidate that lives there cannot be judged either way.
                          ("02ago_huecos", os.path.join(_RAIZ_DATOS, "flight_02ago", "20260802_133309", "frames"))):
     VUELOS[_nombre] = (os.path.join(_ENT, "candidatas_%s.csv" % _nombre), os.path.join(_ENT, "candidatas_%s_embs.npy" % _nombre),
                        _frames, os.path.join(_ENT, "etiquetas_detector_%s.json" % _nombre),
                        os.path.join(_ENT, "candidatas_%s_frames.txt" % _nombre))
-# How tall a person came out, by altitude, MEASURED over the 2609 labelled boxes of these flights rather
-# than derived from the optics: the camera looks forward and down, so at low altitude the person is far
-# away along the ground and does not grow the way a nadir view would predict. 3-8 m: 183 px, 8-12: 168,
-# 12-18: 109, 18-30: 62, 30-99: 42. The test's failing regime is 62-65 px, which is 18-30 m.
 _PERSONA_POR_ALTURA = [(5.5, 183), (10.0, 168), (15.0, 109), (24.0, 62), (40.0, 42)]
 
 
@@ -140,18 +128,15 @@ def _solapa(a, b):
     return inter / union if union > 0 else 0.0
 
 
-MUESTRA = 24          # crops shown per group: enough to see what it is, few enough to load fast
-LADO = 128            # crop side, px: at 96 the text of a context box is a smudge of a few pixels
-GRUESA = (0, 230, 255)    # BGR yellow: the box being labelled
-CONTEXTO = (255, 0, 255)  # BGR magenta: boxes of --contexto, the flight's detections
-VECINA = (255, 255, 0)    # BGR cyan: other boxes of the CSV being labelled, in the same frame
-# Labels of the frame review. "duplicado" is a second box on a person who has one: dropped. "ignorar" is
-# something that cannot be called either way (a lone foot, a person cut to a sliver by the frame edge):
-# the export blanks it out, so the detector is neither rewarded nor punished for finding it.
+MUESTRA = 24
+LADO = 128
+GRUESA = (0, 230, 255)
+CONTEXTO = (255, 0, 255)
+VECINA = (255, 255, 0)
 REVISION = ("persona", "no", "duplicado", "ignorar")
-REPASO = 0.05             # share of the reviewed frames the blind re-check asks about again
-SEMILLA_REPASO = 1234     # fixed, so reopening the tool asks about the same frames
-LADO_MIN_NUEVA = 4        # px: a drawn box smaller than this is a slip of the mouse, not a person
+REPASO = 0.05
+SEMILLA_REPASO = 1234
+LADO_MIN_NUEVA = 4
 
 
 def leer_contexto(ruta, etiquetas=None):
@@ -220,7 +205,6 @@ class Sesion:
     def __init__(self, cajas, emb, frames, salida, k, desde=None, hasta=None, identidad=False,
                  contexto=None, contexto_etiquetas=None, lista_frames=None, nombre=None, sospechas=None):
         self.identidad = identidad
-        # Shown on both pages, so two flights open in two tabs cannot be told apart only by their frames.
         self.nombre = nombre or os.path.splitext(os.path.basename(salida))[0]
         self.contexto = leer_contexto(contexto, contexto_etiquetas) if contexto else {}
         filas = list(csv.DictReader(open(cajas, encoding="utf-8")))
@@ -238,7 +222,7 @@ class Sesion:
             self.por_frame.setdefault(int(r["frame"]), []).append(i)
         self.lock = threading.Lock()
         self.recortes = {}
-        self.etiquetas = {}                                   # local index -> label
+        self.etiquetas = {}
         if os.path.exists(salida):
             previas = json.load(open(salida, encoding="utf-8"))["etiquetas"]
             local = {o: j for j, o in enumerate(self.orig)}
@@ -246,11 +230,10 @@ class Sesion:
         self.grupos = {}
         for i, g in enumerate(self._agrupamiento(cajas, k)):
             self.grupos.setdefault(int(g), []).append(i)
-        # Suspicions from the audit: olvidadas_<flight>.csv next to the boxes, if it was ever run.
         self.ruta_sospechas = sospechas or os.path.join(os.path.dirname(os.path.abspath(cajas)),
                                                         "olvidadas_%s.csv" % self.nombre)
-        # Frame review: every frame with a candidate, plus the listed ones that have none.
-        dentro = lambda f: (desde is None or f >= desde) and (hasta is None or f <= hasta)
+        def dentro(f):
+            return (desde is None or f >= desde) and (hasta is None or f <= hasta)
         self.lista = sorted({int(f) for f in list(lista_frames or []) + list(self.por_frame) if dentro(int(f))})
         self.ruta_revision = os.path.splitext(salida)[0] + "_frames.json"
         self.revisados, self.correcciones, self.nuevas, self.repaso, self.ajustes = set(), {}, {}, {}, {}
@@ -260,15 +243,10 @@ class Sesion:
             local = {o: j for j, o in enumerate(self.orig)}
             self.revisados = {int(f) for f in r.get("revisados", [])}
             self.correcciones = {local[int(i)]: v for i, v in r.get("correcciones", {}).items() if int(i) in local}
-            # A drawn box is [x1, y1, x2, y2] (a person) or [x1, y1, x2, y2, "ignorar"].
             self.nuevas = {int(f): [[float(x) for x in c[:4]] + list(c[4:5]) for c in v] for f, v in r.get("nuevas", {}).items()}
             self.repaso = {int(f): int(n) for f, n in r.get("repaso", {}).items()}
-            # A box of the CSV whose corners were dragged: the label is of the box, so the box has to be
-            # fixable too, or a detection that covers only the legs stays wrong for ever.
             self.ajustes = {local[int(i)]: [float(x) for x in c] for i, c in r.get("ajustes", {}).items()
                             if int(i) in local}
-            # Pairs the labeller confirmed to be two people standing together, not one boxed twice: without
-            # this they stay orange for ever and the frame never stops counting as a problem.
             self.pares_ok = {tuple(sorted((local[int(a)], local[int(b)])))
                              for a, b in r.get("pares_ok", []) if int(a) in local and int(b) in local}
 
@@ -283,11 +261,9 @@ class Sesion:
             else:
                 etiqueta = "parcial"
             paso = max(1, len(miembros) // MUESTRA)
-            # Each crop carries its own final label, so a single box corrected apart from its group shows it.
             out.append({"g": g, "n": len(miembros), "etiqueta": etiqueta,
                         "muestra": [{"i": i, "etiqueta": self.final(i), "corregida": i in self.correcciones}
                                     for i in miembros[::paso][:MUESTRA]]})
-        # Unlabelled first, then the largest: the next click is always the one that labels most.
         out.sort(key=lambda d: (d["etiqueta"] not in (None, "parcial"), -d["n"]))
         return {"grupos": out, "cajas": len(self.filas), "etiquetadas": len(self.etiquetas), "nombre": self.nombre,
                 "catalogo": self.catalogo() if self.identidad else [],
@@ -361,8 +337,6 @@ class Sesion:
                                        + sum(etiqueta_nueva(c) == "persona" for c in self.nuevas.get(f, [])),
                            "doble": any(b["doble"] for b in d["cajas"] + d["nuevas"]),
                            "sin": sum(b["etiqueta"] is None for b in d["cajas"]), "hueco": False})
-        # A gap is a frame with nobody between two that do have somebody: marked here as well, so the
-        # page can put every kind of pending frame in one queue.
         for k in range(1, len(frames) - 1):
             frames[k]["hueco"] = (frames[k]["personas"] == 0 and frames[k - 1]["personas"] > 0
                                   and frames[k + 1]["personas"] > 0)
@@ -388,7 +362,7 @@ class Sesion:
                        and tuple(sorted((i, j))) not in self.pares_ok for j in filas_persona)
 
         def doble(b):
-            return sum(solape_menor(b, p) >= 0.5 for p in personas) > 1   # the box itself counts once
+            return sum(solape_menor(b, p) >= 0.5 for p in personas) > 1 
 
         cajas = [{"i": i, "caja": self._caja(i), "etiqueta": self.final(i), "corregida": i in self.correcciones,
                   "ajustada": i in self.ajustes,
@@ -531,7 +505,8 @@ class Sesion:
         duplicate. It is the decision that repeats most while reviewing, and it has one obvious answer."""
         b = self._caja(i)
         f = int(self.filas[i]["frame"])
-        area = lambda c: (c[2] - c[0]) * (c[3] - c[1])
+        def area(c):
+            return (c[2] - c[0]) * (c[3] - c[1])
         pareja = [j for j in self.por_frame.get(f, [])
                   if j != i and self.final(j) == "persona" and solape_menor(b, self._caja(j)) >= 0.5]
         if self.final(i) != "persona" or not pareja:
@@ -560,7 +535,7 @@ class Sesion:
                         and tuple(sorted((i, j))) not in self.pares_ok), None)
             if par is None:
                 break
-            r = self.resolver_grupo(par[0])      # the whole pile at once: three boxes are still one person
+            r = self.resolver_grupo(par[0])
             antes += r["antes"]
             pares += 1
             if propagar:
@@ -607,7 +582,8 @@ class Sesion:
         """
         f = int(self.filas[i]["frame"])
         personas = [j for j in self.por_frame.get(f, []) if self.final(j) == "persona"]
-        area = lambda j: (self._caja(j)[2] - self._caja(j)[0]) * (self._caja(j)[3] - self._caja(j)[1])
+        def area(j):
+            return (self._caja(j)[2] - self._caja(j)[0]) * (self._caja(j)[3] - self._caja(j)[1])
         grupo, pendientes = [i], [i]
         while pendientes:
             a = pendientes.pop()
@@ -754,9 +730,6 @@ class Sesion:
             lado = int(max(300, 9 * np.median([c[3] - c[1] for c in cajas])))
         else:
             centro, lado = [960.0, 540.0], 900
-        # Evenly spaced across the WHOLE run, not the first cells of it: a stride of one on a run
-        # slightly longer than the grid would show its beginning and hide the end, which is where a
-        # box that drifts has drifted furthest.
         n = min(columnas * filas, len(frames))
         elegidos = ([frames[round(i * (len(frames) - 1) / (n - 1))] for i in range(n)]
                     if n > 1 else list(frames[:1]))
@@ -933,7 +906,7 @@ class Sesion:
             b = tuple(float(r[c]) for c in ("x1", "y1", "x2", "y2"))
             etiquetadas = [self._caja(i) for i in self.por_frame.get(f, [])] + [tuple(c[:4]) for c in self.nuevas.get(f, [])]
             if any(solape_menor(b, c) >= 0.3 for c in etiquetadas):
-                continue          # already covered by a label, most likely drawn after the audit ran
+                continue
             filas.append({"f": f, "conf": float(r["conf"]), "caja": list(b), "revisado": f in self.revisados})
         filas.sort(key=lambda d: -d["conf"])
         return {"nombre": self.nombre, "archivo": self.ruta_sospechas, "hay_archivo": True, "frames": filas}
@@ -1084,15 +1057,12 @@ class Sesion:
         if img is None:
             raise FileNotFoundError(r["frame"])
         x1, y1, x2, y2 = self._caja(i)
-        # A margin, because a box drawn tight at altitude cuts off the context that tells a
-        # person from a post.
         mx, my = 0.25 * (x2 - x1), 0.25 * (y2 - y1)
         h, w = img.shape[:2]
         ox, oy = max(0, int(x1 - mx)), max(0, int(y1 - my))
         c = img[oy:min(h, int(y2 + my)), ox:min(w, int(x2 + mx))]
         esc = LADO / float(max(c.shape[:2]))
         c = cv2.resize(c, (max(1, int(c.shape[1] * esc)), max(1, int(c.shape[0] * esc))))
-        # Drawn after resizing, so border widths are thumbnail pixels whatever the size of the box.
         self._dibujar(c, i, ox, oy, esc, gruesa=3, fina=1, letra=0.35)
         lienzo = np.full((LADO, LADO, 3), 24, np.uint8)
         y0, x0 = (LADO - c.shape[0]) // 2, (LADO - c.shape[1]) // 2
@@ -1935,7 +1905,7 @@ cargar();
 """
 
 
-OPCIONES = {}          # what main() was told, so a flight opened from the page gets the same treatment
+OPCIONES = {}
 
 
 def abrir_vuelo(nombre):
@@ -1979,16 +1949,17 @@ def resumen_vuelo(nombre):
     ruta_rev = salida.replace(".json", "_frames.json")
     if os.path.exists(ruta_rev):
         revision = json.load(open(ruta_rev, encoding="utf-8"))
-    final = lambda i: revision.get("correcciones", {}).get(str(i), etiquetas.get(str(i)))
+    def final(i):
+        return revision.get("correcciones", {}).get(str(i), etiquetas.get(str(i)))
     d["etiquetadas"] = sum(1 for i in range(len(filas)) if final(i) is not None)
     d["personas"] = sum(1 for i in range(len(filas)) if final(i) == "persona")
     d["dibujadas"] = sum(len(v) for v in revision.get("nuevas", {}).values())
     d["personas"] += sum(1 for v in revision.get("nuevas", {}).values() for c in v
                          if not (len(c) > 4 and c[4] == "ignorar"))
-    lista = set(int(l) for l in open(lista_txt)) if lista_txt and os.path.exists(lista_txt) else set()
-    lista |= set(int(r["frame"]) for r in filas)
+    lista = {int(l) for l in open(lista_txt)} if lista_txt and os.path.exists(lista_txt) else set()
+    lista |= {int(r["frame"]) for r in filas}
     d["frames"] = len(lista)
-    d["revisados"] = len(set(int(x) for x in revision.get("revisados", [])) & lista)
+    d["revisados"] = len({int(x) for x in revision.get("revisados", [])} & lista)
     d["historia"] = salida.replace(".json", "_frames_historia.jsonl")
     return d
 
@@ -2279,7 +2250,7 @@ def servir(sesion, puerto):
                 self._responder(b'{"error": "ruta"}', codigo=404)
 
         def do_POST(self):
-            nonlocal sesion          # the flight picker swaps it without restarting
+            nonlocal sesion
             try:
                 d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                 with sesion.lock:

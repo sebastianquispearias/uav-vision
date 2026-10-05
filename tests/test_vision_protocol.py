@@ -8,6 +8,11 @@ back-project, intersect ground, fuse, report — works end to end.
 
 Run with: python tests/test_vision_protocol.py
 Needs gradys-embedded importable; the sys.path fallback picks up the sibling clone.
+
+The fake provider's diary holds (fire_at, name) pairs and its outbox is a list of communication
+commands. The scene is a true target on the ground with the drone orbiting it at the radius,
+altitude and camera mount pitch of the real flights, one lap per minute, with the yaw in the
+autopilot's convention: 0 is North, clockwise.
 """
 import json
 import math
@@ -21,7 +26,6 @@ if os.path.isdir(_GRADYS):
     sys.path.insert(0, _GRADYS)
 
 import numpy as np
-
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
 from uav_vision.camera import SimulatedCamera
@@ -34,8 +38,8 @@ class FakeProvider:
 
     def __init__(self):
         self.time = 0.0
-        self.timers = []          # (fire_at, name)
-        self.sent = []            # CommunicationCommand list
+        self.timers = []
+        self.sent = []
 
     def schedule_timer(self, timer, timestamp):
         self.timers.append((timestamp, timer))
@@ -62,10 +66,10 @@ class FakeProvider:
             protocol.handle_timer(name)
 
 
-ALVO = (3.0, -2.0, 0.0)           # true target on the ground
-RADIO = 20.0                      # orbit radius, m
-ALTURA = 35.0                     # flight altitude, m (matches real flights)
-PITCH = -55.0                     # current camera mount pitch
+ALVO = (3.0, -2.0, 0.0)
+RADIO = 20.0
+ALTURA = 35.0
+PITCH = -55.0
 
 state = {"yaw": 0.0}
 
@@ -76,11 +80,11 @@ def yaw_actual():
 
 def drone_pose(t):
     """Orbit around the target, camera always facing it."""
-    a = 2 * math.pi * t / 60.0    # one lap per minute
+    a = 2 * math.pi * t / 60.0
     x = ALVO[0] + RADIO * math.sin(a)
     y = ALVO[1] + RADIO * math.cos(a)
     dx, dy = ALVO[0] - x, ALVO[1] - y
-    yaw = math.degrees(math.atan2(dx, dy)) % 360.0   # 0=North, clockwise
+    yaw = math.degrees(math.atan2(dx, dy)) % 360.0
     return (x, y, ALTURA), yaw
 
 

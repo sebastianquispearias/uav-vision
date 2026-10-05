@@ -10,7 +10,6 @@ tu vuelo. Son 10 lineas nuevas. No tocas ni una linea de uav_vision.
 Todo lo de este archivo esta verificado contra el codigo real.
 Las referencias tipo "archivo.py:123" son reales, anda a mirarlas.
 
-
 -------------------------------------------------------------------
 LO PRIMERO: EN GrADyS SE ESCRIBE UNA CLASE, NO UN GUION DE COMANDOS
 -------------------------------------------------------------------
@@ -36,7 +35,6 @@ Los cinco (gradys_embedded/protocol/interface.py:88):
 El "runner" es el programa de gradys_embedded que corre en la Raspberry
 y que llama a esos metodos. Tu protocolo nunca corre solo.
 
-
 -------------------------------------------------------------------
 SOLO SE CARGA UN PROTOCOLO A LA VEZ
 -------------------------------------------------------------------
@@ -50,23 +48,27 @@ runner/mission.py:306 --
 
 Por eso, si queres vuelo Y vision, NO son dos protocolos: es uno solo
 que hace las dos cosas. Asi:
+
+PART 1, THE VISION, is copied exactly from scripts/banco_embedded/mision_barrido.py. Do not
+touch it: those are MEASURED values, not chosen ones. with_config() returns a CLASS already
+configured, with the camera mount angle, how often it looks, the fps that has to MATCH the
+camera's, and how much evidence a report needs.
+
+PART 2, THE FLIGHT, inherits from that class and adds the waypoints. That is all that is new.
+
+CALLING THE VISION LAYER'S initialize IS MANDATORY AND IS THE CLASSIC TRAP. It starts the whole
+of the vision: the see timer, the report timer, the identity layer. Forget it and the drone
+FLIES BLIND with no error at all: it flies perfectly and reports nothing.
 """
 
 from gradys_embedded.protocol.plugin.mission_mobility import (
-    MissionMobilityPlugin,
     MissionMobilityConfiguration,
+    MissionMobilityPlugin,
 )
+
 from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
-from uav_vision.vision_protocol import VisionProtocol, UavApiYaw
-
-
-# ===================================================================
-# PARTE 1 -- LA VISION
-# Esto es copia exacta de scripts/banco_embedded/mision_barrido.py.
-# No lo toques: son valores medidos, no elegidos.
-# with_config() te devuelve una CLASE ya configurada.
-# ===================================================================
+from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
 
 VisionConfigurada = VisionProtocol.with_config(
     camera=OnboardCamera(
@@ -77,49 +79,37 @@ VisionConfigurada = VisionProtocol.with_config(
         fps=3.0,
         crops=True,
     ),
-    pitch_deg=-55.0,          # angulo de montaje de la camara
-    see_period_s=1.0 / 3.0,   # mirar 3 veces por segundo
+    pitch_deg=-55.0,
+    see_period_s=1.0 / 3.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
     identity=IncrementalIdentity(
         fusion_radius_m=3.5,
-        fps=3.0,              # tiene que coincidir con el fps de la camara
-        report_dur_s=36.0,    # cuanta evidencia hace falta para reportar
+        fps=3.0,
+        report_dur_s=36.0,
     ),
     report_preliminary=True,
 )
 
 
-# ===================================================================
-# PARTE 2 -- TU VUELO
-# Heredas de la clase de arriba y le agregas los waypoints.
-# ESTO ES TODO LO NUEVO.
-# ===================================================================
 
-ALTURA = 30.0   # metros sobre el punto de despegue
+ALTURA = 30.0
 
 
 class MiMisionConVision(VisionConfigurada):
 
     def initialize(self):
-        # ---------------------------------------------------------
-        # ESTA LINEA ES OBLIGATORIA Y ES LA TRAMPA CLASICA.
-        # Arranca TODA la vision: los timers de ver y de reportar,
-        # la identidad, todo. Si te la olvidas, el dron VUELA CIEGO
-        # y no salta ningun error. Vuela perfecto y no reporta nada.
-        # ---------------------------------------------------------
         super().initialize()
 
-        # Y aca va tu vuelo.
         self.vuelo = MissionMobilityPlugin(
             self,
             MissionMobilityConfiguration(
-                speed=5.0,        # m/s
-                tolerance=1.0,    # a menos de 1 m, se da por llegado
+                speed=5.0,
+                tolerance=1.0,
             ),
         )
         self.vuelo.start_mission([
-            (100.0,    0.0, ALTURA),   # 100 m al norte
-            (100.0, -100.0, ALTURA),   # y desde ahi, 100 m al oeste
+            (100.0,    0.0, ALTURA),
+            (100.0, -100.0, ALTURA),
         ])
 
 

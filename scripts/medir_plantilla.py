@@ -22,6 +22,9 @@ Run with:
     python scripts/medir_plantilla.py                 # the operator, letter A
     python scripts/medir_plantilla.py --letra=G       # a walker instead
     python scripts/medir_plantilla.py --emb-dist=1.0  # a looser appearance gate
+
+The ground truth is indexed over the detections above the scoreboard's floor, the same cut
+personas_encontradas.py explains cannot be read against any other.
 """
 import contextlib
 import io as _io
@@ -79,8 +82,6 @@ def plantilla_de(letra):
     datos = np.load(os.path.join(DATOS, "examen_v3_datos.npz"))
     dets, embs = datos["dets"], datos["embs"].astype(np.float32)
     embs /= (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9)
-    # The ground truth is indexed over the detections above the scoreboard's floor, the same
-    # 0.25 cut personas_encontradas.py explains it cannot be read against any other.
     idx = np.nonzero(dets[:, 1] >= 0.25)[0]
     filas = [idx[int(k)] for k, v in gt.items() if v == letra and int(k) < len(idx)]
     if not filas:

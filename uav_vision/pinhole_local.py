@@ -22,7 +22,6 @@ import numpy as np
 
 from uav_vision.camera_config import DEFAULT_CAMERA
 
-# Type alias (same as fusion.py)
 Measurement = Tuple[Tuple[float, float, float], Tuple[float, float, float]]
 
 
@@ -48,6 +47,9 @@ def _world_to_camera_rotation(yaw_deg: float, pitch_deg: float,
         cam_x   = right  — always horizontal
         cam_y   = cam_z x cam_x  — completes right-hand frame
 
+    The roll is applied last, as a Rodrigues rotation of the three axes about the heading: right
+    wing down takes the camera's right axis towards the ground.
+
     The rows of the returned matrix are the camera axes in world coords.
 
     Returns:
@@ -62,13 +64,11 @@ def _world_to_camera_rotation(yaw_deg: float, pitch_deg: float,
     right = np.array([cy, -sy, 0.0])
     up = np.array([0.0, 0.0, 1.0])
 
-    cam_z = heading * cp + up * sp  # optical axis
+    cam_z = heading * cp + up * sp
     cam_x = right
-    cam_y = np.cross(cam_z, cam_x)  # down in image
+    cam_y = np.cross(cam_z, cam_x)
 
     if body_roll_deg:
-        # Rodrigues rotation of the three axes about the heading: right wing down takes the
-        # camera's right axis towards the ground.
         r = math.radians(-body_roll_deg)
         k = heading
         cr, sr = math.cos(r), math.sin(r)
@@ -117,7 +117,6 @@ def project_to_pixel(
     R = _world_to_camera_rotation(yaw_deg, pitch_deg, body_pitch_deg, body_roll_deg)
     d_cam = R @ d
 
-    # Camera frame: X=right, Y=down, Z=forward (optical axis)
     X, Y, Z = d_cam
 
     if Z <= 0:
@@ -168,14 +167,12 @@ def pixel_to_ray(
     px, py = pixel_xy
     cx, cy = principal_point if principal_point is not None else (img_w / 2.0, img_h / 2.0)
 
-    # Pixel to camera-frame direction (X=right, Y=down, Z=forward)
     d_cam = np.array([
         (px - cx) / focal_px,
         (py - cy) / focal_px,
         1.0,
     ])
 
-    # Rotate from camera frame to world frame (R^T = R^{-1} for orthogonal R)
     R = _world_to_camera_rotation(yaw_deg, pitch_deg, body_pitch_deg, body_roll_deg)
     d_world = R.T @ d_cam
 

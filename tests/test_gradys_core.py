@@ -16,6 +16,8 @@ and says so, and the wrapping can go.
 Needs the gradys-core clone next to this repository; without it the test is skipped.
 
 Run: python tests/test_gradys_core.py
+
+There is no sensor on a desk, and the see loop still has to run.
 """
 import contextlib
 import heapq
@@ -54,7 +56,7 @@ class Modelo:
 def camara_de_escritorio():
     c = OnboardCamera(model="stand-in")
     c._yolo = Modelo()
-    c.detect = lambda pos, yaw: []  # no sensor on a desk; the see loop still runs
+    c.detect = lambda pos, yaw: []
     return c
 
 

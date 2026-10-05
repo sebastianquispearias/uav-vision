@@ -6,6 +6,8 @@ walking across the image. Passing means each keeps one stable track_id for the w
 and the two ids differ — which is what the identity layer consumes.
 
 Needs boxmot installed: run with a python environment that has it.
+
+The target is the operator, standing still.
 """
 import os
 import sys
@@ -15,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 
 try:
-    import boxmot  # noqa: F401
+    import boxmot
 except ImportError:
     print("boxmot no instalado en este python: test saltado")
     sys.exit(0)
@@ -26,7 +28,7 @@ cam = OnboardCamera(model="no-se-usa.pt", tracker=True, fps=5.0)
 cam._build_tracker()
 
 W, H = 640, 480
-QUIETA = np.array([300.0, 200.0, 340.0, 280.0])      # operator, static
+QUIETA = np.array([300.0, 200.0, 340.0, 280.0])
 
 ids_quieta, ids_movil = [], []
 for f in range(30):

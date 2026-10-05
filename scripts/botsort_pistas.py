@@ -18,6 +18,25 @@ timestamps, since a buffer counted in frames means a different time at a differe
 
 Needs boxmot, which the training venv has:
     ../drone-geolocation/entrenamiento/venv/Scripts/python.exe scripts/botsort_pistas.py
+
+THE THRESHOLDS ARE THE FLIGHT CAMERA'S, and two switches change them.
+
+--calibrado lowers the two that gate a detection's way into a track down to the chain's own
+reporting threshold. A tracker that demands more confidence than the chain reports with
+silently drops detections the chain decided to keep: measured on five flight recordings,
+23-50 % of the detector's boxes fall below 0.35 and 32-67 % below 0.40.
+
+--piso lowers the confidence floor of the detections FED to the tracker. It exists because
+anything measured about the BYTE band on the replay is otherwise unmeasurable. The band is the
+boxes between the camera's floor and the reporting threshold, and a band box only earns its way
+into the chain by being claimed by an existing track. With the floor at the reporting threshold
+the tracker never sees those boxes, so they arrive at the protocol without a track id, so the
+identity layer ignores them, so the window and the appearance template cannot change a single
+candidate no matter what they do. Measured: the three runs give n_obs 1299 each, to the unit.
+
+The cached embs_osnet.npy only covers the detections above the reporting cut; the flight's npz
+carries ONE EMBEDDING PER DETECTION, band included, which is what makes a lower floor possible
+at all. Above the cut the two are the same vectors.
 """
 import argparse
 import csv
@@ -32,13 +51,9 @@ LAC = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 DATOS = os.path.join(LAC, "uav_vision", "demo", "data")
 FR = os.path.join(LAC, "drone-geolocation", "data", "flight_02ago", "20260802_133309")
 SALIDA = os.path.join(LAC, "drone-geolocation", "entrenamiento", "botsort_pistas_02ago.npz")
-# The flight camera's thresholds. --calibrado lowers the two that gate a detection's way into a
-# track to the chain's own reporting threshold: a tracker that demands more confidence than the
-# chain reports with silently drops detections the chain decided to keep. Measured on five flight
-# recordings, 23-50 % of the detector's boxes fall below 0.35 and 32-67 % below 0.40.
 UMBRALES_VUELO = {"track_high_thresh": 0.35, "new_track_thresh": 0.4}
 CONF_MIN = 0.25
-TRACK_BUFFER_S = 8.0  # OnboardCamera default, unchanged by the flight mission
+TRACK_BUFFER_S = 8.0
 UMBRALES_CALIBRADOS = {"track_high_thresh": CONF_MIN, "new_track_thresh": CONF_MIN}
 
 
@@ -47,13 +62,6 @@ def main():
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--calibrado", action="store_true")
-    # --piso lowers the confidence floor of the detections FED to the tracker. It exists because
-    # anything measured about the BYTE band on the replay is otherwise unmeasurable: the band is
-    # the boxes between 0.10 and the reporting threshold, and a band box only earns its way into
-    # the chain by being claimed by an existing track. With the floor at 0.25 the tracker never
-    # sees those boxes, so they arrive at the protocol without a track id, so the identity layer
-    # ignores them, so the window and the appearance template cannot change a single candidate no
-    # matter what they do. Measured: the three runs give n_obs 1299 each, to the unit.
     ap.add_argument("--piso", type=float, default=CONF_MIN,
                     help="confidence floor of the detections fed in (default %.2f)" % CONF_MIN)
     args = ap.parse_args()
@@ -66,9 +74,6 @@ def main():
     dets_all = D["dets"]
     mascara = dets_all[:, 1] >= args.piso
     dets = dets_all[mascara]
-    # The cached embs_osnet.npy only covers the detections above 0.25; the flight's npz carries
-    # one embedding per detection, band included, which is what makes a lower floor possible at
-    # all. Above 0.25 the two are the same vectors.
     if args.piso >= CONF_MIN:
         embs = np.load(os.path.join(DATOS, "embs_osnet.npy")).astype(np.float32)
     else:

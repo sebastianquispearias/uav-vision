@@ -9,8 +9,18 @@ cualquier otra. Las coordenadas se comprueban de vuelta: del .txt normalizado a 
 la caja original.
 
 Run: python tests/test_exportar_yolo.py
+
+The synthetic set covers the four cases: a frame with a person and a duplicate on top of them, a
+frame with nobody, which is a negative, a frame with a "no" and an "ignorar", and a frame
+labelled but NOT reviewed, which must not come out at all.
 """
-import csv, json, os, shutil, subprocess, sys, tempfile
+import csv
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 
 import cv2
 import numpy as np
@@ -29,8 +39,6 @@ os.makedirs(frames)
 for f in (1, 2, 3, 4):
     cv2.imwrite(os.path.join(frames, 'frame_%04d.jpg' % f), np.full((ALTO, ANCHO, 3), 40, np.uint8))
 
-# frame 1: una persona y un duplicado encima | frame 2: sin nadie (negativo) | frame 3: un "no" y un
-# "ignorar" | frame 4: etiquetado pero SIN revisar, no tiene que salir.
 CAJAS = [(1, 100, 50, 140, 150), (1, 104, 54, 136, 146), (3, 10, 10, 60, 90), (3, 200, 100, 260, 200),
          (4, 20, 20, 80, 120)]
 with open(os.path.join(ent, 'candidatas_26jul.csv'), 'w', newline='') as fh:
@@ -54,7 +62,8 @@ imgs = sorted(os.listdir(os.path.join(salida, 'images', 'train')))
 assert imgs == ['26jul_00001.jpg', '26jul_00002.jpg', '26jul_00003.jpg'], imgs
 print('  solo los revisados   : salieron %s (el frame 4 estaba etiquetado pero sin revisar)' % [i[-9:-4] for i in imgs])
 
-leer = lambda n: [l.split() for l in open(os.path.join(salida, 'labels', 'train', n)).read().splitlines() if l]
+def leer(n):
+    return [l.split() for l in open(os.path.join(salida, 'labels', 'train', n)).read().splitlines() if l]
 uno = leer('26jul_00001.txt')
 assert len(uno) == 2, 'el duplicado no tenia que salir, y la caja dibujada si: %s' % uno
 cajas_px = []

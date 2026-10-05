@@ -5,6 +5,10 @@ drone depends on; and asking for nothing is not the same as never having asked,
 which is what tells a freshly booted drone to keep its own defaults.
 
 Run: python tests/test_buscar.py
+
+Asking for NOTHING is a real order, meaning "everything again", and it has to be
+distinguishable from a station that was never told anything. And the data plane must not have
+moved: a POST to / is still a report.
 """
 import json
 import os
@@ -52,15 +56,12 @@ try:
     assert set(d['clases']) == {'person', 'car'}, d
     v_dos = d['v']
 
-    # Asking for nothing is a real order ("everything again"), and it has to be
-    # distinguishable from a station that was never told anything.
     pedir('/buscar', {'clases': []})
     d = pedir('/buscar')
     assert d['clases'] is None and d['v'] == v_dos + 1, \
         'pedir nada tiene que contar como orden: %r' % (d,)
     print('  pedir nada cuenta como orden y sube la version:', d)
 
-    # The data plane must not have moved: a POST to / is still a report.
     pedir('/', {'message': json.dumps({'type': 'vision_poi', 'pois': []}), 'source': 1})
     e = pedir('/estado')
     assert 'pois' in e and 'reportes' in e, e

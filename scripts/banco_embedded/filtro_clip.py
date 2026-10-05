@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """A second opinion on each candidate's crop: how much it looks like a person, according to CLIP.
 
 The drone cannot tell a person from the objects its detector keeps confusing with one; none of its
@@ -25,6 +24,11 @@ on the L2-normalised image and text embeddings. Below the threshold means "proba
 
 torch and open_clip are imported only when a PuntuadorClip is built, so the ground station runs
 without them; cargar() turns their absence into a warning instead of a crash.
+
+CLASES_PUNTUADAS holds the classes a "person or not" score means anything for. A car scored
+against "a person seen from a drone" would always be flagged, and demoting every car in a
+search for cars is wrong. A POI with NO class is scored anyway: older drones do not name what
+they report, and what they report is people.
 """
 import base64
 import hashlib
@@ -35,9 +39,6 @@ from collections import OrderedDict
 
 UMBRAL = 1.496
 
-# The classes a "person or not" score means anything for. A car scored against "a person seen
-# from a drone" would always be flagged, and demoting every car in a search for cars is wrong.
-# A POI with no class is scored: older drones do not name what they report, and they report people.
 CLASES_PERSONA = ('person', 'pedestrian', 'people', None)
 
 
@@ -81,6 +82,7 @@ class PuntuadorClip:
     def puntuar(self, jpeg):
         """The score of a JPEG crop as it travels from the drone: decoded to RGB, nothing else."""
         import io
+
         import numpy as np
         from PIL import Image
         return self.puntuar_rgb(np.asarray(Image.open(io.BytesIO(jpeg)).convert('RGB')))

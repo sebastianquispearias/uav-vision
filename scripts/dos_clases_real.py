@@ -1,25 +1,32 @@
-# -*- coding: utf-8 -*-
 """Las dos clases sobre un frame real del vuelo.
 
 El mapa de la estacion de tierra muestra pines sobre coordenadas. Esto muestra
 lo mismo sobre la imagen que vio el dron: las cajas que detecto y los dos POI
 reportados, traidos de vuelta a la imagen con el mismo modelo de camara.
+
+The colours are BGR.
 """
-import csv, math, os, sys
-import numpy as np, cv2
+import csv
+import math
+import os
+import sys
+
+import cv2
+import numpy as np
 
 RAIZ = r'C:/Users/User/Desktop/lac'
 sys.path.insert(0, os.path.join(RAIZ, 'uav_vision'))
-from uav_vision.pinhole_local import project_to_pixel
 from uav_vision.camera_config import DEFAULT_CAMERA as CAM
+from uav_vision.pinhole_local import project_to_pixel
 
 BASE = os.path.join(RAIZ, 'drone-geolocation/data/flight_02ago/20260802_133309')
 LAT0, LNG0, R = -22.978029946, -43.23214256266666, 6378137.0
 PITCH = -55.0
 POIS = {'person': (-0.19, 6.69, 0.0), 'car': (-12.24, 13.06, 0.0)}
-COLOR = {'person': (201, 95, 128), 'car': (62, 155, 190)}   # BGR
+COLOR = {'person': (201, 95, 128), 'car': (62, 155, 190)}
 
-enu = lambda la, ln: (math.radians(ln-LNG0)*R*math.cos(math.radians(LAT0)),
+def enu(la, ln):
+    return (math.radians(ln-LNG0)*R*math.cos(math.radians(LAT0)),
                       math.radians(la-LAT0)*R)
 poses = {int(r['frame']): r for r in csv.DictReader(open(os.path.join(BASE,'frames.csv')))}
 
@@ -60,7 +67,7 @@ cand.sort()
 print('frames con persona Y coche a la vez, ambos POI dentro de la imagen: %d' % len(cand))
 print()
 print('%-8s %-7s %-11s %s' % ('frame','alt_m','res_person','res_car'))
-for peor, f, alt, px, res in cand[:6]:
+for _peor, f, alt, _px, res in cand[:6]:
     print('%-8d %-7.1f %-11.1f %.1f' % (f, alt, res['person'][0], res['car'][0]))
 
 peor, f, alt, px, res = cand[0]

@@ -9,8 +9,72 @@ despues del JPEG: el borde grueso de la caja propia tiene que aparecer en el rec
 --contexto solo si cae dentro del recorte.
 
 Run: python tests/test_etiquetar_grupos.py
+
+WHAT EACH SECTION PROVES
+    The drawn boxes are colour-coded so they can be counted after the JPEG: yellow is the box
+    being labelled, magenta the flight's own detections.
+
+    The person / not-person mode must keep REFUSING a letter: identities are a separate mode.
+    Identity mode gives one letter per real person, X for not a person and ? for cannot tell,
+    over the same grouping but into its own output file, so the person / not-person labels are
+    never touched. The letter catalogue shows each letter with the first crop labelled with it,
+    and renaming is how two letters given to the same person are merged.
+
+    Context boxes are the flight's detections drawn thin over the thumbnails, and the geometry
+    is checked both ways: a context box that falls inside a crop must show there, and one far
+    from a crop must NOT.
+
+    FRAME REVIEW is the unit a detector trains on. Every CSV box is placed so the boxes of one
+    frame overlap, so once two of them are a person they must be flagged as a possible double. A
+    frame with no candidate must be listed only because --lista-frames names it, since that is
+    where a person every detector missed would have to be drawn. A frame with a box nobody
+    labelled cannot be reviewed, which the new boxes beyond the labelled ones check. The
+    mosaic's button accepts the frames whose boxes are all labelled and returns a reason for the
+    one that is not, without stopping the others.
+
+    Resizing a drawn box by a corner REPLACES it rather than adding one, and a box of two pixels
+    is still refused. A box of the CSV can be resized too, which is how a detection that covers
+    only the legs is fixed: the label stays where it was, the box moves, and the checks see the
+    new one. A drawn box is a person unless it is marked to be ignored, and then it stops
+    counting as one.
+
+    The BLIND RE-CHECK asks about a fixed sample of the reviewed frames and must not reveal the
+    count before the answer.
+
+    Two person boxes on one person are settled by X, which makes the smaller the duplicate, and
+    C copies a decision to the same box in the neighbouring frames, which is where it repeats.
+    The synthetic boxes are all the same size, so which one is "smaller" is a TIE: what has to
+    hold is that of the two the endpoint touched, one ended as the duplicate and the other
+    stayed a person. A resolves every pair of a frame at once, so a pile of five person boxes on
+    one person must leave exactly one standing and Z must put the five back: the pile is settled
+    as a GROUP, not in pairs, because five boxes on one person are one decision and not four.
+    The unlabelled boxes that lie on top of a decided one are already answered by the overlap,
+    and the ones far from the others must be left alone.
+
+    The other answer to the same question is that they are two people standing together: the
+    flag has to go away and STAY away, and undo has to bring it back.
+
+    'propagar' reaches every neighbouring frame of the list, so the check looks at all of them,
+    and at the local rows the endpoint reports rather than at the rows of the output file.
+
+    The SUSPICIONS panel is what a stronger detector found where no label of ours lies, so a row
+    sitting on a drawn box must not be listed and one in an empty part of the frame must.
+
+    The CHECKS page counts the frames that still have people on top of each other, and a GAP is
+    a frame with nobody between two frames with somebody. Emptying a frame in the middle makes
+    one, and the same gap has to show up in the per-frame state, which is what the pending queue
+    is built from.
 """
-import csv, json, os, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import csv
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
 
 import cv2
 import numpy as np
@@ -20,6 +84,7 @@ HERRAMIENTA = os.path.join(AQUI, '..', 'scripts', 'etiquetar_grupos.py')
 P = 8394
 sys.path.insert(0, os.path.join(AQUI, '..', 'scripts'))
 from etiquetar_grupos import LADO, REVISION
+
 BASE = 'http://127.0.0.1:%d' % P
 
 
@@ -35,9 +100,9 @@ def contar(jpg, color):
     """Pixels of a JPEG that are clearly one drawn color over the uniform gray frame."""
     img = cv2.imdecode(np.frombuffer(jpg, np.uint8), 1).astype(int)
     b, g, r = img[..., 0], img[..., 1], img[..., 2]
-    if color == 'gruesa':      # yellow: this box
+    if color == 'gruesa':
         return int(((r > 170) & (g > 150) & (b < 90)).sum())
-    if color == 'contexto':    # magenta: the flight's detections
+    if color == 'contexto':
         return int(((r - g > 50) & (b - g > 50)).sum())
     raise ValueError(color)
 
@@ -119,7 +184,6 @@ proc = arrancar(dirt, grupos=2)
 try:
     assert pedir('/estado')['etiquetadas'] == 40, 'al reabrir se perdieron etiquetas'
     print('  reabrir              : 40 etiquetadas, nada perdido')
-    # The person / not-person mode must keep refusing a letter: identities are a separate mode.
     try:
         pedir('/marcar', {'g': pedir('/estado')['grupos'][0]['g'], 'v': 'F'})
         raise AssertionError('sin --identidad una letra tenia que dar 400')
@@ -132,8 +196,6 @@ try:
 finally:
     proc.terminate(); proc.wait(timeout=5)
 
-# Identity mode: one letter per real person, X for not a person, ? for cannot tell. Same grouping,
-# its own output file, so the person / not-person labels above are never touched.
 proc = arrancar(dirt, grupos=2, salida='identidad.json', extra=('--identidad',))
 try:
     g1, g2 = [g['g'] for g in pedir('/estado')['grupos']]
@@ -151,8 +213,6 @@ try:
     assert json.load(open(os.path.join(dirt, 'identidad.json'), encoding='utf-8'))['etiquetas'] == et
     assert json.load(open(os.path.join(dirt, 'etiquetas.json'), encoding='utf-8'))['etiquetas'] != et
     print("  identidad invalida   : 'persona', 'AB', '', '7' dan 400; archivos intactos y separados")
-    # The letter catalogue: each letter with the first crop labelled with it, and renaming, which is how
-    # two letters given to the same person are merged.
     cat = {c['letra']: c for c in pedir('/estado')['catalogo']}
     assert set(cat) == {'F', 'X'} and cat['F']['n'] == 20 and isinstance(cat['F']['i'], int), cat
     print('  catalogo de letras   : F y X, con %d y %d cajas y un recorte de referencia' % (cat['F']['n'], cat['X']['n']))
@@ -169,9 +229,6 @@ try:
 finally:
     proc.terminate(); proc.wait(timeout=5)
 
-# Context: the flight's detections drawn thin over the thumbnails. Row 5 is in frame 2 and its crop
-# spans x 45-105, y 40-160; the context box in frame 2 lies inside it. The context box in frame 3
-# lies far from row 6's crop (x 46-106), so it must not show there.
 with open(os.path.join(dirt, 'contexto.csv'), 'w', newline='') as f:
     w = csv.writer(f); w.writerow(['frame', 'conf', 'x1', 'y1', 'x2', 'y2'])
     w.writerow([2, 0.9, 60, 70, 85, 130])
@@ -197,10 +254,6 @@ finally:
     proc.terminate(); proc.wait(timeout=5)
 
 
-# Frame review, the unit a detector trains on. Every CSV box starts at x 50+i, 40 px wide, so the boxes
-# of one frame overlap: once two of them are persona they must be flagged as a possible double. Frame 9
-# has no candidate: it must be listed only because --lista-frames names it, since that is where a
-# person every detector missed would have to be drawn.
 cv2.imwrite(os.path.join(dirt, 'frame_0009.jpg'), np.full((300, 400, 3), 128, np.uint8))
 open(os.path.join(dirt, 'lista.txt'), 'w').write('1\n2\n9\n')
 grupos_antes = json.load(open(os.path.join(dirt, 'etiquetas.json'), encoding='utf-8'))['etiquetas']
@@ -246,8 +299,6 @@ try:
     assert ign['etiqueta'] == 'ignorar' and 'ignorar' in REVISION and not ign['doble'], ign
     print('  ignorar              : la caja queda "ignorar" y deja de contar como persona para los dobles')
 
-    # The groups page shows the label of each crop, so one box corrected apart from its group is visible
-    # there, and Z undoes it by sending a null label, which drops the correction.
     crops = {m['i']: m for g in pedir('/estado')['grupos'] for m in g['muestra']}
     assert crops[per[0]['i']]['etiqueta'] == 'ignorar' and crops[per[0]['i']]['corregida'], crops[per[0]['i']]
     sin_corregir = [m for m in crops.values() if not m['corregida']][0]
@@ -261,8 +312,6 @@ try:
 finally:
     proc.terminate(); proc.wait(timeout=5)
 
-# A frame with a box nobody labelled cannot be reviewed: rows 40-41 are new boxes in frame 2, beyond the
-# 40 the groups labelled, so they have no label until the review gives them one.
 with open(os.path.join(dirt, 'cajas.csv'), 'a', newline='') as f:
     w = csv.writer(f)
     w.writerow([2, 0.5, 300, 60, 340, 140]); w.writerow([2, 0.5, 300, 160, 340, 240])
@@ -285,14 +334,11 @@ try:
     assert rev['revisados'] == [2, 9] and rev['nuevas'] == {'9': [[100.0, 100.0, 140.0, 180.0]]}, rev
     e = {x['f']: x for x in pedir('/frames/estado')['frames']}
     assert not e[1]['doble'] and e[3]['doble'] and e[9]['personas'] == 1, e
-    # The mosaic's button: frame 3 and 4 have every box labelled and are accepted; frame 7 is not in the
-    # list and comes back with its reason, without stopping the others.
     lote = pedir('/frames/revisados_lote', {'frames': [3, 7, 4]})
     assert lote['hechos'] == [3, 4] and [x['f'] for x in lote['rechazados']] == [7], lote
     assert pedir('/frames/estado')['revisados'] == 4
     print('  lote del mosaico     : [3, 7, 4] -> hechos [3, 4], rechazado 7; 4 frames revisados')
 
-    # Resizing a drawn box by a corner: the box is replaced, not added, and a box of 2 px is still refused.
     pedir('/frames/mover', {'f': 9, 'k': 0, 'caja': [100, 100, 150, 220]})
     assert pedir('/frames/9')['nuevas'] == [{'k': 0, 'caja': [100.0, 100.0, 150.0, 220.0],
                                              'etiqueta': 'persona', 'doble': False}], pedir('/frames/9')
@@ -300,8 +346,6 @@ try:
     rechaza('/frames/mover', {'f': 9, 'k': 0, 'caja': [10, 10, 12, 12]}, 'achicar a 2 px')
     print('  redimensionar        : la caja 0 del frame 9 pasa a 100,100-150,220; k=5 y 2 px dan 400')
 
-    # Blind re-check: it asks about a fixed sample of the reviewed frames and must not reveal the count
-    # before the answer. Frame 9 has one drawn box, so its true count is 1.
     e = pedir('/repaso/estado')
     assert len(e['frames']) == 1 and e['frames'][0]['dicho'] is None and e['frames'][0]['tenia'] is None, e
     f = e['pendiente']
@@ -312,15 +356,11 @@ try:
     pedir('/repaso', {'f': f, 'n': tenia})
     e = pedir('/repaso/estado')
     assert e['contestadas'] == 1 and e['acuerdo'] == 1 and e['pendiente'] is None, e
-    # Two person boxes on the same person: X settles them, the smaller one becomes the duplicate. And C
-    # copies a decision to the same box in the neighbouring frames, which is where it repeats.
-    d1 = pedir('/frames/3')          # frame 3 is untouched: frame 1 was already cleaned up above
+    d1 = pedir('/frames/3')
     per = [b for b in d1['cajas'] if b['etiqueta'] == 'persona']
     assert len(per) >= 2, per
     r = pedir('/frames/resolver', {'i': per[0]['i']})
     tras = {b['i']: b['etiqueta'] for b in pedir('/frames/3')['cajas']}
-    # The synthetic boxes are all 40x80, so which one is "the smaller" is a tie: what has to hold is that
-    # of the two the endpoint touched, one ended as the duplicate and the other stayed a person.
     assert r['duplicado'] != r['persona'], r
     assert tras[r['duplicado']] == 'duplicado' and tras[r['persona']] == 'persona', (r, tras)
     assert sum(v == 'persona' for v in tras.values()) == len(per) - 1, tras
@@ -329,12 +369,9 @@ try:
     for j, v in r['antes']:
         pedir('/frames/caja', {'i': j, 'v': v})
 
-    # A resolves every pair of the frame at once. Frame 4 has five person boxes on top of each other, so
-    # one call has to leave exactly one person standing, and Z has to put the five back.
     antes4 = {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']}
     r4 = pedir('/frames/resolver_todo', {'f': 4, 'propagar': False})
     tras4 = {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']}
-    # The pile is settled as a group, not in pairs: five boxes on one person are one decision, not four.
     assert r4['pares'] == 1 and sum(v == 'persona' for v in tras4.values()) == 1, (r4, tras4)
     assert sum(v == 'duplicado' for v in tras4.values()) == sum(v == 'persona' for v in antes4.values()) - 1, tras4
     print('  resolver todo (A)    : el monton de %d personas se resuelve en %d decision -> queda 1'
@@ -344,8 +381,6 @@ try:
     assert {b['i']: b['etiqueta'] for b in pedir('/frames/4')['cajas']} == antes4, 'Z tenia que devolver el frame'
     print('  deshacer el lote     : el frame 4 vuelve a sus %d personas' % sum(v == 'persona' for v in antes4.values()))
 
-    # The boxes nobody labelled that lie on top of a decided one: the overlap already answers them. Rows
-    # 40 and 41 sit in frame 2, far from the others, so they are the ones left alone and must not change.
     pedir('/frames/caja', {'i': 40, 'v': None})
     pedir('/frames/caja', {'i': 41, 'v': None})
     enc = pedir('/frames/encimadas', {'f': None})
@@ -358,8 +393,6 @@ try:
     pedir('/frames/caja', {'i': 40, 'v': 'no'})
     pedir('/frames/caja', {'i': 41, 'v': 'no'})
 
-    # The other answer to the same question: they are two people standing together. The flag has to go
-    # away and stay away, and undo has to bring it back.
     assert any(b['doble'] for b in pedir('/frames/2')['cajas']), 'el frame 2 tenia que tener encimadas'
     r2 = pedir('/frames/dos_personas', {'f': 2})
     assert r2['pares'] >= 1 and not any(b['doble'] for b in pedir('/frames/2')['cajas']), r2
@@ -376,21 +409,16 @@ try:
     pedir('/frames/caja', {'i': i0, 'v': 'duplicado'})
     prop = pedir('/frames/propagar', {'i': i0})
     assert prop['etiqueta'] == 'duplicado' and prop['cambiadas'] >= 1, prop
-    # propagar reaches every neighbouring frame of the list, so the check has to look at all of them, and
-    # at the local rows the endpoint reports, not at the rows of the output file.
     iguales = {b['i']: b['etiqueta'] for f in (1, 2, 3, 4, 9) for b in pedir('/frames/%d' % f)['cajas']}
     assert all(iguales[j] == 'duplicado' for j in prop['locales']), (prop, iguales)
     print('  propagar (C)         : la misma decision se copio a %d cajas iguales de los frames vecinos' % prop['cambiadas'])
     for j, v in prop['antes']:
         pedir('/frames/caja', {'i': j, 'v': v})
     pedir('/frames/caja', {'i': i0, 'v': 'persona'})
-    # Row 40 already carries a label by now, so to check the refusal its label is taken away first.
     pedir('/frames/caja', {'i': 40, 'v': None})
     rechaza('/frames/propagar', {'i': 40}, 'propagar una caja sin etiqueta')
     pedir('/frames/caja', {'i': 40, 'v': 'no'})
 
-    # A box of the CSV can be resized too, which is how a detection that covers only the legs is fixed.
-    # The label stays where it was; what moves is the box, and the checks see the new one.
     fila = pedir('/frames/1')['cajas'][0]
     pedir('/frames/ajustar', {'i': fila['i'], 'caja': [10, 20, 60, 140]})
     despues = [b for b in pedir('/frames/1')['cajas'] if b['i'] == fila['i']][0]
@@ -403,7 +431,6 @@ try:
     assert vuelta['caja'] == fila['caja'] and not vuelta['ajustada'], vuelta
     print('  ajustar una caja     : %s -> [10, 20, 60, 140] y con caja nula vuelve a la del CSV' % (fila['caja'],))
 
-    # A drawn box is a person unless it is marked to be ignored, and then it stops counting as one.
     pedir('/frames/nueva_etiqueta', {'f': 9, 'k': 0, 'v': 'ignorar'})
     d9 = pedir('/frames/9')
     assert d9['nuevas'][0]['etiqueta'] == 'ignorar' and not d9['nuevas'][0]['doble'], d9
@@ -413,8 +440,6 @@ try:
     rechaza('/frames/nueva_etiqueta', {'f': 9, 'k': 3, 'v': 'ignorar'}, 'etiquetar una dibujada que no existe')
     print('  dibujada a ignorar   : queda "ignorar" en la pagina y en el archivo; duplicado y k=3 dan 400')
 
-    # The suspicions panel: what a stronger detector found where no label of ours lies. One of the two
-    # rows sits on the drawn box, so it must not be listed; the other is in an empty part of the frame.
     with open(os.path.join(dirt, 'olvidadas_vuelo_prueba.csv'), 'w', newline='') as fh:
         w = csv.writer(fh); w.writerow(['frame', 'conf', 'x1', 'y1', 'x2', 'y2'])
         w.writerow([9, 0.91, 105, 105, 145, 215])
@@ -439,9 +464,6 @@ try:
     assert mini[:2] == b'\xff\xd8' and im.shape[1] == 480 and contar(mini, 'contexto') == 0
     verde = int(((im[..., 1] > 170) & (im[..., 0] < 130) & (im[..., 2] < 130)).sum())
     assert verde > 50, 'la caja dibujada del frame 9 tiene que verse verde en la miniatura: %d px' % verde
-    # The checks page: frame 1 was cleaned up in the review, frames 3 and 4 still have five people on
-    # top of each other. A gap is a frame with nobody between two frames with somebody: emptying frame 3
-    # makes one, because frames 2 and 4 keep their people.
     ch = pedir('/chequeos/estado')
     assert 1 not in ch['dobles'] and 1 not in ch['medias'], ch
     assert 3 in ch['dobles'] and 3 in ch['medias'] and 4 in ch['dobles'], ch
@@ -453,7 +475,6 @@ try:
     ch = pedir('/chequeos/estado')
     assert ch['huecos'] == [3] and 3 not in ch['dobles'], ch
     print('  hueco                : vaciar el frame 3 entre el 2 y el 4 lo deja como hueco %s' % ch['huecos'])
-    # The same gap has to show up in the per-frame state, which is what the pending queue is built from.
     est = {x['f']: x for x in pedir('/frames/estado')['frames']}
     assert est[3]['hueco'] and not est[9]['hueco'], est
     pendientes = [f for f, x in est.items() if x['doble'] or x['sin'] or x['hueco'] or not x['revisado']]

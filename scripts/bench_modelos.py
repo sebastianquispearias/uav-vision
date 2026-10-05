@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Which detector can the Raspberry actually carry? Measured, not extrapolated.
 
 The 1280 model wins on everything the mission cares about -- recall, alert load, false alerts,
@@ -19,6 +18,9 @@ Run on the Pi:
                                       ~/modelos_visdrone/best_ncnn_960 \\
                                       ~/modelos_visdrone/best_ncnn_1280 \\
                             --frames 60
+
+The first inference includes graph setup and is not representative, so it is timed separately
+and does not contaminate the median.
 """
 import argparse
 import json
@@ -81,14 +83,12 @@ def cpu_pct(t_muestra=0.4):
 
 
 def medir(modelo, picam, frames, imgsz):
-    from ultralytics import YOLO
     import cv2
+    from ultralytics import YOLO
 
     yolo = YOLO(modelo, task='detect')
     lat, n_det = [], 0
 
-    # The first inference includes graph setup and is not representative; it is timed
-    # separately so it does not contaminate the median.
     img = picam.capture_array()
     if img.ndim == 3 and img.shape[2] == 4:
         img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
@@ -150,9 +150,10 @@ if __name__ == '__main__':
 
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from uav_vision.camera_config import ARDUCAM_MODULE_3
     from libcamera import Transform
     from picamera2 import Picamera2
+
+    from uav_vision.camera_config import ARDUCAM_MODULE_3
 
     picam = Picamera2()
     picam.configure(picam.create_still_configuration(

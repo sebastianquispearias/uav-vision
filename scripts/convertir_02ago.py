@@ -21,6 +21,8 @@ decides, instead of inheriting someone else's decision.
 
     python scripts/convertir_02ago.py
     python scripts/etiquetar_grupos.py --vuelo 02ago
+
+Only the windows that were labelled by hand are converted.
 """
 import argparse
 import csv
@@ -33,7 +35,7 @@ _ENT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                      "drone-geolocation", "entrenamiento"))
 _FRAMES = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                                         "drone-geolocation", "data", "flight_02ago", "20260802_133309", "frames"))
-VENTANAS = [(2551, 2641), (2746, 2952), (3000, 3700)]      # the windows that were labelled by hand
+VENTANAS = [(2551, 2641), (2746, 2952), (3000, 3700)]
 
 
 def en_ventana(f, ventanas):

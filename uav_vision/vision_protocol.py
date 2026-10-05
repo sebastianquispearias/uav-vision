@@ -19,6 +19,37 @@ Pose sources:
       drone that is UavApiYaw, which polls the uav_api HTTP service on localhost; the API owns
       the MAVLink serial connection and every other process reads pose over HTTP. In simulation
       the caller injects a function returning the simulated heading.
+
+CONSTANTS THAT ARE DECISIONS
+    STATION_TIMEOUT_S, STATION_RETRY_S
+        How long a poll of the ground station may take, and how long to wait before asking
+        an unreachable station again. The poll must never cost the see loop more than a
+        sliver of its period, and a station that is down must not be asked on every report.
+
+    GROUND_EXTENT_M
+        How much ground each class covers along the direction it is being looked at, in
+        metres, used by _footprint_center to move the impact from the near edge of the object
+        to the middle of its footprint. Nominal dimensions of the thing, not tuned
+        corrections, so the names are VisDrone's. People are absent on purpose.
+
+    FOCO_RADIO_PX, FOCO_UMBRAL
+        The image window the operator's verdict opens around a fixed target, in pixels, and
+        the detector score accepted inside it. Mission decisions and not optics: they set how
+        much unvouched-for evidence is acceptable in exchange for finding the target.
+
+    RODEO_TOLERANCIA_M, RODEO_PLAZO_S
+        How close the aircraft has to stand to where it was sent before its frame counts, and
+        how long one leg of the orbit may take before the orbit is abandoned. A radius and not
+        a coordinate match, because an aircraft holding position drifts and demanding the
+        coordinate would mean never arriving.
+
+    THROTTLED, BITS_AHORA, BITS_ALGUNA_VEZ
+        The board's own power and thermal complaints, read as a firmware bitmask. The two
+        halves mean different things: the low bits are NOW, so acting on them means the
+        aircraft is in trouble this second, and the high bits are EVER SINCE BOOT, so they
+        stay set after a brief dip nobody was watching for.
+
+    Every value above, what it trades off and the measurement behind it: NOTES.md.
 """
 
 from __future__ import annotations
@@ -28,41 +59,21 @@ import math
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Type
 
 import numpy as np
-
 from gradys_embedded.protocol.interface import IProtocol
 from gradys_embedded.protocol.messages.communication import BroadcastMessageCommand
 from gradys_embedded.protocol.messages.mobility import GotoCoordsMobilityCommand
 from gradys_embedded.protocol.messages.telemetry import Telemetry
 
 from uav_vision.flota import mismo_objetivo
-
 from uav_vision.identity import dominant_class
 from uav_vision.pinhole_local import pixel_to_ray, project_to_pixel
 from uav_vision.view_selection import next_best_viewpoint, orbit_waypoints
 
 TIMER_SEE = "uav_vision:see"
 TIMER_REPORT = "uav_vision:report"
-# A poll of the ground station must never cost the see loop more than a sliver of its period,
-# and an unreachable station is asked again only after a pause, not on every report.
 STATION_TIMEOUT_S = 0.3
 STATION_RETRY_S = 10.0
 
-# Ground extent of each class, in metres: how much of the ground the object covers along the
-# direction it is being looked at. Used to move the impact from the near edge of the object to
-# the middle of its footprint -- see _footprint_center.
-#
-# These are nominal dimensions of the thing, not tuned corrections. The extent along the line
-# of sight lies somewhere between the object's width and its length depending on how it happens
-# to be parked, so each value is the midpoint of that pair and the residual is bounded by half
-# their difference: +-1.3 m for a car, +-4.7 m for a bus. That is an approximation, and a
-# stated one; the alternative is a bias of the full half-length, always towards the drone.
-#
-# Names are VisDrone's, which is what the deployed detector emits.
-#
-# PEOPLE ARE DELIBERATELY ABSENT. A standing person covers about 0.4 m of ground, so the
-# correction would be 0.2 m against a system error of 2.4 m -- a twentieth of the noise, and
-# every flight result to date was measured with the bottom edge. A class not listed here is
-# left exactly where the ray hits, which is the behaviour of every version before this one.
 GROUND_EXTENT_M: Dict[str, float] = {
     "bicycle": 1.2,
     "motor": 1.4,
@@ -78,39 +89,10 @@ RANSAC_ITERATIONS = 100
 RANSAC_THRESHOLD_M = 5.0
 MIN_MEASUREMENTS = 8
 
-# The window the operator's verdict opens around a fixed target, and the threshold inside it. The
-# radius is half the 640-pixel square the gain was measured over, on a 1920x1080 frame; the
-# threshold is the floor the detector was already scoring at. Neither is derivable from the optics:
-# they encode how much invented evidence is acceptable in exchange for finding the target, and that
-# changes per mission.
-#
-# WHAT THIS BUYS, MEASURED, AND IT IS NOT WHAT THE BOX NUMBERS PROMISE. Against ground-truth boxes
-# the window takes recall on the target from 43.9 % to 60.7 %. Run through the whole chain on the
-# 02ago flight and scored by people and phantoms, it changes NOTHING: same five people, same six
-# phantoms, in all four variants tried (target on the operator and on the most fragile candidate,
-# with the tracker as it flies and with its floor lowered to accept the band).
-#
-# The mechanism is visible in the numbers: 1673 boxes fell inside the window and 29 of them ended up
-# with a track id. BoT-SORT drops everything under its own low threshold of 0.20 before it
-# associates anything, and a detection with no track id never reaches the identity layer. Of the 841
-# boxes between 0.10 and 0.15, and the 494 between 0.15 and 0.20, exactly zero were tracked.
-#
-# And above 0.20 the window adds nothing either, because camera.py already opens that band over the
-# WHOLE frame (low_band=0.2). What is left is plumbing for acting on the operator's click, which is
-# worth having, and a measured claim that the recall gain does not survive the pipeline.
 FOCO_RADIO_PX = 320.0
 FOCO_UMBRAL = 0.10
 
-# How close the aircraft has to be to where it was sent before the frame is worth taking. A radius
-# and not a coordinate match, because an aircraft holding position drifts and demanding the
-# coordinate would mean never arriving. Five metres is the order of the GPS bias this system
-# already accounts for (gps_sigma 1.5 m, and the 95 % radius of a static candidate on flight 3 is
-# 2.4 m), so inside it the view is the one that was asked for.
 RODEO_TOLERANCIA_M = 5.0
-# How long one leg of the orbit may take before the whole thing is abandoned. Not derived from
-# anything: it is a guard, and what it guards against is an aircraft that was told to go somewhere
-# it cannot reach and waits for it forever. A leg of a thirty metre orbit is tens of seconds at the
-# speeds this aircraft flies, so a minute is generous and still finite.
 RODEO_PLAZO_S = 60.0
 
 
@@ -119,9 +101,13 @@ def _ground_impact(
     direction: Sequence[float],
     ground_z: float,
 ) -> Optional[Tuple[float, float]]:
-    """Intersects a bearing ray with the horizontal plane z = ground_z."""
+    """Intersects a bearing ray with the horizontal plane z = ground_z.
+
+    A ray that runs parallel to the ground or points up above the horizon never meets the
+    plane, and None is the answer for it.
+    """
     dz = direction[2]
-    if dz >= -1e-9:  # ray parallel to the ground or pointing up
+    if dz >= -1e-9:
         return None
     t = (ground_z - origin[2]) / dz
     return (origin[0] + t * direction[0], origin[1] + t * direction[1])
@@ -181,19 +167,6 @@ def _ransac_consensus(
     return estimate, best_inliers
 
 
-# The board's own power and thermal complaints, straight from the firmware.
-#
-# This exists because on 2026-10-03 a board browned out for four hours and nothing showed it. The
-# kernel had been logging "Undervoltage detected!" since 21:56; the station, the operator and the
-# logs we were reading all said the aircraft was healthy, and at 01:58 it stopped mid-line and
-# never came back. The cause was found the next day by moving its SD card to another board and
-# reading its journal. In the air that is a drone that disappears with no explanation.
-#
-# The file is read rather than vcgencmd called: 3 ms against spawning a process every report.
-# The firmware returns a bitmask, and the two halves mean different things. The low bits are NOW:
-# acting on it means the aircraft is in trouble this second. The high bits are EVER SINCE BOOT:
-# they stay set after the dip passes, which is what makes them useful on the ground, because the
-# dips are brief and nobody is watching at that moment.
 THROTTLED = "/sys/devices/platform/soc/soc:firmware/get_throttled"
 BITS_AHORA = (("bajo_voltaje", 0x1), ("frecuencia_limitada", 0x2),
               ("acelerador", 0x4), ("limite_termico", 0x8))
@@ -254,43 +227,65 @@ class VisionProtocol(IProtocol):
             pitch_deg=-55.0,
             yaw_source=UavApiYaw(),
         )
+
+    The configuration lives in class attributes, which with_config sets:
+
+    camera
+        The detect(pos, yaw) provider.
+
+    pitch_deg
+        The camera mount pitch. It has no default, because the mount angle is a property of
+        the deployment and guessing it puts every impact somewhere else.
+
+    yaw_source
+        A callable returning the heading in degrees, or None when the pose is unavailable
+        this frame.
+
+    see_period_s
+        How often the camera is asked for a frame. Bounded by the board's power budget rather
+        than by the detector, for which see NOTES.md.
+
+    identity
+        An optional IncrementalIdentity. When present and detections carry a 'track_id',
+        reports become multi-POI, with statics and mobiles separated. Without it, all impacts
+        go into one RANSAC and the report is the single dominant POI.
+
+    report_preliminary
+        Report tracks that have formed but not yet matured, flagged mature=False. Off by
+        default, because a loitering drone can afford to wait for certainty; on for a sweep,
+        which crosses each point once and would otherwise report nothing. The ground station
+        must show these differently: they are requests for verification, not finds.
+
+    ground_extent_m
+        Class -> ground extent in metres, used to correct the near-edge bias of 'py'.
+        Defaults to the vehicle table; people are not in it on purpose. Pass {} to switch the
+        correction off entirely.
+
+    station_url
+        Where to ask what to look for, when the ground station is not a node of the fleet.
+        With it, the drone polls the station's /buscar once per report period; without it,
+        orders arrive only as 'vision_buscar' packets on the data plane. Both paths end in
+        apply_search_order, so they cannot disagree on what an order means.
+
+    attitude_source
+        Where the airframe's attitude comes from: a callable returning (roll_deg, pitch_deg),
+        right wing down and nose up positive, or None when unavailable. The camera is fixed to
+        the body, so a drone that noses down to fly forward points its camera elsewhere. None
+        keeps the mount angle alone, which is right for a loitering drone and wrong for one
+        that escorts.
     """
 
-    # -- configuration (class attributes, set by with_config) -------------
-    camera = None                                  # detect(pos, yaw) provider
-    pitch_deg: Optional[float] = None              # camera mount pitch; no default
+    camera = None
+    pitch_deg: Optional[float] = None
     yaw_source: Optional[Callable[[], Optional[float]]] = None
-    # 4 Hz: below the ~5 FPS voltage-collapse point measured with the 5 A UBEC,
-    # so the default never operates at the edge of the power budget.
     see_period_s: float = 0.25
     report_period_s: float = 2.0
     ground_z: float = 0.0
     rng_seed: int = 0
-    # Optional IncrementalIdentity. When present and detections carry a 'track_id', reports
-    # become multi-POI (statics and mobiles separated). Without it, all impacts go into one
-    # RANSAC and the report is the single dominant POI.
     identity = None
-    # Report tracks that have formed but not yet matured, flagged mature=False. Off by default
-    # because for a loitering drone it only adds noise -- it can afford to wait for certainty.
-    # Turn it on for a SWEEP: measured on flight 3, a 30 s pass over a person never matures a
-    # candidate, so a search that crosses each point once and moves on reports nothing at all.
-    # The ground station must show these differently; they are requests for verification, not
-    # finds.
     report_preliminary: bool = False
-    # Class -> ground extent in metres, used to correct the near-edge bias of 'py'. Defaults to
-    # the vehicle table; people are not in it on purpose (see GROUND_EXTENT_M). Pass {} to
-    # switch the correction off entirely.
     ground_extent_m: Mapping[str, float] = GROUND_EXTENT_M
-    # Where to ask what to look for, when the ground station is not a node of the fleet. With
-    # it, the drone polls the station's /buscar once per report period; without it, orders
-    # arrive only as 'vision_buscar' packets on the data plane. Both paths end in
-    # apply_search_order, so they cannot disagree on what an order means.
     station_url: Optional[str] = None
-    # Where the airframe's attitude comes from: a callable returning (roll_deg, pitch_deg), right
-    # wing down and nose up positive, or None when unavailable. The camera is fixed to the body,
-    # so a drone that noses down to fly forward points its camera elsewhere: at 30 m, 10 degrees
-    # unaccounted for put the impact 7-10 m off (tests/test_actitud.py). None keeps the mount
-    # angle alone, which is right for a loitering drone and wrong for one that escorts.
     attitude_source: Optional[Callable[[], Optional[Tuple[float, float]]]] = None
 
     @classmethod
@@ -334,9 +329,55 @@ class VisionProtocol(IProtocol):
             },
         )
 
-    # -- IProtocol ---------------------------------------------------------
-
     def initialize(self) -> None:
+        """Builds the per-flight state and starts the two timers.
+
+        Everything here is emptied at launch rather than at class level, so a relaunched
+        protocol never starts out corroborating a previous flight or carrying its candidates.
+
+        What the state fields are, where the reason is not obvious from the name:
+
+        _clases
+            Parallel to _impacts: what the detector called each one, or None. Kept so the
+            RANSAC fallback can name its POI from the impacts that actually formed it.
+
+        _objetivo
+            The target the operator pointed at, in metres, or None. Kept as a ground position
+            and projected onto every frame: where it lands in the image depends on the
+            aircraft's pose at that instant, which is not something the ground can send.
+
+        _descartados
+            What the operator has looked at and refused. The drone's own signals cannot tell a
+            person from an object the detector keeps confusing with one: CLIP and the physical
+            size of the box both miss the phantom that is person-shaped and person-sized, and
+            the phantom count of docs/RESULTADOS.md is what that costs. The operator can
+            tell, and saying so costs one click. Keeping the refusal here is what stops the
+            drone from spending the link on the same wrong point every two seconds for the
+            rest of the flight.
+
+        _rodeo
+            Where this aircraft was told to go to look at a target from another side, and the
+            target it was sent to look at. None when nothing was asked. This is the one place
+            in the whole package that makes the aircraft move, and it only ever moves because
+            a human clicked.
+
+        _ajenos and ventana_ajenos_s
+            What the neighbours are reporting, by sender, and how long one of their reports
+            stands as current. The window is loose enough to cover a missed report period,
+            tight enough that it is still a claim about now.
+
+        _orden_epoca, _orden_v, _orden_rechazo
+            The last search order taken: which station session issued it, its version, and the
+            camera's refusal when it could not comply. The epoch is what lets a restarted
+            station, whose counter starts again from zero, still be obeyed.
+
+        _slots_perdidos
+            Slots the work overran. Not a curiosity: it is the difference between a drone that
+            is keeping up and one quietly two thirds as attentive as it claims to be.
+
+        _t_ventana
+            Start of the window the reported rate covers. Reset at every report.
+        """
         if self.camera is None or self.pitch_deg is None or self.yaw_source is None:
             raise RuntimeError(
                 "VisionProtocol is not configured. Build the class with "
@@ -345,34 +386,13 @@ class VisionProtocol(IProtocol):
         self._position: Optional[Tuple[float, float, float]] = None
         self._impacts: List[Tuple[float, float]] = []
         self._confs: List[float] = []
-        # Parallel to _impacts: what the detector called each one, or None. Kept so the
-        # RANSAC fallback can name its POI from the impacts that actually formed it.
         self._clases: List[Optional[str]] = []
         self._frames_seen = 0
-        # The target the operator pointed at, in metres, or None. Kept as ground position and
-        # projected onto every frame: where it lands in the image depends on the aircraft's pose
-        # at that instant, which is not something the ground can send.
         self._objetivo = None
-        # What the operator has looked at and refused. The drone's own signals cannot tell a
-        # person from an object the detector keeps confusing with one: CLIP and the physical size
-        # of the box both miss the phantom that is person-shaped and person-sized, and on flight 3
-        # six of the eleven candidates reported were nobody. The operator can tell, and saying so
-        # costs one click. Keeping the refusal here is what stops the drone from spending the link
-        # on the same wrong point every two seconds for the rest of the flight.
         self._descartados: List[dict] = []
-        # Where this aircraft was told to go to look at a target from another side, and the target
-        # it was sent to look at. None when nothing was asked. This is the one place in the whole
-        # package that makes the aircraft move, and it only ever moves because a human clicked.
         self._rodeo: Optional[dict] = None
-        # What the neighbours are reporting, by sender. Emptied here rather than at class
-        # level so a relaunched protocol does not start out corroborating a previous flight.
         self._ajenos: Dict = {}
-        # How long a neighbour's report stands as current. Loose enough to cover a missed
-        # report period, tight enough that it is still a claim about now.
         self.ventana_ajenos_s = 15.0
-        # The last search order taken: which station session issued it, its version, and the
-        # camera's refusal when it could not comply. The epoch is what lets a restarted
-        # station, whose counter starts again from zero, still be obeyed.
         self._orden_epoca = None
         self._orden_v = None
         self._orden_rechazo = None
@@ -381,10 +401,7 @@ class VisionProtocol(IProtocol):
 
         now = self.provider.current_time()
         self._t_inicio = now
-        # Slots the work overran. Not a curiosity: it is the difference between a drone that
-        # is keeping up and one quietly two thirds as attentive as it claims to be.
         self._slots_perdidos = 0
-        # Start of the window the reported rate covers. Reset at every report.
         self._t_ventana = now
         self._frames_ventana = 0
         self._slots_ventana = 0
@@ -399,13 +416,17 @@ class VisionProtocol(IProtocol):
             self._llego_al_rodeo()
 
     def handle_timer(self, timer: str) -> None:
+        """Runs whichever of the two loops fired, and books the next slot on its cadence.
+
+        The station is asked before reporting and not after, so the report that goes out
+        already says what the camera is doing rather than what it was doing a period ago.
+        """
         if timer == TIMER_SEE:
             self._see()
             self._proximo_see = self._next_slot(
                 self._proximo_see, self.see_period_s, contar=True)
             self.provider.schedule_timer(TIMER_SEE, self._proximo_see)
         elif timer == TIMER_REPORT:
-            # Asked before reporting, so the report already says what the camera is doing.
             self._poll_station()
             self._report()
             self._proximo_report = self._next_slot(
@@ -520,6 +541,10 @@ class VisionProtocol(IProtocol):
         purpose and each leg has a deadline: an aircraft that was told to go somewhere it cannot
         reach must give up, not wait forever.
 
+        The only viewing direction this aircraft can vouch for is its own, right now, so that is
+        the only one it passes to next_best_viewpoint. A station that knows where the other
+        drones are can pass theirs; this layer does not invent them.
+
         radio_m and altura_m are mission decisions and have no defaults in this layer: see
         next_best_viewpoint. Call with x None to cancel.
         """
@@ -533,8 +558,6 @@ class VisionProtocol(IProtocol):
         if movil:
             return False
         objetivo = (float(x), float(y), self.ground_z)
-        # The only viewing direction this aircraft can vouch for is its own, right now. A station
-        # that knows where the other drones are can pass theirs; this layer does not invent them.
         d = np.array([objetivo[0] - self._position[0],
                       objetivo[1] - self._position[1],
                       objetivo[2] - self._position[2]], dtype=float)
@@ -575,6 +598,10 @@ class VisionProtocol(IProtocol):
         Sending on the way would hand the ground the same view it already had, which is the whole
         point of having flown. The tolerance is a radius, not a coordinate match: an aircraft
         holding position drifts, and demanding a coordinate would mean never arriving.
+
+        Past the deadline the leg is given up on and the orbit abandoned. Saying nothing is
+        better than an aircraft parked against a waypoint it cannot reach while the operator
+        waits for a picture that is never coming.
         """
         aqui = self._posicion_para_vuelo()
         if self._rodeo is None or aqui is None:
@@ -582,8 +609,6 @@ class VisionProtocol(IProtocol):
         r = self._rodeo
         ahora = self.provider.current_time()
         if ahora - r["t_tramo"] > RODEO_PLAZO_S:
-            # Gave up on this leg. Abandoning the orbit and saying nothing is better than an
-            # aircraft parked against a waypoint it cannot reach while the operator waits.
             self._rodeo = None
             return
         ir = r["ir_a"]
@@ -662,12 +687,11 @@ class VisionProtocol(IProtocol):
                    plantilla=None, emb_dist=None) -> bool:
         """Fixes the target the operator pointed at, or releases it when x is None.
 
-        What this buys, measured over the balcony window of the 02ago flight: recall on the target
-        goes from 43.9 % to 60.7 % without a millisecond of extra computing, because the detector
-        had already scored those boxes and was discarding them for being under the reporting
-        threshold. The cost is precision, 71.2 % to 53.3 %, and it is paid where it hurts least: the
-        extra boxes land beside somebody the tracker is already following, so they reinforce that
-        track instead of opening points of their own.
+        Fixing a target lowers the reporting threshold inside a window of the image, which costs
+        no computing at all: the detector had already scored those boxes and was discarding them
+        for being under the threshold. What it buys and what it costs are in
+        NOTES.md, and the short version is that the box numbers improve and the
+        product numbers do not move.
 
         Only the target's ground position travels. Turning it into a square of the image is this
         drone's job and nobody else's, because the square depends on where the aircraft is and
@@ -701,6 +725,11 @@ class VisionProtocol(IProtocol):
         A target that falls outside the frame clears the window instead of leaving the last one in
         place: a stale square lowers the threshold over a piece of ground nobody vouched for, which
         is precisely how a free recall gain turns into invented points.
+
+        The appearance template is only handed over when there is one. A camera that implements
+        the older set_focus, of which the test stubs are two, keeps working untouched: the
+        protocol must not demand a capability it is not using, and this is the same duck typing
+        the getattr already relies on.
         """
         fijar = getattr(self.camera, "set_focus", None)
         if not callable(fijar):
@@ -717,10 +746,6 @@ class VisionProtocol(IProtocol):
         if px is None:
             fijar(None)
             return
-        # The template is only handed over when there is one. A camera that implements the older
-        # set_focus, of which the test stubs are two, keeps working untouched: the protocol must
-        # not demand a capability it is not using, and this is the same duck typing the getattr
-        # above already relies on.
         extra = {}
         if self._objetivo.get("plantilla") is not None:
             extra = {"plantilla": self._objetivo["plantilla"],
@@ -731,11 +756,10 @@ class VisionProtocol(IProtocol):
         """Sends one frame, once, because somebody on the ground asked to look at it.
 
         The detector that flies is the one that fits in the power budget, and it finds fewer people
-        than one that does not have to: on the 02ago flight, at the altitude where this system is
-        meant to work, the aircraft's detector found 46 % of the people and RF-DETR on a laptop found
-        90 % of them, with better precision. That detector will never fly -- it takes a second and a
-        half per frame against thirty five milliseconds -- but there is no reason the ground cannot
-        run it on a frame the aircraft sends when an operator wants a second opinion about a spot.
+        than one that does not have to; the measured gap between the two is in docs/RESULTADOS.md.
+        The better detector will never fly, because it takes a second and a half per frame against
+        thirty five milliseconds, but there is no reason the ground cannot run it on a frame the
+        aircraft sends when an operator wants a second opinion about a spot.
 
         One frame on request, never a stream. A frame is about 300 KB, so at three per second the
         video alone is seven megabits and would sit on top of the telemetry on the same link; asked
@@ -807,6 +831,12 @@ class VisionProtocol(IProtocol):
         not heard the order yet, or refused it. The names the detector can emit travel too, so
         the station offers buttons for those rather than a fixed list -- a button for a class
         the model lacks is a request that can only be refused.
+
+        'apariencia' says whether this aircraft can honour a refusal at all. _fue_descartado
+        needs the candidate's own appearance vector and returns False without one, so a board
+        whose mission left reid_model unset is deaf to every verdict the operator gives. That
+        used to be silent on the station, which makes a button that does nothing look broken
+        rather than unavailable.
         """
         clases = getattr(self.camera, "classes", None)
         conocidas = getattr(self.camera, "known_classes", None)
@@ -816,11 +846,6 @@ class VisionProtocol(IProtocol):
             "epoca": self._orden_epoca,
             "rechazo": self._orden_rechazo,
             "conocidas": sorted(conocidas) if conocidas else None,
-            # Whether this aircraft can honour a refusal at all. _fue_descartado needs the
-            # candidate's own appearance vector and returns False without one, so a board whose
-            # mission left reid_model unset is deaf to every verdict the operator gives. That
-            # used to be silent on the station, which makes a button that does nothing look
-            # broken rather than unavailable.
             "apariencia": getattr(self.camera, "reid_model", None) is not None,
         }
 
@@ -880,15 +905,26 @@ class VisionProtocol(IProtocol):
     def finish(self) -> None:
         pass
 
-    # -- internals ---------------------------------------------------------
-
     def _see(self) -> None:
-        """One camera cycle: detect, back-project, store ground impacts."""
+        """One camera cycle: detect, back-project, store ground impacts.
+
+        The cycle is skipped outright with no telemetry yet, and skipped again when the pose
+        source is unavailable for this frame: a frame cast from a guessed pose is worse than
+        no frame, because nothing downstream can tell the two apart.
+
+        Each impact is handed to the identity layer with its slant range, the clock and the
+        class the detector gave it. The range is camera to point on the ground, and it is what
+        makes a far target worse placed than a near one: a heading error moves the impact by
+        that distance times the angle. The clock travels so that maturity is measured rather
+        than inferred from a frame count times a rate the caller merely promised, and the
+        class travels because the identity layer votes on it across the track and refuses to
+        merge two names into one candidate.
+        """
         if self._position is None:
-            return  # no telemetry yet
+            return
         yaw = self.yaw_source()
         if yaw is None:
-            return  # pose source unavailable this frame
+            return
         self._frames_seen += 1
 
         cam_cfg = self.camera.camera
@@ -915,8 +951,6 @@ class VisionProtocol(IProtocol):
             extent = self.ground_extent_m.get(cls) if cls else None
             if extent:
                 impact = _footprint_center(self._position, impact, extent)
-            # Camera to the point on the ground. A heading error moves the impact by this distance
-            # times the angle, so the same target is less well placed from farther away.
             rango = math.sqrt((impact[0] - self._position[0]) ** 2
                               + (impact[1] - self._position[1]) ** 2
                               + (self._position[2] - self.ground_z) ** 2)
@@ -932,11 +966,7 @@ class VisionProtocol(IProtocol):
                     conf=det["conf"],
                     emb=det.get("emb"),
                     crop=det.get("crop"),
-                    # The clock, so maturity is measured rather than inferred from a frame
-                    # count times a rate the caller merely promised.
                     t=self.provider.current_time(),
-                    # What it is. The identity layer votes on it across the track and refuses
-                    # to merge two names into one candidate.
                     cls=cls,
                     range_m=rango,
                 )
@@ -946,39 +976,73 @@ class VisionProtocol(IProtocol):
         Broadcasts the current POI list. With an identity layer: one POI per candidate, mobiles
         first. Without one, or before any candidate has enough evidence: the single dominant POI
         by RANSAC consensus over all stored impacts.
+
+        The operator's refusals are applied here and not inside the identity layer, on purpose.
+        That layer's job is to say what it has seen, and it has still seen this; what changed is
+        that a human looked at it and said no. Keeping the two apart means the refusal costs
+        nothing to undo and leaves the layer's measurements untouched.
+
+        WITH an identity layer, no candidate means nothing is known yet and the drone says
+        exactly that. It used to fall back to a RANSAC consensus over every impact stored,
+        which on flight 3 put a point between the operator and the equipment box: the mixture
+        the identity layer exists to prevent, reported at the moment the drone knows least. The
+        consensus stays for a drone with no identity layer, where it is the design, and there it
+        is named from the inliers only, because the rejected impacts are the ones the consensus
+        decided were not this object and letting them vote would be answering with the noise.
+
+        Nothing found is exactly when the drone must still speak. From the ground, a drone that
+        sees nobody and a drone that has died look identical: both are silence, and an operator
+        who cannot tell them apart has to assume the worst and abort. One empty beat per report
+        period buys the difference for a few dozen bytes.
+
+        What the message carries beyond the POIs, and why:
+
+        fps_real, slots_perdidos
+            What the loop actually delivered over the last interval, so the gap between
+            configured and real can never again be something only a stopwatch would find.
+
+        origen_gps
+            The frame these metres are measured in, so the receiver never has to be told
+            separately. It cannot be: when the mission is loaded without an origin the runner
+            resolves one from the GPS fix at that moment, which nobody can know in advance to
+            type into a ground station. Read defensively, because IProvider does not declare it
+            -- the embedded runtime's provider carries it, a test harness does not. None is a
+            valid answer and means local metres only, which is what every desk run produces.
+
+        pos
+            Where the drone itself is. A station that plots targets but not the aircraft asks
+            the operator to hold the most basic fact in their head, and it hides the one thing
+            that explains a bad fix: a drone that barely moved gives rays that barely cross.
+            Metres in the same frame as the POIs, so nothing needs converting.
+
+        salud
+            What the board says about its own current and temperature. In every report and not
+            one in ten, because a voltage dip lasts an instant and the next report may not
+            exist.
+
+        Each POI's crop arrives from the identity layer as raw JPEG bytes and is encoded here
+        rather than there, so the identity layer stays free of transport concerns. Its
+        embedding goes out at half precision: the vector is only ever compared by cosine, and
+        at float16 that comparison is unchanged to six decimals while the field costs 1.4 kB
+        instead of 2.7 -- and this link is a 4G dongle, not a lab cable. Corroboration is heard
+        straight off the air, so a ground station that reaches only one of the drones still
+        learns that two of them agree.
         """
         import base64
 
         pois = (self.identity.candidates(preliminary=self.report_preliminary,
                                          now=self.provider.current_time())
                 if self.identity is not None else [])
-        # Filtered here and not inside the identity layer on purpose. The layer's job is to say
-        # what it has seen, and it has still seen this; what changed is that a human looked at it
-        # and said no. Keeping the two apart means the refusal costs nothing to undo and leaves
-        # the measurements of the layer untouched.
         if self._descartados:
             pois = [p for p in pois if not self._fue_descartado(p)]
         latido = False
 
         if not pois:
-            # With an identity layer, no candidate means nothing is known yet, and the drone says
-            # exactly that. It used to fall back to a RANSAC consensus over every impact stored,
-            # which on flight 3 put a point between the operator and the equipment box: the
-            # mixture the identity layer exists to prevent, reported at the moment the drone knows
-            # least. The consensus stays for a drone with no identity layer, where it is the design.
             if self.identity is not None or len(self._impacts) < MIN_MEASUREMENTS:
-                # Nothing found -- and that is exactly when the drone must still speak. From
-                # the ground, a drone that sees nobody and a drone that has died look
-                # identical: both are silence. An operator who cannot tell them apart has to
-                # assume the worst and abort. One empty beat per report period buys the
-                # difference for a few dozen bytes.
                 latido = True
             else:
                 impacts = np.asarray(self._impacts)
                 estimate, inliers = _ransac_consensus(impacts, self._rng)
-                # Named from the inliers only. The rejected impacts are the ones the
-                # consensus decided were not this object, so letting them vote on what this
-                # object is would be answering with the noise.
                 votos: Dict[str, int] = {}
                 for cls, es_inlier in zip(self._clases, inliers):
                     if cls and es_inlier:
@@ -992,21 +1056,14 @@ class VisionProtocol(IProtocol):
                     "conf_mean": round(float(np.mean(self._confs)), 3),
                 }]
 
-        # The identity layer hands over raw JPEG bytes; JSON needs text. Encoded here rather
-        # than there so the identity layer stays free of transport concerns.
         for p in pois:
             crop = p.pop("crop", None)
             if crop:
                 p["crop"] = base64.b64encode(crop).decode("ascii")
-            # Half precision on purpose. The vector is only ever compared by cosine, and at
-            # float16 that comparison is unchanged to six decimals, while the field costs
-            # 1.4 kB instead of 2.7 -- and this link is a 4G dongle, not a lab cable.
             emb = p.pop("emb", None)
             if emb is not None:
                 p["emb"] = base64.b64encode(
                     np.asarray(emb, dtype=np.float16).tobytes()).decode("ascii")
-            # Who else is seeing this, heard straight off the air. A ground station that only
-            # reaches one of the drones still learns that two of them agree.
             otros = self._corroboracion(p)
             if otros:
                 p["corroborado_por"] = otros
@@ -1017,32 +1074,15 @@ class VisionProtocol(IProtocol):
             "sender": self.provider.get_id(),
             "time": self.provider.current_time(),
             "frames_seen": self._frames_seen,
-            # What the loop actually delivered over the last interval, so the gap between
-            # configured and real can never again be something only a stopwatch would find.
             "fps_real": ritmo["fps_real"],
             "slots_perdidos": ritmo["slots_perdidos"],
             "slots_perdidos_total": ritmo["slots_perdidos_total"],
             "latido": latido,
-            # The frame these metres are measured in, so the receiver never has to be told
-            # separately. It cannot be: when the mission is loaded without an origin the
-            # runner resolves one from the GPS fix at that moment, which nobody can know in
-            # advance to type into a ground station. Send it and the question disappears.
-            #
-            # Read defensively: IProvider does not declare it -- the embedded runtime's
-            # provider carries it, a test harness does not. None is a valid answer and means
-            # "local metres only", which is what every desk run has ever produced.
             "origen_gps": self._gps_origin(),
-            # Where the drone itself is. A station that plots targets but not the aircraft
-            # asks the operator to hold the most basic fact in his head, and it hides the one
-            # thing that explains a bad fix: a drone that barely moved gives rays that barely
-            # cross. Metres in the same frame as the POIs, so nothing needs converting.
             "pos": [round(float(self._position[0]), 2),
                     round(float(self._position[1]), 2),
                     round(float(self._position[2]), 2)] if self._position is not None else None,
             "buscando": self._estado_busqueda(),
-            # Lo que la propia placa dice de su corriente y su temperatura. Va en cada
-            # reporte y no en uno de cada diez: una caida de tension dura un instante y el
-            # reporte siguiente puede no existir.
             "salud": salud_electrica(),
             "pois": pois,
         }

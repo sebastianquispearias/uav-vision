@@ -12,10 +12,11 @@ from an object the detector keeps confusing with one. The last line of the video
     python scripts/render_madurez.py --segundos 90 --miradas-min 20
 
 Needs the recording in the sibling repo. Writes an H.264 mp4 when ffmpeg is available.
+
+The operator's position is the surveyed one. Each map panel is drawn at 16 px per metre.
 """
 import argparse
 import contextlib
-import csv
 import io
 import math
 import os
@@ -36,9 +37,9 @@ PISTAS = os.path.join(HNO, "entrenamiento", "botsort_pistas_02ago.npz")
 REPLAY = os.path.join(AQUI, "replay_vuelo3.py")
 
 LAT0, LNG0, R = -22.978029946, -43.23214256266666, 6378137.0
-PIES = (-1.3, 8.8)                       # the operator, surveyed
+PIES = (-1.3, 8.8)
 E0, E1, N0, N1 = -22.0, 18.0, -9.0, 24.75
-MW, MH = 640, 540                        # each map panel; 16 px per metre
+MW, MH = 640, 540
 CAM_W, CAM_H = 1280, 720
 W, H = CAM_W + MW, 1080
 F = cv2.FONT_HERSHEY_SIMPLEX
@@ -205,7 +206,8 @@ def main():
 
         bx0, bx1, by = 24, CAM_W - 40, CAM_H + 190
         cv2.line(lienzo, (bx0, by), (bx1, by), (90, 90, 100), 3)
-        px = lambda s_: int(bx0 + min(1.0, s_ / args.segundos) * (bx1 - bx0))
+        def px(s_, x0=bx0, x1=bx1):
+            return int(x0 + min(1.0, s_ / args.segundos) * (x1 - x0))
         for nombre, tc, c in (("hoy", t_span, (170, 170, 170)), ("nuevo", t_look, VERDE)):
             if tc is not None and tc <= args.segundos:
                 cv2.line(lienzo, (px(tc), by - 16), (px(tc), by + 16), c, 3)

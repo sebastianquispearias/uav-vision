@@ -7,6 +7,9 @@ movement, whatever the runner asks for. This is the honest split: everything
 testable on the desk runs real; what physically requires a flight is stubbed.
 
 Runner points at this proxy (port 8001); the real uav_api stays on 8000.
+
+The arming and return-to-launch endpoints are NEVER forwarded: a bench mission must not arm or
+command RTL.
 """
 
 import json
@@ -42,7 +45,6 @@ class Handler(server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._json({"error": str(e)}, 502)
         elif ruta.startswith("/command/"):
-            # Never forwarded: a bench mission must not arm or command RTL.
             self._json({"result": "Success", "info": "simulado en banco"})
         else:
             self._json({"error": f"sin ruta {ruta}"}, 404)

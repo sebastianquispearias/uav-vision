@@ -1,6 +1,8 @@
-"""What the appearance model costs on this board, measured, with everything else held equal."""
+"""What the appearance model costs on this board, measured, with everything else held equal.
+
+The first call loads the model and is not the rate.
+"""
 import statistics as st
-import sys
 import time
 
 from uav_vision.camera import OnboardCamera
@@ -19,7 +21,7 @@ def correr(reid):
             dets = cam.detect((0.0, 0.0, 30.0), 0.0)
             dt = (time.time() - t) * 1000.0
             if i == 0:
-                continue          # el primero carga el modelo, no es el ritmo
+                continue
             ms.append(dt)
             cajas.append(len(dets or []))
             con_emb += sum(1 for d in (dets or []) if d.get("emb") is not None)

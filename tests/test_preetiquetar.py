@@ -7,8 +7,16 @@ todo se pueda corregir despues a mano. La regla se midio contra 985 cajas etique
 decide el 41 % con 1.2 % de error.
 
 Run: python tests/test_preetiquetar.py
+
+The three labels the tool can produce are persona, dudosa and no.
 """
-import csv, json, os, subprocess, sys, tempfile, shutil
+import csv
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 HERRAMIENTA = os.path.join(AQUI, '..', 'scripts', 'preetiquetar.py')
@@ -38,9 +46,9 @@ dirt = tempfile.mkdtemp(prefix='preet_')
 try:
     with open(os.path.join(dirt, 'candidatas_prueba.csv'), 'w', newline='') as fh:
         w = csv.writer(fh); w.writerow(['frame','conf','x1','y1','x2','y2','fuentes'])
-        w.writerow([1, 0.90, 10, 10, 50, 90, 'coco+rfdetr+vuelo'])   # persona
-        w.writerow([1, 0.50, 60, 10, 90, 90, 'rfdetr'])              # dudosa
-        w.writerow([2, 0.60, 10, 10, 40, 60, 'vuelo'])               # no
+        w.writerow([1, 0.90, 10, 10, 50, 90, 'coco+rfdetr+vuelo'])
+        w.writerow([1, 0.50, 60, 10, 90, 90, 'rfdetr'])
+        w.writerow([2, 0.60, 10, 10, 40, 60, 'vuelo'])
     r = subprocess.run([sys.executable, HERRAMIENTA, '--vuelo', 'prueba', '--entrenamiento', dirt],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr

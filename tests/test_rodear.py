@@ -17,6 +17,41 @@ for the same target, and a picture from the side for the person who has to decid
 that the detector does better from there, which depends on the model and is not measured.
 
 Run with: python tests/test_rodear.py
+
+WHAT EACH SECTION PROVES
+    The same target at the same radius sends a drone standing somewhere else SOMEWHERE ELSE. If
+    the answer did not depend on where the aircraft already is, it would not be using the
+    criterion at all. The criterion is the minimum angle against EVERY ray already taken, so
+    adding a second seen direction has to move the answer; if it did not, the function would be
+    ignoring all but one.
+
+    THE FRAME IS SENT ON ARRIVAL AND NOT ON THE WAY, because sending on the way hands the ground
+    the view it already had, which is the whole point of having flown. The tolerance is a RADIUS
+    because an aircraft holding position drifts, and the section walks fractions of the way, all
+    of them outside the tolerance, up to one that is already inside it.
+
+    ANOTHER AIRCRAFT IS SENT when there is one. The drone that reported the target is standing
+    in the direction we already have, so sending it would fly something and collect the view we
+    had. The card cannot decide this: it knows who reported, not who is connected.
+
+    A WALKER IS REFUSED, and it is the most important line of the whole file. The order carries
+    a COORDINATE and not a pixel, which is why it works with the camera seeing nothing at the
+    moment of the click: the position comes from the identity layer, which never forgets a
+    candidate. But a walker's position goes stale while the aircraft flies, and that layer
+    refuses to extrapolate a mover beyond a few seconds. A flight of tens of seconds is an order
+    of magnitude outside it, so the aircraft would arrive and photograph empty ground.
+
+    THE ORBIT IS A LIST THAT ENDS. The loop is not a controller: the autopilot already closes
+    the position loop against its own GPS, and the only part that is ours is "have I arrived? then
+    the next one", plus the guarantee that the list TERMINATES. A leg has a deadline, because an
+    aircraft parked against a point it cannot reach, while the operator waits, is worse than
+    abandoning the turn and saying so.
+
+    SEEING AND FLYING USE DIFFERENT POSITIONS, and only the bench makes that visible. A board on
+    a desk casts its rays from the pose the RECORDING had, because that is where the pictures
+    were taken, while its own fake autopilot reports the desk. The manoeuvre is about the
+    aircraft, so it asks for the FLIGHT position. Without that separation the drone takes the
+    order, the fake autopilot walks it to the point, and nobody ever notices it arrived.
 """
 import math
 import os
@@ -25,14 +60,12 @@ import sys
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
-# gradys-embedded vive al lado de este repositorio, como en el resto de la suite.
 sys.path.insert(0, os.path.join(os.path.dirname(RAIZ), "gradys-embedded"))
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from uav_vision.vision_protocol import (RODEO_PLAZO_S,  # noqa: E402
-                                        RODEO_TOLERANCIA_M, VisionProtocol)
-from uav_vision.view_selection import next_best_viewpoint  # noqa: E402
+from uav_vision.view_selection import next_best_viewpoint
+from uav_vision.vision_protocol import RODEO_PLAZO_S, RODEO_TOLERANCIA_M, VisionProtocol
 
 RADIO, ALTURA = 30.0, 25.0
 OBJETIVO = (0.0, 0.0)
@@ -86,7 +119,7 @@ print("1. SIN ORDEN NO SE MUEVE. ES LA MITAD MAS IMPORTANTE DE ESTE ARCHIVO")
 print("=" * 76)
 p = protocolo()
 for _ in range(5):
-    p._llego_al_rodeo()          # telemetry ticking by, nothing asked
+    p._llego_al_rodeo()
 print("  cinco llegadas de telemetria sin orden -> %d ordenes de movimiento" % len(p.provider.ordenes))
 print("  y %d cuadros mandados" % len(p._marcos))
 assert p.provider.ordenes == [], "sin que un humano lo pida, la aeronave no se mueve"
@@ -110,8 +143,6 @@ assert abs(r - RADIO) < 0.5 and abs(ir[2] - ALTURA) < 0.01, \
     "el radio y la altura son del operador, no del algoritmo"
 assert p._rodeo["diversidad"] > 60.0, \
     "si el rayo nuevo no es MAS DIVERSO, volar hasta ahi no compra geometria"
-# Same target, same radius: a drone standing somewhere else is sent somewhere else. If the answer
-# did not depend on where the aircraft already is, it would not be using the criterion at all.
 q = protocolo(pos=(30.0, 0.0, 25.0))
 q.rodear(OBJETIVO[0], OBJETIVO[1], radio_m=RADIO, altura_m=ALTURA)
 print("  el contraste: un dron en azimut %.0f deg es mandado a %.0f deg, no al mismo sitio"
@@ -123,10 +154,6 @@ print()
 print("=" * 76)
 print("3. EL CUADRO SE MANDA AL LLEGAR, NO EN EL CAMINO, Y UNA SOLA VEZ")
 print("=" * 76)
-# Sending on the way hands the ground the view it already had, which is the whole point of having
-# flown. The tolerance is a radius because an aircraft holding position drifts.
-# Fractions of the way, all of them OUTSIDE the tolerance: the closest is 9 m from the
-# destination against a tolerance of 5. A point at 0.9 of the way is 3 m away, already arrived.
 camino = [(ir[0] * f, ir[1] * f, ir[2]) for f in (0.2, 0.5, 0.7)]
 for pos in camino:
     p._position = pos
@@ -165,8 +192,6 @@ print()
 print("=" * 76)
 print("5. CON DOS DIRECCIONES YA VISTAS, ELIGE LA TERCERA Y NO REPITE NINGUNA")
 print("=" * 76)
-# The criterion is the minimum angle against EVERY ray already taken, so adding a second seen
-# direction has to move the answer. If it did not, the function would be ignoring all but one.
 def rayo_desde(az):
     pos = (RADIO * math.cos(math.radians(az)), RADIO * math.sin(math.radians(az)), ALTURA)
     d = np.array([-pos[0], -pos[1], -pos[2]], dtype=float)
@@ -187,11 +212,8 @@ print()
 print("=" * 76)
 print("6. LA ESTACION ELIGE QUE AERONAVE VA, Y MANDA A OTRA QUE LA QUE YA MIRO")
 print("=" * 76)
-# The drone that reported the target is standing in the direction we already have, so sending it
-# would fly something and collect the view we had. The card cannot decide this: it knows who
-# reported and not who is connected.
 sys.path.insert(0, os.path.join(RAIZ, "scripts", "banco_embedded"))
-import gs_mapa  # noqa: E402
+import gs_mapa
 
 casos = [({"1": {}, "2": {}, "3": {}}, "1", "2", "hay otros: va el primero de los otros"),
          ({"1": {}}, "1", "1", "uno solo: va ese, que todavia puede moverse"),
@@ -210,11 +232,6 @@ print()
 print("=" * 76)
 print("7. UN BLANCO QUE CAMINA SE RECHAZA, Y ES LA LINEA MAS IMPORTANTE DEL ARCHIVO")
 print("=" * 76)
-# La orden lleva una COORDENADA, no un pixel, y por eso funciona con la camara sin ver nada en el
-# momento del click: la posicion sale de la capa de identidad, que nunca olvida un candidato. Pero
-# la posicion de quien camina envejece mientras el avion vuela, y esta capa se niega a extrapolar
-# un movil mas de extrapolation_max_s = 3 s. Un vuelo de decenas de segundos esta un orden de
-# magnitud afuera, asi que llegaria a fotografiar suelo vacio.
 m = protocolo()
 quieto = protocolo()
 print("  blanco quieto -> %s" % ("vuela" if quieto.rodear(0.0, 0.0, RADIO, ALTURA) else "rechazado"))
@@ -228,8 +245,6 @@ print()
 print("=" * 76)
 print("8. LA VUELTA COMPLETA AVANZA PUNTO A PUNTO Y TERMINA")
 print("=" * 76)
-# El lazo no es un controlador: el piloto automatico ya cierra el lazo de posicion contra su GPS.
-# Lo unico nuestro es "llegue? entonces el siguiente", y que la lista se TERMINE.
 o = protocolo()
 o.rodear(0.0, 0.0, RADIO, ALTURA, puntos=6)
 print("  puntos de la vuelta: %d   ordenes tras la primera: %d"
@@ -250,11 +265,9 @@ print()
 print("=" * 76)
 print("9. UN PUNTO AL QUE NO LLEGA NO CUELGA LA SECUENCIA")
 print("=" * 76)
-# Una aeronave aparcada contra un punto que no puede alcanzar, mientras el operador espera, es
-# peor que abandonar la vuelta y decirlo.
 z = protocolo()
 z.rodear(0.0, 0.0, RADIO, ALTURA, puntos=6)
-z._position = (999.0, 999.0, ALTURA)          # nunca llega
+z._position = (999.0, 999.0, ALTURA)
 z.provider.ahora = RODEO_PLAZO_S - 1.0
 z._llego_al_rodeo()
 print("  a %.0f s del plazo de %.0f s -> vuelta %s"
@@ -270,16 +283,10 @@ print()
 print("=" * 76)
 print("10. VOLAR Y VER SON DOS POSICIONES, Y EN EL BANCO NO SON LA MISMA")
 print("=" * 76)
-# Una placa sobre un escritorio lanza sus rayos desde la pose que tenia la GRABACION, porque ahi se
-# tomaron las fotos, y su propio piloto automatico falso reporta el escritorio. La maniobra es sobre
-# la aeronave, asi que pregunta por la posicion de VUELO. Sin esta separacion el dron recibe la
-# orden, el piloto falso lo camina hasta el punto, y nadie se entera de que llego.
 b = protocolo()
 b.rodear(0.0, 0.0, RADIO, ALTURA)
 destino = b._rodeo["ir_a"]
-# Donde MIRA se queda donde estaba la grabacion, lejos del destino.
 b._position = (0.0, -30.0, ALTURA)
-# Donde VUELA es lo que diria el piloto automatico: ya llego.
 b._posicion_para_vuelo = lambda: destino
 b._llego_al_rodeo()
 print("  mira desde (%.0f,%.0f) y vuela en (%.0f,%.0f) -> %d cuadro"
@@ -289,8 +296,8 @@ assert len(b._marcos) == 1,     "la llegada se mide con la posicion de VUELO, o 
 c = protocolo()
 c.rodear(0.0, 0.0, RADIO, ALTURA)
 d2 = c._rodeo["ir_a"]
-c._position = d2                      # donde mira coincide con el destino
-c._posicion_para_vuelo = lambda: (0.0, -30.0, ALTURA)   # pero todavia no llego
+c._position = d2
+c._posicion_para_vuelo = lambda: (0.0, -30.0, ALTURA)
 c._llego_al_rodeo()
 print("  el contraste: mira en el destino pero vuela lejos -> %d cuadros" % len(c._marcos))
 assert c._marcos == [],     "si se midiera con la posicion de la camara, una placa quieta creeria haber llegado siempre"

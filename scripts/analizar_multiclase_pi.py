@@ -55,7 +55,7 @@ r2 = 1 - np.sum((lat - A @ [a, b]) ** 2) / np.sum((lat - lat.mean()) ** 2)
 print("\nCOSTE POR HUELLA (regresion lat = a + b * embeddings, todos los frames)")
 print("  a = %.1f ms (frame sin cajas) | b = %.1f ms por embedding | R2 = %.2f" % (a, b, r2))
 print("  mediana de latencia por numero de embeddings en el frame:")
-for k in range(0, 7):
+for k in range(7):
     m = emb == k if k < 6 else emb >= 6
     if m.sum():
         print("    %s%d: %4d frames, %.1f ms" % (">=" if k == 6 else "  ", k, m.sum(), np.median(lat[m])))

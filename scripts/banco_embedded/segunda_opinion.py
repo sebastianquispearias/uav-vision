@@ -13,6 +13,16 @@ same person straddling two tiles comes back as two boxes otherwise.
 
 Needs the training venv, which has rfdetr:
     ../drone-geolocation/entrenamiento/venv/Scripts/python.exe scripts/banco_embedded/segunda_opinion.py --imagen f.jpg
+
+FIVE TILES: the whole frame plus its four quadrants, generously overlapped so nobody falls on a
+seam. It is the same set proponer_cajas.py uses, so what the ground sees here is what the
+offline proposals saw. RF-DETR keeps the COCO ids with background at 0, so 1 is person.
+
+STDOUT IS REDIRECTED ON PURPOSE. rfdetr and torch print their own progress on standard output,
+which would land in the middle of a protocol line and make the station read half a JSON object.
+The real stdout is duplicated onto a private descriptor and the number 1 is pointed at stderr,
+so anything anyone prints -- this module, the library, or the C code underneath it -- goes to
+the log, and only the answers go to the station.
 """
 import argparse
 import base64
@@ -20,12 +30,10 @@ import json
 import os
 import sys
 import time
-from typing import List, Optional, Sequence
+from typing import List, Sequence
 
 import numpy as np
 
-# Five tiles: the whole frame plus its four quadrants, generously overlapped so nobody falls on a seam.
-# The same set proponer_cajas.py uses, so what the ground sees here is what the offline proposals saw.
 FICHAS = ((0, 0, 1920, 1080), (0, 0, 1100, 640), (820, 0, 1920, 640),
           (0, 440, 1100, 1080), (820, 440, 1920, 1080))
 UMBRAL = 0.30
@@ -135,11 +143,6 @@ def servir(entrada=None, salida=None, umbral: float = UMBRAL) -> None:
 
     entrada = entrada or sys.stdin
     if salida is None:
-        # rfdetr and torch print their own progress on standard output, which would land in the
-        # middle of a protocol line and make the station read half a JSON object. The real stdout
-        # is duplicated onto a private descriptor and the number 1 is pointed at stderr, so
-        # anything anyone prints -- this module, the library, or C code underneath it -- goes to
-        # the log and only the answers go to the station.
         salida = os.fdopen(os.dup(1), "w", encoding="utf-8")
         os.dup2(2, 1)
         sys.stdout = sys.stderr
@@ -161,7 +164,7 @@ def servir(entrada=None, salida=None, umbral: float = UMBRAL) -> None:
                 dibujar(imagen, r["personas"], pedido["dibujar"])
                 r["dibujado"] = pedido["dibujar"]
             r["id"] = pedido.get("id")
-        except Exception as e:                      # noqa: BLE001 -- a bad line must not kill the worker
+        except Exception as e:
             r = {"id": (pedido.get("id") if isinstance(locals().get("pedido"), dict) else None),
                  "error": str(e), "personas": [], "n": 0}
         salida.write(json.dumps(r) + "\n")

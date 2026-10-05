@@ -91,11 +91,30 @@ Where each number comes from:
 The one thing this file cannot decide is the flight pattern, and it is the one that matters
 most: a pass of 20 s finds nothing, 45 s finds 17%, 60 s finds 47%. See
 drone-geolocation/docs/PLAN_VUELO_EVALUACION.md.
+
+WHAT IS SET HERE AND WHY
+    startup_pause_s stays OFF, and the measurement is why. Splitting the start-up into three
+    steps 4 s apart was tried against the battery failure of 2026-08-25: it moved the death from
+    opening the camera, at 3 s, to loading the detector, at 9 s, and did not stop it. EACH STEP
+    ALONE IS ENOUGH. Buying 8 s of mission time for nothing would only leave a knob that looks
+    like a fix.
+
+    Crops are on, because the crop is what makes a preliminary useful: the drone says "something
+    here, look at this", and RF-DETR on the ground rules. Measured on real flight boxes at
+    128 px and quality 70, that is a median 2.7 KB and a maximum 3.3 KB -- one small packet, not
+    a video stream, which is the constraint the whole architecture was built around.
+
+    see_period_s is THE TIMER THAT ACTUALLY DRIVES THE LOOP, and it is set explicitly. Left
+    unset it defaults to 4 Hz, which is how the fps quietly meant nothing: a config could ask
+    for 3 and get 4, or, before the scheduler was fixed, ask for 3 and get 2.31.
+
+    The identity layer's fps must match the camera's EXACTLY. It is the number every maturity
+    threshold is scaled by, and the two drifting apart is how "36 s" quietly stops meaning 36 s.
 """
 
 from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
-from uav_vision.vision_protocol import VisionProtocol, UavApiYaw
+from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
 
 ProtocoloBarridoLAC = VisionProtocol.with_config(
     camera=OnboardCamera(
@@ -104,27 +123,13 @@ ProtocoloBarridoLAC = VisionProtocol.with_config(
         tracker=True,
         reid_model="/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt",
         fps=3.0,
-        # startup_pause_s stays OFF, and the measurement is why. Splitting the start-up into
-        # three steps 4 s apart was tried on 2026-08-25 against the battery failure: it moved the
-        # death from opening the camera (3 s) to loading the detector (9 s) and did not stop
-        # it. Each step alone is enough. Buying 8 s of mission time for nothing would only
-        # leave a knob that looks like a fix.
-        # The crop is what makes a preliminary useful: the drone says "something here, look at
-        # this", and RF-DETR on the ground rules. Measured on real flight boxes at 128 px and
-        # quality 70: median 2.7 KB, max 3.3 KB -- one small packet, not a video stream, which
-        # is the constraint the whole architecture was built around.
         crops=True,
     ),
     pitch_deg=-55.0,
-    # The timer that actually drives the loop. Left unset it defaults to 0.25 s (4 Hz), which
-    # is how the fps above quietly meant nothing: a config could ask for 3 and get 4, or --
-    # before the scheduler was fixed -- ask for 3 and get 2.31. Set it, and set it to match.
     see_period_s=1.0 / 3.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
     identity=IncrementalIdentity(
         fusion_radius_m=3.5,
-        # Must match the camera's fps exactly: this is the number every maturity threshold is
-        # scaled by, and the two drifting apart is how "36 s" quietly stops meaning 36 s.
         fps=3.0,
         report_dur_s=36.0,
     ),

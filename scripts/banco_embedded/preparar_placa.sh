@@ -18,6 +18,21 @@
 #   ~/gradys_protocols      the mission module
 #   ~/uav_api_stub.py       the fake autopilot THAT SIMULATES MOVEMENT. uav_api_falso.py may not,
 #                           and then a drone sent to look from another side never arrives.
+#
+# WHAT TRAVELS AND WHAT DELIBERATELY DOES NOT
+#
+# Both missions: the one that replays the recording and the one that uses the real camera. Which
+# of the two runs is chosen when the mission is loaded, not when the board is provisioned, and a
+# board that only has one of them cannot be switched without another transfer.
+# mision_barrido.py IS THE FLIGHT ONE, and it was missing from this list: one board held a copy
+# put there by hand on a date nobody remembers and the other did not have it at all. A board that
+# cannot load the flight mission is not discovered while provisioning, it is discovered in the
+# field, with the drone in your hand.
+#
+# THE MODELS DO NOT TRAVEL HERE: they are large and they live on the board. But their absence is
+# not noticed while provisioning, it is noticed when the mission fails to start, and that error
+# does not name the file. One board turned out not to have the appearance model at all, and it
+# had to be copied across by hand.
 set -eu
 PI="$1"
 AQUI="$(cd "$(dirname "$0")" && pwd)"
@@ -31,13 +46,6 @@ echo "== preparando $PI desde $RAIZ"
 mkdir -p "$STAGE/banco/datos" "$STAGE/gradys-embedded" "$STAGE/gradys_protocols"
 cp -r "$RAIZ/uav_vision" "$STAGE/banco/"
 cp -r "$LAC/gradys-embedded/gradys_embedded" "$STAGE/gradys-embedded/"
-# Both missions: the one that replays the recording and the one that uses the real camera. Which
-# of the two runs is chosen when the mission is loaded, not when the board is provisioned, and a
-# board that only has one of them cannot be switched without another transfer.
-# mision_barrido.py es LA DE VUELO y hasta el 3oct no estaba en esta lista: la Pi 5 tenia una
-# copia puesta a mano en una fecha que nadie recuerda y la Pi 4 no la tenia en absoluto. Una
-# placa que no puede cargar la mision del vuelo no se descubre al provisionar, se descubre en el
-# campo, con el dron en la mano.
 for m in mision_banco_dos_drones.py mision_vision.py mision_vision_2fps.py mision_banco_lab.py          mision_barrido.py mision_banco_barrido.py; do
     [ -f "$AQUI/$m" ] && cp "$AQUI/$m" "$STAGE/gradys_protocols/"
 done
@@ -52,9 +60,6 @@ echo "-- $(du -sh "$STAGE" | cut -f1) a enviar en una sola conexion"
 
 tar -czf - -C "$STAGE" . | ssh "$PI" 'tar -xzf - -C ~ && echo "   recibido"'
 
-# Los modelos NO viajan aqui: pesan y viven en la placa. Pero su ausencia no se nota al
-# provisionar, se nota cuando la mision no arranca, y el error de entonces no nombra el archivo.
-# El 3oct la Pi 4 no tenia el de apariencia y hubo que copiarlo a mano desde la Pi 5.
 echo "-- comprobando los modelos que la placa ya tiene que tener"
 ssh -n "$PI" 'falta=0
 for m in /home/pi/yolov8n_ncnn_model /home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt          /home/pi/modelos_visdrone/y960_ncnn_model; do

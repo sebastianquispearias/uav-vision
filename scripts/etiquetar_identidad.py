@@ -48,11 +48,7 @@ SALIDA = os.path.join(LAC, "drone-geolocation", "entrenamiento", "identidad_gt_0
 CONF_MIN = 0.25
 IOU_MIN = 0.3
 SALTO_MAX_S = 1.0
-# Two boxes of one letter in the same frame overlapping this much are the detector boxing one
-# person twice, which is correct to label alike. Below it, one of the two letters is wrong.
 DUPLICADO_IOU = 0.5
-# Ground distance a person does not cover between two processed frames less than a second apart.
-# Not proof of an error -- a person on a terrace projects badly onto the ground -- a reason to look.
 SALTO_SOSPECHOSO_M = 5.0
 NO_PERSONA = {"X", "x", "?"}
 UNA_LETRA = re.compile(r"^[A-Z]$")
@@ -179,7 +175,8 @@ def main():
     dets = dets_all[dets_all[:, 1] >= CONF_MIN]
     poses = {int(r["frame"]): float(r["t_mono"]) for r in
              csv.DictReader(open(os.path.join(DATOS, "frames.csv")))}
-    t_de = lambda f: poses.get(f, 0.0)
+    def t_de(f):
+        return poses.get(f, 0.0)
     grupos = segmentos(dets, t_de)
     catalogo = [{"id": k, "t": t_de(int(dets[g[0]][0])),
                  "dets": [{"i": int(i), "frame": int(dets[i][0]), "conf": round(float(dets[i][1]), 2)}

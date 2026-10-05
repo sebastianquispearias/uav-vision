@@ -15,6 +15,11 @@ so the rule is visible in the numbers rather than asserted in a comment.
 
 Run with: python tests/test_clases.py
 Needs gradys-embedded importable for section 5; the sys.path fallback picks up the sibling clone.
+
+Each scene is built with known ground truth: the projection noise is in metres, the thing is on
+the ground and the drone hovers a known distance from it. One case has the detector say 'van'
+on a handful of frames out of hundreds, to check the class vote rather than the latest label,
+and one has no appearance vector at all so that distance alone decides.
 """
 import json
 import math
@@ -33,7 +38,7 @@ from uav_vision.identity import IncrementalIdentity, radii_by_class
 
 RNG = np.random.default_rng(11)
 FPS = 5.0
-SIGMA = 0.3          # ground projection noise, m
+SIGMA = 0.3
 
 
 def emb_de(base):
@@ -58,7 +63,6 @@ print("1. LA CLASE VIAJA, Y ES UN VOTO: una etiqueta suelta no renombra la pista
 print("=" * 70)
 ident = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
 for f in range(200):
-    # the detector says 'van' on three frames out of two hundred
     ident.observe(f, 1, np.array([4.0, 1.0]) + ruido(), 0.8,
                   cls="van" if f % 67 == 0 else "car")
 c = ident.candidates()
@@ -77,7 +81,7 @@ E = emb_de(3)
 def dos_pistas(cls_a, cls_b):
     """Two tracks at the same point, never seen together, alike in appearance."""
     id2 = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS)
-    poblar(id2, 10, MISMO, range(0, 200), cls_a, E)
+    poblar(id2, 10, MISMO, range(200), cls_a, E)
     poblar(id2, 11, MISMO, range(200, 400), cls_b, E)
     return id2.candidates()
 
@@ -110,7 +114,7 @@ print("=" * 70)
 def dos_coches(radios):
     id3 = IncrementalIdentity(fusion_radius_m=3.5, fps=FPS,
                               fusion_radius_by_class=radios)
-    poblar(id3, 20, (0.0, 0.0), range(0, 200), "car")     # sin emb: decide la distancia
+    poblar(id3, 20, (0.0, 0.0), range(200), "car")
     poblar(id3, 21, (3.0, 0.0), range(200, 400), "car")
     return id3.candidates()
 
@@ -168,8 +172,8 @@ class FakeProvider:
             protocol.handle_timer(name)
 
 
-ALVO = (0.0, 0.0, 0.0)       # the thing on the ground
-DRON = (0.0, -20.0, 35.0)    # hovering 20 m south of it
+ALVO = (0.0, 0.0, 0.0)
+DRON = (0.0, -20.0, 35.0)
 PITCH = -55.0
 
 
@@ -182,7 +186,7 @@ def volar(cls):
     provider = FakeProvider()
     protocol = Protocolo.instantiate(provider)
     protocol.initialize()
-    for paso in range(1, 41):                       # 10 s at 4 Hz
+    for paso in range(1, 41):
         provider.time = paso * 0.25
         protocol.handle_telemetry(Telemetry(current_position=DRON))
         provider.fire_due(protocol)

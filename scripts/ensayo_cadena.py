@@ -18,6 +18,15 @@ expected outcome is a stable track_id and one dominant candidate.
 Desk geometry is stated, not simulated: the camera position/yaw passed to the
 projection are fixed placeholders. Accuracy is NOT under test here (no GPS, no
 flight geometry); only the wiring and the compute cost are.
+
+The telemetry is a desk-mount stand-in for the real thing: the camera about 1.2 m high, pointing
+north, tilted slightly down. Impacts are only meaningful relative to each other, which is all
+the identity layer needs.
+
+The maturation thresholds are short on purpose, so one 60 s phase can produce a reported
+candidate; the flight values live in the protocol, not here. The first call to the camera
+includes the camera start and the model load, and the sensor pipeline is given a moment to
+release cleanly between phases.
 """
 
 import argparse
@@ -34,9 +43,6 @@ from uav_vision.pinhole_local import pixel_to_ray
 MODELO = "/home/pi/modelos_visdrone/best_ncnn_model"
 OSNET = "/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt"
 
-# Desk-mount stand-in for the flight telemetry: camera ~1.2 m high, pointing
-# north, tilted slightly down. Impacts are only meaningful relative to each
-# other, which is all the identity layer needs.
 POS = (0.0, 0.0, 1.2)
 YAW = 0.0
 PITCH = -20.0
@@ -96,14 +102,12 @@ def fase(nombre, dur_s, tracker, reid, fps_esperado, modelo):
     )
     identity = None
     if tracker:
-        # Short maturation thresholds so one 60 s phase can produce a reported
-        # candidate; the flight values live in the protocol, not here.
         identity = IncrementalIdentity(
             fusion_radius_m=0.6, fps=fps_esperado,
             track_dur_s=4.0, mobile_dur_s=15.0, report_dur_s=20.0)
 
     t_arranque = time.time()
-    cam.detect(POS, YAW)  # first call: camera start + model load
+    cam.detect(POS, YAW)
     print(f"arranque (camera + modelos): {time.time() - t_arranque:.1f} s", flush=True)
 
     lat, n_det, con_tid, tids = [], 0, 0, set()
@@ -159,7 +163,7 @@ def fase(nombre, dur_s, tracker, reid, fps_esperado, modelo):
                   f"n_obs={c['n_obs']} conf={c['conf']:.2f}", flush=True)
 
     cam.close()
-    time.sleep(3)  # let the sensor pipeline release cleanly between phases
+    time.sleep(3)
     return resumen
 
 

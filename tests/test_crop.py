@@ -11,6 +11,18 @@ comes out the far end, in the message, decodable. A test on the storage would ha
 happily all along while the field saw nothing.
 
 Run with: python tests/test_crop.py
+
+WHAT EACH SECTION PROVES
+    1. The identity layer. Two tracks on the same spot is exactly the case that matters, because
+       the tracker breaks a track and renumbers it all the time, and the two halves carry
+       photographs of different quality. A track with no crop must not invent one, and must not
+       crash on the comparison either.
+    2. The message. With nothing in frame the drone must STILL SPEAK, and with something in
+       frame the crop travels. The whole architecture was sized around this staying a packet
+       and not a video stream, which the size check pins.
+    3. The coordinate frame. The bench provider has no origin, like every desk run ever done.
+       The empty beat carries the frame too, so the ground station learns it BEFORE the first
+       find, which is the only order that works: a sweep may report nothing for minutes.
 """
 import base64
 import json
@@ -24,12 +36,11 @@ if os.path.isdir(_GRADYS):
     sys.path.insert(0, _GRADYS)
 
 import numpy as np
+from test_vision_protocol import FakeProvider
 
 from uav_vision.camera_config import ARDUCAM_MODULE_3
 from uav_vision.identity import IncrementalIdentity
 from uav_vision.vision_protocol import VisionProtocol
-
-from test_vision_protocol import FakeProvider  # noqa: E402  (same directory)
 
 FALLOS = []
 
@@ -41,7 +52,6 @@ def revisar(condicion, descripcion, detalle=""):
         FALLOS.append(descripcion)
 
 
-# ============================================================ 1. la identity
 print("=" * 64)
 print("1. El crop sobrevive la fusion, y gana el de la vista mas clara")
 print("=" * 64)
@@ -49,8 +59,6 @@ print("=" * 64)
 BORROSO, NITIDO = b"\xff\xd8jpeg-borroso", b"\xff\xd8jpeg-nitido"
 
 ident = IncrementalIdentity(fusion_radius_m=3.5, fps=4.0)
-# Two tracks on the same spot: BoT-SORT breaks a track and renumbers it all the time, which
-# is exactly the case where the two halves carry different-quality photographs.
 for f in range(80):
     ident.observe(frame=f, track_id=1, ground_xy=(10.0, 5.0), conf=0.40, crop=BORROSO)
 for f in range(80, 160):
@@ -65,7 +73,6 @@ if cands:
             "sobrevive el crop de la deteccion mas confiada",
             "conf 0.91 gana a 0.40")
 
-# A track with no crop must not invent one, and must not crash on the comparison.
 ident_sin = IncrementalIdentity(fusion_radius_m=3.5, fps=4.0)
 for f in range(80):
     ident_sin.observe(frame=f, track_id=1, ground_xy=(1.0, 1.0), conf=0.8)
@@ -74,7 +81,6 @@ revisar(bool(sin) and sin[0].get("crop") is None,
         "sin crop el campo viaja como None, sin romper nada")
 
 
-# ============================================================= 2. el mensaje
 print()
 print("=" * 64)
 print("2. El crop llega al mensaje, y el silencio se convierte en latido")
@@ -115,7 +121,6 @@ def correr(camera, segundos, report_preliminary=True):
     return [json.loads(c.message) for c in provider.sent]
 
 
-# -- nothing in frame: the drone must still speak --------------------------
 vacia = CamaraDeMentira()
 mensajes = correr(vacia, 12.0)
 revisar(len(mensajes) > 0, "con la camera vacia igual se emiten mensajes",
@@ -125,7 +130,6 @@ revisar(bool(mensajes) and all(m.get("latido") for m in mensajes),
 revisar(bool(mensajes) and all(m.get("pois") == [] for m in mensajes),
         "el latido no inventa POIs")
 
-# -- something in frame, carrying a crop -----------------------------------
 vista = CamaraDeMentira()
 vista.detecciones = [{
     "px": ARDUCAM_MODULE_3.image_width / 2.0,
@@ -152,18 +156,15 @@ if con_pois:
         vuelta = None
         print("      no decodifica:", exc)
     revisar(vuelta == RECORTE, "decodifica byte a byte al JPEG original")
-    # The whole architecture was sized around this staying a packet, not a video stream.
     revisar(len(json.dumps(con_pois[-1])) < 64_000,
             "el mensaje entero sigue siendo chico",
             "%d bytes" % len(json.dumps(con_pois[-1])))
 
-# ================================================== 3. el marco de coordenadas
 print()
 print("=" * 64)
 print("3. El dron declara el marco en que estan medidos sus metros")
 print("=" * 64)
 
-# The bench provider has no origin -- like every desk run ever done.
 revisar(bool(mensajes) and "origen_gps" in mensajes[-1],
         "el campo viaja siempre, tambien cuando no hay origen")
 revisar(bool(mensajes) and mensajes[-1].get("origen_gps") is None,
@@ -200,8 +201,6 @@ if con_marco:
             repr(og))
     revisar(all(isinstance(v, float) for v in (og or [])),
             "y como float, no como tupla ni string")
-# The beat carries it too: the ground station learns the frame before the first find,
-# which is the only order that works -- a sweep may report nothing for minutes.
 revisar(bool(con_marco) and con_marco[0].get("latido") is True
         and con_marco[0].get("origen_gps") is not None,
         "el LATIDO ya lo lleva: la GS sabe el marco antes del primer hallazgo")

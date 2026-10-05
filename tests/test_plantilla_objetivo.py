@@ -18,6 +18,28 @@ The first section below is that contrast, and it would pass trivially if the gat
 position.
 
 Run with: python tests/test_plantilla_objetivo.py
+
+The two thresholds in play are the reporting one, as it flies, and the BYTE band floor, below
+which the detector returns nothing at all.
+
+WHAT EACH SECTION PROVES
+    The window sits far from every doubted box, so what keeps a box has to be its APPEARANCE and
+    cannot be its position. The same window with no template keeps nothing.
+
+    The same box at three distances: if the number were decoration, the three rows would agree.
+
+    The gate is OFF unless a caller asks for it, and the check is that the list is THE SAME, not
+    almost the same.
+
+    The station does not compute the template: it hands back the embedding it already received,
+    which travels as base64 of float16 to keep the field small. If the round trip changed the
+    decision, the operator's click would mean one thing on the drone and another on the ground.
+
+    The click has the precision of a finger on a map, so the station has to decide which
+    candidate was meant. Reaching too far would hand the drone the appearance of somebody
+    standing NEXT to the person pointed at, which is the one mistake that turns this feature
+    into a target swap. The cases cover two different appearances as they arrive, already
+    encoded, and a candidate with no appearance at all.
 """
 import os
 import sys
@@ -25,18 +47,16 @@ import sys
 AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
-# gradys-embedded vive al lado de este repositorio, como en el resto de la suite.
 sys.path.insert(0, os.path.join(os.path.dirname(RAIZ), "gradys-embedded"))
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from uav_vision.camera import (EMB_DIST_OBJETIVO, OnboardCamera,  # noqa: E402
-                               solo_confirmadas)
-from uav_vision.vision_protocol import VisionProtocol  # noqa: E402
+from uav_vision.camera import EMB_DIST_OBJETIVO, OnboardCamera, solo_confirmadas
+from uav_vision.vision_protocol import VisionProtocol
 
 RNG = np.random.default_rng(11)
-UMBRAL = 0.25          # the reporting threshold, as it flies
-BANDA = 0.10           # the BYTE band floor: below this the detector returns nothing
+UMBRAL = 0.25
+BANDA = 0.10
 
 
 class CamaraDeFoco:
@@ -72,7 +92,6 @@ def caja(px, conf, emb=None):
 
 
 PLANTILLA = unitario(7)
-# The window sits at x=1000; every doubted box below is at x=100, far outside it.
 FOCO_LEJOS = 1000.0
 X_LEJOS = 100.0
 
@@ -90,7 +109,7 @@ lista = [parecida, distinta, firme]
 
 con = solo_confirmadas(lista, UMBRAL, cam.foco)
 cam_sin = CamaraDeFoco()
-cam_sin.set_focus(FOCO_LEJOS, 500.0, radio_px=320.0, umbral=BANDA)   # same window, no template
+cam_sin.set_focus(FOCO_LEJOS, 500.0, radio_px=320.0, umbral=BANDA)
 sin = solo_confirmadas(lista, UMBRAL, cam_sin.foco)
 for nom, c in (("dudosa que SE PARECE  (d=0.30)", parecida),
                ("dudosa que NO se parece (d=1.30)", distinta),
@@ -108,7 +127,6 @@ print()
 print("=" * 70)
 print("2. LA DISTANCIA ES UNA DECISION, Y SE VE QUE DECIDE")
 print("=" * 70)
-# The same box, three distances. If the number were decoration the three rows would agree.
 for tope in (1.40, EMB_DIST_OBJETIVO, 0.20):
     c = CamaraDeFoco()
     c.set_focus(FOCO_LEJOS, 500.0, radio_px=320.0, umbral=BANDA,
@@ -128,7 +146,6 @@ print()
 print("=" * 70)
 print("3. SIN PLANTILLA, EL COMPORTAMIENTO ES EL DE ANTES, CAJA POR CAJA")
 print("=" * 70)
-# The gate is off unless a caller asks for it. Not "almost the same": the same list.
 mezcla = [caja(X_LEJOS, 0.14, a_distancia(PLANTILLA, 0.10)),
           caja(FOCO_LEJOS, 0.14, a_distancia(PLANTILLA, 0.10)),
           caja(X_LEJOS, 0.05, a_distancia(PLANTILLA, 0.10)),
@@ -145,11 +162,7 @@ print()
 print("=" * 70)
 print("4. LA PLANTILLA SOBREVIVE EL VIAJE: base64 de float16, ida y vuelta")
 print("=" * 70)
-# The station does not compute the template, it hands back the embedding it already received,
-# which travels as base64 of float16 to keep the field at 1.4 kB instead of 2.7. If the round
-# trip changed the decision, the operator's click would mean one thing on the drone and another
-# on the ground.
-import base64  # noqa: E402
+import base64
 
 empaquetada = base64.b64encode(
     np.asarray(PLANTILLA, dtype=np.float16).tobytes()).decode("ascii")
@@ -175,16 +188,13 @@ print()
 print("=" * 70)
 print("5. LA ESTACION ELIGE DE QUIEN ES LA PLANTILLA: EL CANDIDATO MAS CERCANO AL CLICK")
 print("=" * 70)
-# The click has the precision of a finger on a map, so the station has to decide which candidate
-# was meant. Reaching too far would hand the drone the appearance of somebody standing next to
-# the person pointed at, which is the one mistake that turns this feature into a target swap.
 sys.path.insert(0, os.path.join(RAIZ, "scripts", "banco_embedded"))
-import gs_mapa  # noqa: E402
+import gs_mapa
 
-A, B = "AAAA", "BBBB"          # two different appearances, as they arrive: already encoded
+A, B = "AAAA", "BBBB"
 vigentes = [{"x": 0.0, "y": 0.0, "emb": A},
             {"x": 10.0, "y": 0.0, "emb": B},
-            {"x": 0.5, "y": 20.0, "emb": None}]      # a candidate with no appearance at all
+            {"x": 0.5, "y": 20.0, "emb": None}]
 casos = [((0.4, 0.0), A, "sobre el primero"),
          ((9.0, 0.0), B, "mas cerca del segundo"),
          ((5.0, 0.0), None, "a cinco metros de los dos: nadie"),

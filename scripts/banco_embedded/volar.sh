@@ -4,10 +4,11 @@
 #
 #   bash scripts/banco_embedded/volar.sh auto pi@rpanion.local pi@drone4.local
 #
-# "auto" averigua la direccion de la estacion preguntandosela a la primera placa, y los
-# nombres .local funcionan en cualquier red. Con esos dos, la orden del dia de vuelo se
-# escribe IGUAL con cable y con hotspot, que es lo unico que hace que se pueda memorizar.
-# Tambien acepta todo a mano:
+# "auto" works out the station's address by asking the first board, and the .local names work on
+# any network. Those two together are what make the flight-day command IDENTICAL with a cable
+# and with the hotspot, which is the only thing that makes it memorable. Everything can also be
+# given by hand:
+#
 #   bash scripts/banco_embedded/volar.sh 192.168.1.121:8300 pi@192.168.1.125 pi@192.168.1.126
 #
 # From PowerShell, which is where this is actually typed, the wrapper beside it does the same:
@@ -32,12 +33,51 @@
 #   yet, which is exactly the wrong conclusion to reach while deciding whether to take off. So
 #   the check at the end asks /estado how long ago each drone last spoke, which is the number
 #   that means health.
+#
+# FRESCO_S is how long a drone may go without speaking before this refuses to call it ready. The
+# report period is 2 s, so ten seconds is four misses: late enough not to trip on one lost
+# packet, early enough that nobody walks to the field with a dead board.
+#
+# NOTHING STARTS until every argument looks like a board. What is demanded is the user@ and not a
+# numeric address: without a cable the hotspot hands out the IPs and they change every time,
+# while the names do not. Both boards run avahi, so rpanion.local and drone4.local work on any
+# network and are the only way to have a command that is typed the same way every day. The user@
+# is also the filter that matters: a line pasted twice brings filenames and bare addresses along,
+# and none of those carries an at sign.
+#
+# THE STATION'S ADDRESS can be given, or asked for with "auto". Without a cable the hotspot hands
+# it out and it changes every time, so typing it by hand is the part of the command that gets
+# typed wrong on exactly the day it matters. It is worked out by asking the BOARD, which is who
+# has the correct answer by definition: SSH_CLIENT carries the address this connection arrived
+# from, which is the laptop as seen from the network the two share. A laptop with Wi-Fi and
+# Ethernet at once has several addresses and only one of them is any use; this is always that
+# one, with no guessing about interfaces. The -4 is deliberate: without it ssh may negotiate
+# IPv6 and SSH_CLIENT returns a link-local address, which is correct and no use at all for
+# building a URL or for letting the other board reach the station. Measured over the cable on
+# 2026-10-03.
+#
+# THE FIVE STEPS, and why each is where it is:
+#
+#   1. That they answer at all, before spending four minutes finding out one of them does not.
+#      VOLAR_SIN_PING is a seam for the test, like SSH: the gate runs this whole script against
+#      addresses that do not exist, and a real ping would be slow and would fail for reasons
+#      nobody is testing.
+#   2. The code, every time, because it does not travel on its own and because a board with the
+#      new file and the old module in memory is the most expensive failure this bench has
+#      produced.
+#   3. The station, reusing whichever one is alive: two can hold the same port without
+#      complaining, and the one that answers need not be the one just opened.
+#   4. The aircraft, all PREPARED first and STARTED together, which is the only thing that makes
+#      their clocks and their replays talk about the same instant. The sentinel "-" is passed
+#      rather than an empty string, because an empty argument does NOT survive ssh: ssh joins the
+#      command and lets the board parse it again. The same goes for spaces.
+#   5. And the only question that matters: are they reporting? The station's log is no use for
+#      this, since it only prints the reports that carry a find, so a healthy drone that has not
+#      seen anybody yet reads as a dead one. /estado says how long ago each one spoke, which is
+#      what health means.
 set -u
 SSH="${SSH:-ssh}"
 MISION="${VOLAR_MISION:-mision_barrido:ProtocoloBarridoLAC}"
-# Seconds a drone may go without speaking before this refuses to call it ready. Its report period
-# is 2 s, so ten is four misses: late enough not to trip on one lost packet, early enough that
-# nobody walks to the field with a dead board.
 FRESCO_S="${VOLAR_FRESCO_S:-10}"
 SALTAR_PREPARAR="${VOLAR_SIN_PREPARAR:-0}"
 
@@ -50,12 +90,6 @@ PIS=("$@")
 AQUI="$(cd "$(dirname "$0")" && pwd)"
 RAIZ="$(cd "$AQUI/../.." && pwd)"
 
-# Nada arranca hasta que cada argumento parezca una placa. Lo que se exige es el usuario@ y no una
-# direccion numerica: SIN CABLE las IP las reparte el hotspot y cambian cada vez, mientras que los
-# nombres no. Las dos placas corren avahi, asi que rpanion.local y drone4.local funcionan en
-# cualquier red y son la unica forma de tener una orden que se escriba igual todos los dias.
-# El usuario@ es ademas el filtro que importa: una linea pegada dos veces trae nombres de archivo
-# y direcciones sueltas, y ninguno lleva arroba.
 for host in "${PIS[@]}"; do
     case "$host" in
         *@*) ;;
@@ -74,21 +108,10 @@ if [ "$(printf '%s\n' "${PIS[@]}" | sort | uniq -d | wc -l)" -gt 0 ]; then
     exit 1
 fi
 
-# La direccion de la estacion puede venir dada, o pedirse con "auto". Sin cable la reparte el
-# hotspot y cambia cada vez, asi que escribirla a mano es la parte de la orden que se escribe mal
-# justo el dia que importa.
-#
-# Se averigua preguntandole a la PLACA, que es quien tiene la respuesta correcta por definicion:
-# SSH_CLIENT trae la IP desde la que llego esta conexion, o sea la de la laptop vista desde la red
-# que las dos comparten. Una laptop con Wi-Fi y Ethernet a la vez tiene varias IP y solo una sirve;
-# esta es siempre esa, sin adivinar interfaces.
 if [ "${EST%%:*}" = "auto" ] || [ "$EST" = "auto" ]; then
     PUERTO_PEDIDO="8300"
     case "$EST" in auto:*) PUERTO_PEDIDO="${EST#auto:}" ;; esac
     echo "-- 0/5 averiguando con que direccion me ve la primera placa"
-    # -4 a proposito: sin el, ssh puede negociar IPv6 y SSH_CLIENT devuelve una direccion
-    # link-local como fe80::7521:dd77:1bc1:6e38%eth0, que es correcta y no sirve para construir
-    # una URL ni para que la otra placa alcance la estacion. Medido el 3oct sobre el cable.
     MIA="$($SSH -4 -n -o ConnectTimeout=15 "${PIS[0]}" 'echo $SSH_CLIENT' 2>/dev/null | awk '{print $1}')"
     case "$MIA" in
         *[!0-9.]*|"") echo "NO ARRANCO: ${PIS[0]} no supo decirme mi direccion (dijo '$MIA')."
@@ -104,9 +127,6 @@ echo "VOLAR   ${#PIS[@]} aeronaves   estacion $EST"
 echo "  mision: $MISION"
 echo "=============================================================="
 
-# 1. Que esten vivas, antes de gastar cuatro minutos en descubrir que una no lo esta.
-# Costura para la prueba, igual que SSH: el gate corre este guion entero contra direcciones que
-# no existen, y un ping de verdad tardaria y fallaria por motivos que no se estan probando.
 echo "-- 1/5 las placas contestan?"
 falta=0
 if [ "${VOLAR_SIN_PING:-0}" = 1 ]; then
@@ -127,8 +147,6 @@ if [ "$falta" = 1 ]; then
     exit 1
 fi
 
-# 2. El codigo. Cada vez, porque no viaja solo y porque una placa con el archivo nuevo y el
-#    modulo viejo en memoria es el fallo mas caro de diagnosticar que dio este banco.
 if [ "$SALTAR_PREPARAR" = 1 ]; then
     echo "-- 2/5 provision SALTADA por VOLAR_SIN_PREPARAR=1"
 else
@@ -139,8 +157,6 @@ else
     done
 fi
 
-# 3. La estacion. Se reusa la que haya viva: dos pueden tomar el mismo puerto sin quejarse, y la
-#    que contesta no tiene por que ser la recien abierta.
 PUERTO="${EST##*:}"
 echo "-- 3/5 la estacion en $PUERTO"
 if curl -s -m 3 -o /dev/null "http://127.0.0.1:$PUERTO/estado"; then
@@ -161,8 +177,6 @@ else
     echo "   responde tras ${i}s   (--nodos $NODOS)"
 fi
 
-# 4. Las aeronaves. Preparadas todas primero y arrancadas juntas, que es lo unico que hace que
-#    sus relojes y sus reproducciones hablen del mismo instante.
 DIRS=()
 for host in "${PIS[@]}"; do DIRS+=("${host#*@}:8200"); done
 DIRS+=("$EST")
@@ -171,8 +185,6 @@ echo "-- 4/5 cargando la mision en cada aeronave"
 AHORA="$(date -u '+%Y-%m-%d %H:%M:%S')"
 for i in "${!PIS[@]}"; do
     $SSH -n "${PIS[$i]}" "sudo date -u -s '$AHORA' >/dev/null" 2>/dev/null || true
-    # El centinela "-" y no una cadena vacia: un argumento vacio NO sobrevive a ssh, que une la
-    # orden y deja que la placa la vuelva a parsear. Lo mismo con los espacios.
     $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" 0 "$MISION" "-" "${DIRS[@]}" \
         < "$AQUI/lanzar_banco_nodo.sh" 2>&1 | sed -n 's/^/   /p' | grep -aE "setup:|FALLO|entorno" \
         || { echo "   FALLO cargando en ${PIS[$i]}"; exit 1; }
@@ -184,9 +196,6 @@ for host in "${PIS[@]}"; do
 done
 wait
 
-# 5. Y la unica pregunta que importa: reportan? El log de la estacion NO sirve para esto: solo
-#    imprime los reportes que traen un hallazgo, asi que un dron sano que todavia no vio a nadie
-#    se lee como un dron muerto. /estado dice hace cuanto hablo cada uno, que es la salud.
 echo "-- 5/5 comprobando que cada aeronave reporta"
 listo=0
 for intento in $(seq 1 24); do

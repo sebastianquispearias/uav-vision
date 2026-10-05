@@ -36,15 +36,6 @@ VUELOS = {
     "02ago_huecos": ("20260802_133309", os.path.join("data", "flight_02ago", "20260802_133309", "frames")),
     "14jun": ("20260614_225918", os.path.join("data", "flight_14jun", "20260614_225918", "frames")),
 }
-# Split by day: the test is the only flight with the drone high, which is where the detector fails most.
-# 02ago_alto are frames 9315-9865 of the test flight, ten minutes after the test windows and 25 m up:
-# the only material at the height where the detector fails. Training on it makes the test score optimistic,
-# because it shares the day, the place and the people with the test; that has to be said with every number.
-# 02ago_huecos are the frames BETWEEN the test windows, two and eleven frames away from them. They are
-# the test's own minute, so they go to the test and never to training: labelling them was for measuring,
-# so that a candidate living there could be judged instead of counted as unknown.
-# 14jun brings the variety the others lack -- a second person, in 97 of its frames -- but at 204 px per
-# person it is the largest scale in the set, so it feeds variety of PEOPLE and not of scale.
 REPARTO = {"26jul": "train", "02ago_alto": "train", "14jun": "train",
            "01ago_2a": "val", "01ago_2b": "val", "02ago": "test", "02ago_huecos": "test"}
 _RAIZ = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "drone-geolocation"))
@@ -56,7 +47,8 @@ def etiqueta_nueva(c):
 
 def cajas_del_frame(filas, g, rev, f, por_frame):
     """The boxes of frame f as the review left them: the people, and the ones to paint over."""
-    final = lambda i: rev["correcciones"].get(str(i), g.get(str(i)))
+    def final(i):
+        return rev["correcciones"].get(str(i), g.get(str(i)))
     ajustes = rev.get("ajustes", {})
     personas, ignorar = [], []
     for i in por_frame.get(f, []):

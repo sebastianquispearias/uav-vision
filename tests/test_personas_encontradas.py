@@ -11,6 +11,19 @@ codigo: el que habia en un scratchpad era anterior al arreglo de moviles del 16s
 candidatos donde el codigo de hoy da 15.
 
 Run: python tests/test_personas_encontradas.py
+
+D and E have a handful of boxes in the whole flight: the evidence threshold discards them ON
+PURPOSE, which is why they are not found even when the chain is fed perfect boxes, as the oracle
+experiment showed.
+
+THE CONTRAST THAT MAKES THIS FILE WORTH HAVING: a scoreboard that returned "5 of 7" by
+construction would prove nothing, so a run that comes out DIFFERENT is needed. That run is the
+one that flew before camera-motion compensation was turned on: the same detector, the same
+boxes, and the only difference is that the tracker did not compensate for camera motion, so far
+fewer boxes receive an id and evidence that never reaches the identity layer forms no candidate.
+
+What has to be looked at is that the map WITHOUT compensation looks CLEANER and has TWO PEOPLE
+FEWER. Judged by phantoms alone, the old version wins. NOTES.md has the counts.
 """
 import contextlib
 import io
@@ -32,12 +45,11 @@ PISTAS = os.path.join(DATOS, "pistas_bot_cmc_sof.npz")
 _tmp = tempfile.mkdtemp()
 CAND = os.path.join(_tmp, "candidatos.json")
 
-# ---------------------------------------------------------------- el vuelo, con el codigo de hoy
 sys.argv = [REPLAY, "--pistas=" + PISTAS, "--candidatos=" + CAND]
 with contextlib.redirect_stdout(io.StringIO()):
     runpy.run_path(REPLAY, run_name="__main__")
 
-import personas_encontradas as P  # noqa: E402  (despues de fijar UAV_VISION_DATOS)
+import personas_encontradas as P
 
 with contextlib.redirect_stdout(io.StringIO()) as salida:
     encontradas, fantasmas = P.evaluar("gate", DATOS, PISTAS, CAND)
@@ -45,22 +57,11 @@ print(salida.getvalue().strip())
 
 quienes = set(encontradas)
 assert quienes == set("ABCGH"), "cambiaron las personas que el sistema encuentra: %s" % sorted(quienes)
-# D y E tienen 2 y 5 cajas en todo el vuelo: el umbral de evidencia las descarta A PROPOSITO, y por
-# eso no se encuentran ni alimentando la cadena con cajas perfectas (experimento del oraculo, 16sep).
 assert set("DE") - quienes == set("DE"), "D y E no deberian encontrarse con este umbral de evidencia"
 assert len(fantasmas) == 6, "cambiaron los fantasmas: %d" % len(fantasmas)
 assert len(encontradas["A"]) == 1, "el operador vuelve a partirse en varios puntos del mapa"
 assert len(encontradas["G"]) == 3, "cambio la fragmentacion de la mujer que camina"
 
-# ------------------------------------------- contraste: el mismo vuelo con el tracker sin CMC
-# Un marcador que devolviera "5 de 7" por construccion no probaria nada: hace falta una corrida que
-# salga distinta. Esta es la que volaba antes del 16sep, el mismo detector y las mismas cajas, con la
-# unica diferencia de que BoT-SORT no compensaba el movimiento de la camara (use_cmc=False): de 2637
-# cajas solo 852 reciben id, contra 1608 con CMC, y la evidencia que nunca llega a la capa de
-# identidad no forma candidato.
-#
-# Lo que hay que mirar es que el mapa SIN CMC se ve MAS LIMPIO y tiene DOS PERSONAS MENOS. Esa es la
-# razon de ser de este archivo: juzgando por fantasmas, la version vieja gana.
 SIN_CMC = os.path.join(DATOS, "pistas_bot_sin_cmc.npz")
 CAND_SIN = os.path.join(_tmp, "candidatos_sin_cmc.json")
 sys.argv = [REPLAY, "--pistas=" + SIN_CMC, "--candidatos=" + CAND_SIN]

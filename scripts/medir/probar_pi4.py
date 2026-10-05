@@ -1,5 +1,7 @@
 """Does this board detect, or only capture? Six frames, through the real mission's camera."""
-import time, traceback
+import time
+import traceback
+
 from uav_vision.camera import OnboardCamera
 
 cam = OnboardCamera(model="/home/pi/yolov8n_ncnn_model", threshold=0.3, tracker=True,

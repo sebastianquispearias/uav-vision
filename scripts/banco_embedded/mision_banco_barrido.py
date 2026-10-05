@@ -18,11 +18,15 @@ comes back None and the identity layer's appearance veto skips itself silently -
 is what separates a person from the equipment box that captured RANSAC on flight 3. A rehearsal
 without it would exercise position matching alone and report a pass the flight config does not
 earn.
+
+The vision timer matches the fps declared for the identity layer: the timer is what sets the
+rate, and the fps is only the duty-cycle floor now. COCO is cheap enough here that 4 Hz fits
+with room to spare.
 """
 
 from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
-from uav_vision.vision_protocol import VisionProtocol, UavApiYaw
+from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
 
 ProtocoloBancoBarrido = VisionProtocol.with_config(
     camera=OnboardCamera(
@@ -34,8 +38,6 @@ ProtocoloBancoBarrido = VisionProtocol.with_config(
         crops=True,
     ),
     pitch_deg=-55.0,
-    # Matches the fps declared above: the timer is what sets the rate, the fps is only the
-    # duty-cycle floor now. COCO is cheap enough here that 4 Hz fits with room to spare.
     see_period_s=0.25,
     yaw_source=UavApiYaw("http://localhost:8000"),
     identity=IncrementalIdentity(

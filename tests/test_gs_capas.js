@@ -16,6 +16,36 @@
  * stroke is drawn with, so the 95 % circle fading with its pin is observed, not assumed.
  *
  * Run with: node tests/test_gs_capas.js        (from the uav_vision root)
+
+  WHAT EACH SECTION PROVES
+
+  A 2D context that remembers, for every dashed stroke, the alpha it was drawn with.
+
+  1. Fresh, old-but-inside-the-cap, beyond the cap, and mature beyond the cap.
+
+  2. Marked "es lo que busco": persistent regardless of age.
+
+  3. limpiar: hides live contacts on screen until a newer sighting.
+
+  Limpiar limpia: el confirmado tambien se va, porque el operador lo pidio y un boton llamado
+  limpiar que deja la pantalla llena se lee como roto. historial los trae de vuelta.
+
+  Solo vuelve el que tiene un avistamiento NUEVO. El confirmado de x=70 sigue reportandose con
+  age_s 5, que es mas viejo que cuando se limpio, asi que no es un avistamiento nuevo: es el mismo
+  dato envejeciendo, y traerlo de vuelta seria deshacer la limpieza sin que nadie lo pidiera.
+
+  4. historial: everything the layers hid, faded; the verdict "no es" is not a layer.
+
+  5. A POI with no age (older firmware) is never faded: there is nothing to fade it by.
+
+  6. "limpiar" respeta lo confirmado a proposito, asi que sobre un mapa de puros confirmados no
+  hace nada visible. Un boton que no hace nada visible se lee como roto: tiene que DECIRLO. El caso
+  no es raro, es el del banco con camara en vivo, donde todo lo que se sostiene queda confirmado.
+
+  El operador pidio que limpiar limpie: un boton con ese nombre que deja la pantalla llena se
+  lee como roto. Antes respetaba lo confirmado y lo decia; ahora lo oculta y DICE cuantos de los
+  que oculto estaban confirmados, porque esconder una decision del sistema en silencio seria peor
+  que no esconderla. historial los trae de vuelta, que es lo que hace que limpiar no sea destruir.
  */
 'use strict';
 const fs = require('fs');
@@ -27,7 +57,6 @@ const html = /PAGINA = r"""([\s\S]*?)"""/.exec(py)[1];
 let codigo = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
 codigo = codigo.replace(/redimensionar\(\);\s*refrescar\(\);\s*setInterval\(refrescar,\s*1000\);/, '');
 
-// A 2D context that remembers, for every dashed stroke, the alpha it was drawn with.
 const trazos = [];
 const lienzo2d = new Proxy({ globalAlpha: 1, _dash: [] }, {
   get(o, k) {
@@ -70,7 +99,6 @@ const xs = () => visibles.map(p => p.x).join(',');
 console.log('  tope de contacto vivo: ' + TOPE_VIVO_S + ' s');
 ok(typeof TOPE_VIVO_S === 'number' && TOPE_VIVO_S > 3, 'falta un tope mayor que la extrapolacion');
 
-// 1. Fresh, old-but-inside-the-cap, beyond the cap, and mature beyond the cap.
 const viejo = TOPE_VIVO_S + 55;
 estado = { pois: [
   poi(0,  { age_s: 0 }),
@@ -97,7 +125,6 @@ ok(trazos.length === 3, 'el circulo de un POI oculto no puede dibujarse');
 ok(trazos.some(a => a > 0 && a < 0.6), 'el circulo del desvanecido tiene que desvanecerse con el');
 ok(trazos.filter(a => a === 1).length === 2, 'el fresco y el persistente dibujan su circulo pleno');
 
-// 2. Marked "es lo que busco": persistent regardless of age.
 estado = { pois: [ poi(0, { age_s: viejo }) ]};
 pintar();
 ok(visibles.length === 0, 'antes del veredicto un viejo no maduro no se ve');
@@ -107,14 +134,11 @@ console.log('  viejo marcado "es lo que busco" -> visibles', visibles.length, '|
 ok(visibles.length === 1 && alfaDe(estado.pois[0]) === 1, 'lo que el operador verifico no puede desaparecer');
 ok(/seen \\d+ s ago/.test(lista()), 'el verificado viejo tiene que decir hace cuanto se vio');
 
-// 3. limpiar: hides live contacts on screen until a newer sighting.
 estado = { pois: [ poi(50, { age_s: 1 }), poi(70, { age_s: 1, mature: true }) ]};
 pintar();
 ok(xs() === '50,70', 'antes de limpiar se ven los dos');
 limpiar();
 console.log('  limpiar -> visibles x =', xs());
-// Limpiar limpia: el confirmado tambien se va, porque el operador lo pidio y un boton llamado
-// limpiar que deja la pantalla llena se lee como roto. historial los trae de vuelta.
 ok(xs() === '', 'limpiar tiene que ocultar los dos, vivo y confirmado');
 estado = { pois: [ poi(50, { age_s: 3 }), poi(70, { age_s: 3, mature: true }) ]};
 pintar();
@@ -123,15 +147,11 @@ ok(xs() === '', 'sin avistamiento nuevo ninguno de los dos limpiados vuelve');
 estado = { pois: [ poi(50.5, { age_s: 0.2 }), poi(70, { age_s: 5, mature: true }) ]};
 pintar();
 console.log('  reporte con avistamiento nuevo (age_s 0.2) -> visibles x =', xs());
-// Solo vuelve el que tiene un avistamiento NUEVO. El confirmado de x=70 sigue reportandose con
-// age_s 5, que es mas viejo que cuando se limpio, asi que no es un avistamiento nuevo: es el mismo
-// dato envejeciendo, y traerlo de vuelta seria deshacer la limpieza sin que nadie lo pidiera.
 ok(xs() === '50.5', 'solo el que tiene un avistamiento nuevo vuelve');
 estado = { pois: [ poi(50.5, { age_s: 2 }), poi(70, { age_s: 7, mature: true }) ]};
 pintar();
 ok(xs() === '50.5', 'una vez de vuelta, envejecer dentro del tope no lo vuelve a ocultar');
 
-// 4. historial: everything the layers hid, faded; the verdict "no es" is not a layer.
 estado = { pois: [ poi(90, { age_s: 1 }), poi(100, { age_s: viejo }), poi(110, { age_s: 1 }) ]};
 pintar();
 limpiar();
@@ -147,23 +167,15 @@ ok(tarjetas().length === 2, 'la lista tambien sigue al historial');
 alternarHistorial();
 ok(xs() === '', 'apagar historial vuelve a ocultarlos');
 
-// 5. A POI with no age (older firmware) is never faded: there is nothing to fade it by.
 estado = { pois: [ poi(200, {}) ]};
 delete estado.pois[0].age_s;
 pintar();
 ok(visibles.length === 1 && alfaDe(estado.pois[0]) === 1, 'sin age_s no hay nada que desvanecer');
 
-// 6. "limpiar" respeta lo confirmado a proposito, asi que sobre un mapa de puros confirmados no
-// hace nada visible. Un boton que no hace nada visible se lee como roto: tiene que DECIRLO. El caso
-// no es raro, es el del banco con camara en vivo, donde todo lo que se sostiene queda confirmado.
 limpiados.length = 0;
 estado = { ahora: 1000, pois: [ poi(0, { mature: true, age_s: 1 }), poi(90, { mature: true, age_s: 2 }) ]};
 limpiar();
 console.log('  mapa de puros confirmados :', document.getElementById('cuenta').textContent);
-// El operador pidio que limpiar limpie: un boton con ese nombre que deja la pantalla llena se
-// lee como roto. Antes respetaba lo confirmado y lo decia; ahora lo oculta y DICE cuantos de los
-// que oculto estaban confirmados, porque esconder una decision del sistema en silencio seria peor
-// que no esconderla. historial los trae de vuelta, que es lo que hace que limpiar no sea destruir.
 ok(document.getElementById('cuenta').textContent.indexOf('cleared 2') >= 0,
    'limpiar sobre puros confirmados tiene que limpiarlos');
 ok(document.getElementById('cuenta').textContent.indexOf('2 of them confirmed') >= 0,
