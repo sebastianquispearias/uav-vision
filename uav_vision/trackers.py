@@ -59,14 +59,68 @@ them as identical is the quiet version of the mistake this whole module exists t
 """
 
 
+RUTAS_DE_RESPALDO = {
+    "botsort": ("boxmot.trackers.bbox.botsort", "boxmot.trackers.box.botsort",
+                "boxmot", "BotSort"),
+}
+"""Where to find a tracker when boxmot has no registry, for the one tracker that flies.
+
+boxmot MOVED its trackers between the version on one board and the version on the other -- from
+boxmot.trackers.bbox.X to boxmot.trackers.box.X -- and camera.py has carried a two-way import
+for that reason since before this module existed. The registry this module prefers is newer
+than that, so it cannot be assumed present on every board, and a tracker factory that only
+works on one of the two aircraft is worse than the hardcoded line it replaces.
+
+Only BoT-SORT is listed, and the limit is the honest one: it is the tracker the chain flies, so
+it is the one that must build on every board. The other nine are for comparing on the ground,
+where the registry is there.
+"""
+
+
+def hay_registro() -> bool:
+    """Whether this boxmot has the registry that resolves trackers by name."""
+    try:
+        from boxmot.trackers.registry import TRACKER_DEFINITIONS  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def catalogo() -> Dict[str, bool]:
     """Every tracker boxmot can build, as name -> whether it needs an appearance model.
 
     Read off boxmot's own registry rather than written out here, so a version that adds or
-    drops a tracker is reflected without this file being touched.
+    drops a tracker is reflected without this file being touched. Without a registry only the
+    fallback names are offered, because a catalogue this module invented would be a guess.
     """
+    if not hay_registro():
+        return dict.fromkeys(RUTAS_DE_RESPALDO, True)
     from boxmot.trackers.registry import TRACKER_DEFINITIONS
     return {n: bool(d.needs_reid) for n, d in sorted(TRACKER_DEFINITIONS.items())}
+
+
+def _clase(nombre: str):
+    """The tracker class, through the registry when there is one and by hand when there is not."""
+    if hay_registro():
+        from boxmot.trackers.registry import TRACKER_DEFINITIONS
+        if nombre not in TRACKER_DEFINITIONS:
+            raise ValueError("boxmot no conoce '%s'; conoce %s"
+                             % (nombre, sorted(TRACKER_DEFINITIONS)))
+        modulo, _, cn = TRACKER_DEFINITIONS[nombre].class_path.rpartition(".")
+        return getattr(__import__(modulo, fromlist=[cn]), cn)
+
+    if nombre not in RUTAS_DE_RESPALDO:
+        raise ValueError(
+            "este boxmot no trae registro, asi que solo se puede construir %s por respaldo; "
+            "'%s' necesita una version con boxmot.trackers.registry"
+            % (sorted(RUTAS_DE_RESPALDO), nombre))
+    *modulos, cn = RUTAS_DE_RESPALDO[nombre]
+    for modulo in modulos:
+        try:
+            return getattr(__import__(modulo, fromlist=[cn]), cn)
+        except (ImportError, AttributeError):
+            continue
+    raise ImportError("no encontre %s en ninguna de %s" % (cn, modulos))
 
 
 def _acepta(clase) -> List[str]:
@@ -109,21 +163,23 @@ def construir(nombre: str, embs_propias: bool = True, traducir: bool = True,
     it off, a tracker that does not use BoT-SORT's spelling receives nothing and runs on its own
     defaults, which is the comparison nobody wants to publish by accident.
 
+    THE CLASS IS CONSTRUCTED DIRECTLY AND BOXMOT'S YAML IS NEVER LOADED, and that is a decision
+    with a measurement behind it. boxmot's create_tracker merges the caller's settings over a
+    per-tracker YAML, and those files carry the result of a hyperparameter search on MOT: going
+    through it moved BoT-SORT's appearance_thresh from 0.25 to 0.6188818853936099 and its
+    proximity_thresh from 0.5 to 0.6084297894561342 -- two appearance gates the flight was never
+    calibrated with, changed silently, for parameters nobody here set. So the only values that
+    are not a class default are the ones passed in. That also makes the comparison across
+    trackers mean something: every one of them runs on its own defaults plus OUR calibration,
+    and not on somebody's tuning for ground-level pedestrians.
+
     Returns (tracker, aplicados, ignorados, aproximados), and the last two are not a detail to
     print once and forget. A tracker that did not receive the calibration is not being compared
     on the same terms as one that did, and a tracker that received an APPROXIMATE rename is
     being compared on terms that need stating. Anything measured across trackers has to carry
     both lists beside the numbers.
     """
-    from boxmot.trackers.registry import TRACKER_DEFINITIONS, create_tracker
-
-    if nombre not in TRACKER_DEFINITIONS:
-        raise ValueError("boxmot no conoce '%s'; conoce %s"
-                         % (nombre, sorted(TRACKER_DEFINITIONS)))
-    definicion = TRACKER_DEFINITIONS[nombre]
-    modulo, _, clase_nombre = definicion.class_path.rpartition(".")
-    clase = getattr(__import__(modulo, fromlist=[clase_nombre]), clase_nombre)
-
+    clase = _clase(nombre)
     acepta = _acepta(clase)
     aplicados: Dict[str, Any] = {}
     ignorados: Dict[str, Any] = {}
@@ -143,6 +199,15 @@ def construir(nombre: str, embs_propias: bool = True, traducir: bool = True,
                 aplicados.setdefault("_aproximados", []).append("%s->%s" % (clave, otro))
 
     aproximados = aplicados.pop("_aproximados", [])
-    tracker = create_tracker(nombre, precomputed_reid=embs_propias,
-                             tracker_kwargs=aplicados or None)
+
+    # El cableado del adaptador, aparte de la calibracion del llamador: no se cuenta como
+    # "honrado" porque nadie lo pidio. Un informe que los sumara diria "7 de 5" y el numero
+    # que el llamador quiere leer es cuanto de LO SUYO llego.
+    cableado = {}
+    if "with_reid" in acepta and "with_reid" not in aplicados:
+        cableado["with_reid"] = embs_propias
+    if "reid_model" in acepta and "reid_model" not in aplicados:
+        cableado["reid_model"] = None
+
+    tracker = clase(**aplicados, **cableado)
     return tracker, aplicados, ignorados, aproximados

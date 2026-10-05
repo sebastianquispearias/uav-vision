@@ -144,4 +144,62 @@ print("  %d de %d trackers reciben al menos un ajuste renombrado SOLO por rol"
       % (len(con_aprox), len(cat)))
 
 print()
+print("=" * 78)
+print("7. EL YAML DE BOXMOT NO SE CARGA: solo son no-defecto los valores que pasamos")
+print("=" * 78)
+AJ = {"use_cmc": True, "cmc_method": "sof", **CAL}
+try:
+    from boxmot.trackers.bbox.botsort import BotSort
+except ImportError:
+    from boxmot import BotSort
+como_estaba = BotSort(reid_model=None, with_reid=True, **AJ)
+con_adaptador, _, ig, apx = construir("botsort", embs_propias=True, **AJ)
+assert not ig and not apx, "BoT-SORT no deberia necesitar traduccion: %s %s" % (ig, apx)
+campos = sorted(set(AJ) | {"with_reid", "max_age", "det_thresh", "proximity_thresh",
+                           "appearance_thresh", "frame_rate", "min_hits", "iou_threshold"})
+difs = {k: (getattr(como_estaba, k, "<aus>"), getattr(con_adaptador, k, "<aus>"))
+        for k in campos
+        if getattr(como_estaba, k, "<aus>") != getattr(con_adaptador, k, "<aus>")}
+assert not difs, (
+    "el adaptador ya no construye el tracker que vuela. Diferencias: %s. "
+    "Si esto falla por appearance_thresh o proximity_thresh, el YAML de boxmot volvio a "
+    "entrar: sus archivos traen una busqueda de hiperparametros sobre MOT y mueven compuertas "
+    "de apariencia que este vuelo nunca calibro." % difs)
+print("  %d campos identicos al BotSort construido a mano, incluidos appearance_thresh=%s"
+      % (len(campos), con_adaptador.appearance_thresh))
+print("  y cada tracker del zoo recibe NUESTRO umbral, no el del YAML:")
+for nombre in ("ocsort", "sfsort", "bytetrack"):
+    t, _, _, _ = construir(nombre, **CAL)
+    assert abs(getattr(t, "det_thresh", -1) - CAL["track_high_thresh"]) < 1e-9, (
+        "%s no recibio nuestro umbral alto: det_thresh=%s" % (nombre, getattr(t, "det_thresh", None)))
+    print("     %-10s det_thresh=%s" % (nombre, t.det_thresh))
+
+print()
+print("=" * 78)
+print("8. SIN EL REGISTRO DE BOXMOT, el que vuela se construye igual")
+print("=" * 78)
+import uav_vision.trackers as T
+
+assert T.hay_registro(), "este boxmot no trae registro; la seccion 8 perdio su contraste"
+original = T.hay_registro
+try:
+    T.hay_registro = lambda: False
+    de_respaldo, _, _, _ = construir("botsort", embs_propias=True, **AJ)
+    assert type(de_respaldo).__name__ == type(con_adaptador).__name__
+    difs = {k for k in campos
+            if getattr(de_respaldo, k, "<aus>") != getattr(con_adaptador, k, "<aus>")}
+    assert not difs, "el respaldo construye otro tracker: %s" % sorted(difs)
+    assert list(T.catalogo()) == ["botsort"], "sin registro solo botsort puede ofrecerse"
+    try:
+        construir("ocsort")
+    except ValueError as e:
+        assert "no trae registro" in str(e)
+    else:
+        raise AssertionError("sin registro, ocsort tendria que negarse")
+finally:
+    T.hay_registro = original
+print("  el camino de respaldo da el MISMO tracker, y el resto se niega nombrando el motivo")
+print("  (boxmot movio sus modulos entre la version de una placa y la de la otra: por eso existe)")
+
+print()
 print("TODO OK")

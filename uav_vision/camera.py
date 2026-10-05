@@ -261,6 +261,7 @@ class OnboardCamera:
         rot180: bool = True,
         reid_model: Optional[str] = None,
         tracker: bool = False,
+        tracker_name: str = "botsort",
         fps: Optional[float] = None,
         track_buffer_s: float = 8.0,
         compensate_motion: bool = True,
@@ -291,6 +292,7 @@ class OnboardCamera:
                 "tracker=True requires fps: the tracker buffer is measured in frames and "
                 "has no meaning without the capture rate.")
         self.rastreador_habilitado = tracker
+        self.tracker_name = tracker_name
         self.fps = fps
         self.track_buffer_s = track_buffer_s
         self.compensate_motion = compensate_motion
@@ -450,14 +452,18 @@ class OnboardCamera:
             time.sleep(2.0)
 
     def _build_tracker(self) -> None:
-        """Builds the BoT-SORT tracker, with the buffer converted from seconds to frames.
+        """Builds the tracker named by tracker_name, with the buffer converted to frames.
 
-        The import is written twice on purpose. boxmot moved the tracker from
-        boxmot.trackers.bbox.botsort to boxmot.trackers.box.botsort between the version that runs on
-        the Raspberry Pi 5 (19, on Python 3.11) and the only one that exists for Python 3.13 (25),
-        which is what the Pi 4 has. Both versions export the class at the top level, so that is the
-        path used, and the old one is kept first because it is what flies today and a silent change
-        of tracker implementation is not something to discover in the air.
+        The two-way import this used to carry lives in uav_vision.trackers now, together with
+        the rest of the version juggling: boxmot moved its trackers between the version on one
+        board and the version on the other, and it named its parameters differently in each
+        tracker. Nothing about boxmot's API appears here any more, which is what lets the
+        aircraft fly a different tracker without this file changing again.
+
+        The thresholds are NOT in that module, and deliberately: they are this deployment's
+        calibration, measured against the flight, and the adapter's job is to deliver them and
+        to report what the target could not take. A tracker that silently did not receive them
+        would be running on somebody else's defaults, so the refusal is printed.
 
         Two of the settings are not boxmot's defaults. reid_model stays None because the
         embeddings are supplied externally through embs=, while with_reid still has to be on
@@ -465,14 +471,11 @@ class OnboardCamera:
         motion-only when there is no ReID model at all. cmc_method is 'sof' and not boxmot's
         default 'ecc', which is worse on both axes; the measurement is in NOTES.md.
         """
-        try:
-            from boxmot.trackers.bbox.botsort import BotSort
-        except ImportError:
-            from boxmot import BotSort
+        from uav_vision.trackers import construir
 
-        self._tracker = BotSort(
-            reid_model=None,
-            with_reid=self.reid_model is not None,
+        self._tracker, _, ignorados, aproximados = construir(
+            self.tracker_name,
+            embs_propias=self.reid_model is not None,
             use_cmc=self.compensate_motion,
             cmc_method="sof",
             track_high_thresh=0.35,
@@ -481,6 +484,11 @@ class OnboardCamera:
             track_buffer=max(2, round(self.track_buffer_s * self.fps)),
             match_thresh=0.85,
         )
+        if ignorados or aproximados:
+            print("[camera] %s no recibe %s%s"
+                  % (self.tracker_name, sorted(ignorados),
+                     "; renombrados solo por rol: %s" % aproximados if aproximados else ""),
+                  flush=True)
 
     def close(self) -> None:
         """Releases the camera device, both stopped and closed.
