@@ -90,14 +90,17 @@ and fills the map as the reports arrive. Then it prints:
 
 ```
 CHEQUEO DE RAYOS (268 muestras, 1 de cada 10 frames)
-  angulo protocolo vs vuelo real: mediana 0.000 deg, p90 0.000 deg
+  angulo protocolo vs vuelo real: mediana 0.000 deg, p90 0.000 deg, max 0.000 deg
   >> rayos del protocolo coinciden con los del vuelo real
 
-REPLAY CON IDENTIDAD (102 reportes)
-  #      tipo  n_obs  conf              pos  d_PIES
-  0  estatico    209  0.53 ( -0.16,  6.70)    2.39   <- OPERADOR
+candidatos formados: 1 (1 maduros)
+        None n_obs  209 (  -0.16,   6.70)  MADURO
 
-  mejor POI respecto al operador: 2.39 m
+REPLAY CON IDENTIDAD (102 reportes; ultimo con 1 POIs)
+  #      clase      tipo  n_obs  conf              pos  d_PIES  d_OBJ
+  0       None  estatico    209  0.53 ( -0.16,  6.70)    2.39   3.52 <- OPERADOR
+
+  mejor POI respecto al operador: 2.39 m (offline BoT-SORT dio 2.49 m)
 ```
 
 2.39 m from a surveyed ground truth. `--sin-mapa` skips the browser.
@@ -118,9 +121,9 @@ they were produced, and it needs the raw flight frames (1.2 GB) and the detector
 weights, neither of which does.
 
 ```
-  #      clase      tipo  n_obs  conf              pos  d_PIES
-  0 pedestrian  estatico    203  0.53 ( -0.19,  6.69)    2.38
-  1        car  estatico    133  0.63 (-12.24, 13.06)   11.74
+  #      clase      tipo  n_obs  conf              pos  d_PIES  d_OBJ
+  0 pedestrian  estatico    203  0.53 ( -0.19,  6.69)    2.38   3.53 <- OPERADOR
+  1        car  estatico    133  0.63 (-12.24, 13.06)   11.74  17.10
 ```
 
 ![two classes on the ground station map](docs/mapa_dos_clases.jpg)
