@@ -637,75 +637,140 @@ nunca: los unicos valores que no son defecto de la clase son los que se pasan.
 entrara, cada tracker del zoo correria con el tuning de otro para peatones a
 nivel del suelo, y la tabla mediria eso y no los trackers.
 
-## 5-oct-2026: los nueve trackers sobre el vuelo 02-ago. PRELIMINAR, NO ES UN RESULTADO
+## 5-oct-2026: los diez trackers de boxmot sobre el vuelo 02-ago
 
-Primera corrida de los nueve de boxmot sobre las **mismas 2637 detecciones** del
-vuelo, con `scripts/botsort_pistas.py --tracker=<nombre>` y puntuadas por
-`personas_encontradas.py`:
+Generada por `scripts/comparar_trackers.py --cmc=on`, que corre los tres pasos de
+cada fila. **No está escrita a mano**, y eso es deliberado: la primera versión de
+esta tabla sí lo estaba, y era falsa por tres motivos que resultaron ser todos
+nuestros. La historia está al final de la sección, porque es lo que más vale.
 
-| tracker | personas | fantasmas | con id / 2637 | pistas | mediana/max cajas |
-|---|---|---|---|---|---|
-| strongsort | 4 de 7 | 5 | 1576 | 106 | 5 / 190 |
-| occluboost | 4 de 7 | **1** | 1359 | 5 | 202 / 739 |
-| hybridsort | 4 de 7 | 2 | 924 | 16 | 5 / 404 |
-| botsort | 3 de 7 | 1 | 852 | 114 | 4 / 130 |
-| bytetrack | 3 de 7 | 0 | 728 | 109 | 4 / 84 |
-| sfsort | 1 de 7 | 0 | 1549 | 704 | 1 / 109 |
-| boosttrack | 1 de 7 | 0 | 199 | 53 | 2 / 42 |
-| ocsort | 0 de 7 | 0 | **6** | 6 | 1 / 1 |
-| deepocsort | 0 de 7 | 0 | **31** | 12 | 2 / 7 |
+| tracker | CMC | personas | fantasmas | sin juzgar | con id / 2637 | pistas | mediana/max cajas |
+|---|---|---|---|---|---|---|---|
+| botsort | on | **5 de 7** | 6 | 2 | 1608 | 36 | 13 / 336 |
+| sam2mot | ninguno | **5 de 7** | 8 | 1 | 1891 | 298 | 2 / 136 |
+| occluboost | on | 4 de 7 | **1** | 0 | 1392 | 6 | 192 / 586 |
+| deepocsort | on | 4 de 7 | 2 | 2 | 643 | 31 | 7 / 120 |
+| hybridsort | on | 4 de 7 | 3 | 1 | 1185 | 17 | 12 / 287 |
+| boosttrack | on | 4 de 7 | 3 | 1 | 951 | 51 | 7 / 274 |
+| strongsort | on | 4 de 7 | 5 | 3 | 1576 | 106 | 5 / 190 |
+| bytetrack | ninguno | 3 de 7 | 0 | 0 | 728 | 109 | 4 / 84 |
+| ocsort | ninguno | 2 de 7 | 0 | 0 | 437 | 77 | 3 / 71 |
+| sfsort | ninguno | 1 de 7 | 0 | 0 | 1549 | 704 | 1 / 109 |
 
-**TRES COSAS QUE ESTA TABLA NO AUTORIZA A CONCLUIR, y por eso dice PRELIMINAR:**
+**La columna CMC dice lo que CORRIÓ, no lo que se pidió**, y la diferencia no es
+cosmética: boxmot expone la compensación de movimiento por cuatro mecanismos
+distintos y la trae ENCENDIDA por defecto, así que un tracker que ignora el
+pedido no queda apagado, queda como boxmot quiera. Leído de la instancia
+construida con `uav_vision.trackers.cmc_real`, el reparto es a tres bandas:
 
-**1. Ninguna fila corrio con CMC**, porque el script cablea `use_cmc=False`. Es
-el confundidor mas grande que hay: sin compensacion de movimiento son 852 ids
-contra 1608, y **dos personas menos**. El `botsort` de esta tabla da 3 de 7 con
-1 fantasma, y la portada del repo dice 5 de 7 con 6; no es una contradiccion,
-es exactamente el efecto ya registrado mas abajo en este archivo. **Ninguna
-fila es comparable al 5 de 7.**
+- **5 conmutables**: `botsort`, `boosttrack`, `occluboost` por `use_cmc`;
+  `deepocsort` por `cmc_off`, que es el mismo booleano **invertido**;
+  `hybridsort` solo por `cmc_method`, porque `create_cmc` devuelve `None` para un
+  método `None` y entonces el método ES el interruptor.
+- **4 sin mecanismo**: `bytetrack`, `ocsort`, `sfsort`, `sam2mot`. Y `ninguno` no
+  es `off`: juntarlos cuenta a un tracker que no tiene compensación como prueba
+  de que apagarla no hizo daño.
+- **1 forzado**: `strongsort` hace `create_cmc("ecc")` en `__init__` sin
+  parámetro y lo aplica sin guarda (`strongsort.py:68` y `:83`). **Compensa
+  siempre y no hay forma de apagarlo.**
 
-**2. `ocsort` y `deepocsort` no estan "trackeando peor": estan rotos para este
-caso.** 6 y 31 detecciones con id de 2637 no es una diferencia de calidad, es
-una configuracion que no funciona. Reportarlos como peores seria el error que
-`docs/DESCARTADO.md` existe para no repetir. OC-SORT es solo movimiento y
-necesita detecciones consecutivas, y aqui un objetivo en vista se detecta en el
-4,6-38 % de los cuadros, a rafagas: hay una hipotesis que medir, no una
-conclusion.
+### Cuánto vale la compensación, medido con las dos tablas
 
-**3. "Mas detecciones con id" NO es mejor.** `sfsort` asigna 1549 y encuentra
-UNA persona, porque las parte en 704 pistas de mediana 1 caja. `occluboost`
-asigna 1359 en **5 pistas** de mediana 202: esta fusionando identidades, que es
-el fallo peligroso, porque una persona fusionada DESAPARECE del mapa.
+`scripts/comparar_trackers.py --cmc=off` da la otra mitad del contraste. Solo
+tiene sentido para los cinco conmutables:
 
-**LA SIGUIENTE MEDICION, en este orden:** encender CMC en los que lo aceptan
-(`use_cmc` esta en la firma de botsort, boosttrack, hybridsort y occluboost,
-y NO en ocsort, bytetrack ni sfsort, lo cual ya es un desbalance que hay que
-declarar); y diagnosticar `ocsort` y `deepocsort` antes de puntuarlos.
+| tracker | CMC off | CMC on | personas | fantasmas |
+|---|---|---|---|---|
+| botsort | 3 de 7 / 1 fantasma | **5 de 7 / 6** | +2 | +5 |
+| boosttrack | 2 de 7 / 0 | 4 de 7 / 3 | +2 | +3 |
+| deepocsort | 3 de 7 / 0 | 4 de 7 / 2 | +1 | +2 |
+| occluboost | 3 de 7 / 2 | 4 de 7 / 1 | +1 | −1 |
+| hybridsort | 4 de 7 / 3 | 4 de 7 / 3 | 0 | 0 |
 
-## 5-oct-2026: "cambiar el tracker" no es una comparacion
+La compensación vale **dos personas** en el tracker que vuela, y **cuesta cinco
+fantasmas**. Las dos mitades se publican juntas a propósito: el marcador del
+producto son los dos números, y quedarse con el que conviene es cómo una mejora
+deja de ser una mejora. `hybridsort` es el caso que impide leer esto como una
+regla: su corrida cambia (1033 → 1185 detecciones con id) y su marcador no.
 
-boxmot trae diez trackers y **solo BoT-SORT llama a las cosas como nosotros**.
-Las diez clases declaran `**kwargs`, que se come el nombre desconocido sin una
-palabra y deja al tracker con sus propios defaults. Medido con nuestra
-calibracion de cinco numeros:
+### Lo que esta tabla NO autoriza a concluir
 
-| tracker | sin traducir | con traducir | sin equivalente |
+**1. Es UN vuelo, un día, un lugar, siete personas.** Diez trackers sobre un solo
+escenario multiplican las formas de sobreajustarse a él. El entregable es la
+máquina de intercambiar piezas; esta comparación es de un vuelo.
+
+**2. "Más detecciones con id" no es mejor, y las dos puntas lo muestran.**
+`sfsort` asigna 1549 y encuentra UNA persona, porque las parte en 704 pistas de
+mediana 1 caja. `occluboost` asigna 1392 en **6 pistas** de mediana 192: está
+fusionando identidades, que es el fallo peligroso, porque una persona fusionada
+DESAPARECE del mapa. Su único fantasma no es precisión, es que casi todo cayó en
+el mismo contacto.
+
+**3. Siete de los diez no reciben la calibración completa.** Una fila que no la
+recibió no se compara en los mismos términos que una que sí, así que las listas
+van al lado de los números y no debajo:
+
+| tracker | nuestros 5 ajustes, sin traducir | con traducir | sin equivalente |
 |---|---|---|---|
 | botsort | 5 de 5 | 5 de 5 | — |
+| occluboost | 2 de 5 | 5 de 5 | — |
+| sfsort | 0 de 5 | 5 de 5 | — |
 | bytetrack | 2 de 5 | 4 de 5 | `new_track_thresh` |
 | ocsort | 0 de 5 | 4 de 5 | `new_track_thresh` |
-| sfsort | 0 de 5 | 5 de 5 | — |
-| strongsort | 1 de 5 | 5 de 5 | `new_track_thresh` |
-| boosttrack / deepocsort / hybridsort | 1-2 de 5 | 4-5 de 5 | `new_track_thresh`, `track_low_thresh` |
+| strongsort | 0 de 5 | 4 de 5 | `new_track_thresh` |
+| sam2mot | 1 de 5 | 4 de 5 | `track_low_thresh` |
+| boosttrack | 0 de 5 | 3 de 5 | `new_track_thresh`, `track_low_thresh` |
+| deepocsort | 0 de 5 | 3 de 5 | `new_track_thresh`, `track_low_thresh` |
+| hybridsort | 0 de 5 | 3 de 5 | `new_track_thresh`, `track_low_thresh` |
 
-La traduccion mejora **9 de los 10**, y **7 de 10** reciben al menos un
-renombre que es el mismo PAPEL y no la misma cantidad
-(`match_thresh → iou_threshold`, `track_high_thresh → det_thresh`). Por eso
-`construir()` devuelve las listas de ignorados y aproximados: una tabla que no
-las lleve al lado no se puede leer.
+Renombres que **cambian el valor**: `match_thresh=0.85 → iou_threshold=0.15`.
+Renombres solo por rol: `track_high_thresh → det_thresh`.
 
-**`new_track_thresh` no tiene equivalente en seis de los diez.** Eso no se
-traduce: se declara.
+### Por qué la primera versión de esta tabla era falsa, y los tres motivos eran nuestros
+
+Importa más que los números, porque los números son de un vuelo y esto no.
+
+**1. `match_thresh → iou_threshold` iba INVERTIDO, no "aproximado".** BoT-SORT
+limita un COSTE de `1−IoU` (`matching.py:79` lo construye, `matching.py:35` lo
+pasa a `lap.lapjv` como `cost_limit`), así que `match_thresh=0.85` significa
+"asociá desde IoU ≥ 0,15" y es el ajuste **más permisivo** que lleva esta
+calibración. En todo el resto de boxmot el mismo número es un PISO sobre el IoU
+(`stages.py:152`, `boost.py:196`, `hybrid.py:343`, `hybrid.py:363`,
+`occluboost.py:956`), así que cinco trackers recibieron "las cajas tienen que
+solaparse 0,85 para ser la misma persona". A 25 m eso no pasa nunca. La
+conversión es `1 − v` y es **derivada**: es el valor donde las dos expresiones
+admiten los mismos pares. Vive en `uav_vision.trackers.CONVERSIONES` y la
+sección 9 de `tests/test_elegir_tracker.py` falla si se pierde.
+
+**2. "Ninguna fila corrió con CMC" era falso para tres de las nueve.**
+`strongsort`, `hybridsort` y `deepocsort` compensaban, y `strongsort` encabezaba
+la tabla. La premisa que supuestamente invalidaba las comparaciones era ella
+misma incorrecta.
+
+**3. El docstring de `botsort_pistas.py` afirmaba lo contrario del vuelo.** Decía
+"configured exactly as `_build_tracker` builds it for the flight mission
+(camera-motion compensation off)", y `_build_tracker` la tiene ON con método
+`sof` (`camera.py:479-480`, `compensate_motion=True`). Esa línea es el origen de
+que la tabla diera `botsort` 3 de 7 mientras la portada del repo dice 5 de 7.
+
+**El efecto combinado: el orden se dio vuelta entero.** El tracker que vuela
+pasó del cuarto puesto al primero, `ocsort` dejó de ser "no funciona para este
+caso" (6 detecciones con id de 2637) y pasó a trackear el 16,6 % del vuelo, y
+`sam2mot`, que la tabla omitía sin decir por qué, empata en personas con el que
+vuela. **La tabla preliminar sugería cambiar el tracker del vuelo por
+`strongsort`, y eso era un artefacto de dos bugs nuestros.** Las tres fallas
+tenían la misma forma: una señal que no medía lo que uno creía. Un ajuste
+"honrado" que llegaba invertido, un ajuste "ignorado" cuyo efecto seguía
+encendido, y un comentario que contradecía al código que describía. Ninguna
+rompía nada; las tres producían una tabla publicable. Lo que las encontró fue
+mirar la INSTANCIA construida y el fuente de la librería, no las firmas.
+
+La fila de una tabla se regenera con dos órdenes:
+
+    V=../drone-geolocation/entrenamiento/venv/Scripts/python.exe
+    "$V" scripts/comparar_trackers.py --trackers=botsort --cmc=on
+    "$V" scripts/medir/umbral_invertido.py      # el diagnóstico de ocsort
+
 
 ## Rastreador (BoT-SORT)
 

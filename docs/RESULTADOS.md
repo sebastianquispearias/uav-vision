@@ -88,7 +88,7 @@ Video: `docs/yolo26_vs_rfdetr.mp4`.
 |---|---|---|
 | CLIP como segundo juez | fantasmas 2 → 1, sin perder personas | en la estación, opcional con `--clip-descarta` |
 | Cuadro entero + fichas cada 5 frames | recall 55,0 → 57,3 total y 39,5 → 42,4 en el balcón, misma precisión, pero **ni una persona más** en el marcador de producto | en `camera.py`, apagado por defecto |
-| Umbral bajo solo en la ventana del objetivo | recall 43,9 → 60,7 % sobre el objetivo, sin coste de cómputo | sin implementar |
+| Umbral bajo solo en la ventana del objetivo | recall 43,9 → 60,7 % sobre el objetivo **contra cajas, pero cero cambio en personas y fantasmas**: las mismas 5 de 7 y los mismos 6, en 4 variantes | en `vision_protocol.py` (`fix_target()`, `FOCO_RADIO_PX=320`), lo dispara el clic del operador |
 
 El umbral de las fichas (0,55) se eligió en los vuelos del 01ago, no en el test, y validación eligió
 el mismo valor de forma independiente.
