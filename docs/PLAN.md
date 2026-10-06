@@ -1,259 +1,267 @@
-# Qué sigue, en orden, con su criterio de aceptación
+# What comes next, in order, with its acceptance criterion
 
-Cada punto dice **cuándo está listo**, para que el trabajo tenga final y no sea una cinta sin fin.
-Lo que ya está medido y descartado vive en `DESCARTADO.md`; los números actuales en `RESULTADOS.md`.
+Every item says **when it is done**, so the work has an end and is not a treadmill.
+What is already measured and discarded lives in `DESCARTADO.md`; the current numbers in
+`RESULTADOS.md`.
 
-## Verificación activa: el bloque nuevo, y va antes que el resto
+## Active verification: the new block, and it goes before the rest
 
-Las tres piezas de abajo son un solo mecanismo, no tres funciones sueltas. El operador dice qué
-busca, el sistema mide cuánta evidencia tiene y cuánta le falta, y el dron va a conseguir la que
-falta. En la literatura eso se llama **active sequential hypothesis testing**, y la regla de parada
-es el test secuencial de Wald (1945): se acumula evidencia y se para al cruzar uno de dos umbrales,
-uno para confirmar y otro para descartar.
+The three pieces below are one mechanism, not three loose features. The operator says what is being
+looked for, the system measures how much evidence it has and how much it is missing, and the drone
+goes and gets what is missing. In the literature that is called **active sequential hypothesis
+testing**, and the stopping rule is Wald's sequential test (1945): evidence is accumulated and the
+process stops on crossing one of two thresholds, one to confirm and one to discard.
 
-Van antes que los puntos 1 a 6 porque ninguna necesita volar, y porque la medición del 30sep (abajo,
-en lo que no hay que hacer) sacó de la mesa la justificación que se les suponía.
+They go before items 1 to 6 because none of them needs to fly, and because the 30sep measurement
+(below, under what not to do) took the supposed justification for them off the table.
 
-### A. La barra de certeza, visible
+### A. The certainty bar, visible
 
-Hoy un candidato está maduro o no está, y el operador no ve nada mientras se decide. Medido en el
-vuelo 3: un barrido de 30 s sobre una persona **nunca** madura un candidato, y uno de 60 s lo hace
-el 47 % de las veces. Durante esos 30 s el sistema está a mitad de camino y el operador no lo sabe.
+Today a candidate is either mature or not, and the operator sees nothing while it is being decided.
+Measured on flight 3: a 30 s sweep over a person **never** matures a candidate, and a 60 s one does
+so 47 % of the time. During those 30 s the system is halfway there and the operator does not know
+it.
 
-La cuenta ya existe: `identity.py` calcula `c["n"]` contra `n_reporte` y la cobertura temporal en
-cada cuadro. Falta mostrarla, y faltan dos cosas de fondo. Primero, **ponderar cada avistamiento**:
-hoy el décimo desde el mismo ángulo vale igual que el primero desde un ángulo nuevo, y en un test
-secuencial cada observación aporta según cuán informativa es. Segundo, **el umbral de abajo**: hoy
-la barra sólo sube, y un candidato que acumula evidencia en contra debería vaciarse y descartarse
-solo en vez de quedar colgado como preliminar.
+The count already exists: `identity.py` computes `c["n"]` against `n_reporte` and the temporal
+coverage on every frame. What is missing is showing it, and two deeper things. First, **weighting
+each sighting**: today the tenth from the same angle counts as much as the first from a new angle,
+and in a sequential test each observation contributes according to how informative it is. Second,
+**the lower threshold**: today the bar only rises, and a candidate accumulating evidence against
+should empty out and discard itself instead of hanging around as a preliminary.
 
-**Listo cuando:** la estación muestra, por candidato, la fracción de evidencia reunida; un candidato
-con evidencia en contra se descarta solo; y el marcador de producto no empeora.
+**Done when:** the station shows, per candidate, the fraction of evidence gathered; a candidate with
+evidence against discards itself; and the product scoreboard does not get worse.
 
-### B. El click que define el objetivo
+### B. The click that defines the target
 
-El veredicto del operador existe y hoy hace poco: "es lo que busco" baja el umbral en esa ventana, y
-"no es" borra un punto del mapa. Lo primero está medido y no sirve (ver punto 5). Lo segundo tira la
-señal más valiosa que hay.
+The operator's verdict exists and today does little: "this is what I am looking for" lowers the
+threshold in that window, and "not it" erases a point from the map. The first is measured and is no
+use (see item 5). The second throws away the most valuable signal there is.
 
-La vía medida es la plantilla de apariencia: el recorte del click es la huella, y una detección
-dudosa que se le parece se acepta. El objetivo sube de 91,1 a 94,4 % sin tocar un peso y con vuelta
-atrás inmediata. **No se entrenan pesos en vuelo**, por lo que ya está en la lista de abajo.
+The measured route is the appearance template: the crop of the click is the embedding, and a
+doubtful detection that resembles it is accepted. The target rises from 91.1 to 94.4 % without
+touching a weight and with immediate rollback. **Weights are not trained in flight**, which is
+already on the list below.
 
-Y el "no es" se guarda como negativo difícil. En aprendizaje activo el ejemplo más valioso no es el
-positivo sino el negativo que el modelo clasificó mal con confianza, que es exactamente lo que ese
-botón produce.
+And "not it" is kept as a hard negative. In active learning the most valuable example is not the
+positive but the negative the model got wrong with confidence, which is exactly what that button
+produces.
 
-**Listo cuando:** el click del operador cambia qué candidatos se reportan en el replay del 02ago, los
-veredictos negativos quedan guardados y utilizables, y el marcador de producto lo juzga.
+**Done when:** the operator's click changes which candidates are reported in the 02ago replay, the
+negative verdicts are stored and usable, and the product scoreboard judges it.
 
-### C. La maniobra: mandar un dron a mirar desde otro lado
+### C. The manoeuvre: sending a drone to look from another side
 
-Es la fase 2 de la misión original ("los drones van, circulan y mantienen posición") y nunca se
-construyó. Hoy la estación propone una segunda mirada y el piloto decide.
+It is phase 2 of the original mission ("the drones go, circle and hold position") and it was never
+built. Today the station proposes a second look and the pilot decides.
 
-**Lo que la justifica es la decisión del operador, y eso NO es un premio de consuelo.** De los 11
-candidatos que el sistema reporta, 6 son nadie. El que los mata es el operador, y hoy decide con un
-recorte de 128 px tomado casi desde arriba, que es el peor punto de vista que existe: medido sobre
-barcos, la cámara a 36 grados da 0,866 de recall y apuntando recto hacia abajo **0,067**. Trece
-veces, por el ángulo solo. Si el punto de vista vale eso para un detector, para un ojo humano
-juzgando si una mancha es una persona vale igual: desde arriba una persona no tiene postura.
+**What justifies it is the operator's decision, and that is NOT a consolation prize.** Of the 11
+candidates the system reports, 6 are nobody. What kills them is the operator, and today the
+operator decides with a 128 px crop taken from almost directly above, which is the worst viewpoint
+there is: measured on boats, the camera at 36 degrees gives 0.866 recall and pointing straight down
+**0.067**. Thirteen times, from the angle alone. If the viewpoint is worth that to a detector, to a
+human eye judging whether a blob is a person it is worth the same: from above a person has no
+posture.
 
-**El contraste que lo deja claro:** la segunda opinión de RF-DETR vuelve a leer **la misma foto**,
-mejor. La maniobra trae **una foto nueva**. Solo una de las dos agrega información que antes no
-estaba, y es la única que un modelo más grande no puede reemplazar.
+**The contrast that makes it clear:** RF-DETR's second opinion re-reads **the same photograph**,
+better. The manoeuvre brings **a new photograph**. Only one of the two adds information that was not
+there before, and it is the only one a bigger model cannot replace.
 
-**Por recall del detector NO se justifica**, y eso sigue en pie: el detector pierde personas más
-grandes que las que encuentra en la misma imagen, así que ir a buscar más píxeles no arregla nada.
-Tampoco encoge el margen: medido sobre los candidatos del 02ago, el radio del 95 % de un blanco
-quieto es 82 a 99,9 % sesgo del GPS y la brújula de ese avión, y llevar la dispersión a cero lo
-encoge 0,1 a 0,5 %. Por eso la orden va a **otra** aeronave, cuyo sesgo es otro.
+**It is NOT justified by detector recall**, and that still stands: the detector loses people larger
+than the ones it finds in the same image, so going to fetch more pixels fixes nothing. Nor does it
+shrink the margin: measured over the 02ago candidates, the 95 % radius of a stationary target is 82
+to 99.9 % the GPS and compass bias of that aircraft, and taking the dispersion to zero shrinks it
+0.1 to 0.5 %. That is why the order goes to **another** aircraft, whose bias is a different one.
 
-Lo que falta no es el criterio sino su objetivo. `view_selection.py` puntúa vistas por **diversidad
-geométrica**, que es lo correcto para triangular y lo equivocado para reconocer. Para verificar qué
-es algo, el criterio tiene que ser la reducción esperada de incertidumbre **de clasificación**.
-Primer obstáculo material: `correr.py` es el único que importa `view_selection.py` y `fusion.py`, y
-no arranca (importa `CamaraSimulada`, que no existe: `camera.py` define `SimulatedCamera`).
+What is missing is not the criterion but its objective. `view_selection.py` scores views by
+**geometric diversity**, which is right for triangulating and wrong for recognising. To verify what
+something is, the criterion has to be the expected reduction of **classification** uncertainty.
+First material obstacle: `correr.py` is the only thing importing `view_selection.py` and `fusion.py`,
+and it does not start (it imports `CamaraSimulada`, which does not exist: `camera.py` defines
+`SimulatedCamera`).
 
-**Listo cuando:** el operador señala un candidato, un dron no líder llega a una posición calculada y
-devuelve una imagen desde otro ángulo, y queda medido cuánto movió la barra del punto A.
+**Done when:** the operator points at a candidate, a non-leader drone reaches a computed position and
+returns an image from another angle, and how much it moved the bar of item A is measured.
 
-## Producto
+## Product
 
-### 1. Volar otra vez, a 20-25 m, otro día y otro sitio
+### 1. Fly again, at 20-25 m, another day and another site
 
-**Por qué es el primero y no se puede saltear:** no solo da la primera evaluación limpia. Hoy **no
-tenemos un solo frame de validación en el régimen que importa**, porque todo el material alto que
-existe o es el test o son sus vecinos inmediatos. Por eso la validación eligió mal tres veces
-seguidas y **no podemos ni elegir entre dos modelos** antes de tocar el test.
+**Why it is first and cannot be skipped:** it does not only give the first clean evaluation. Today we
+**do not have a single validation frame in the regime that matters**, because all the high-altitude
+material that exists is either the test or its immediate neighbours. That is why validation chose
+wrong three times running and **we cannot even choose between two models** before touching the test.
 
-**Listo cuando:** hay un vuelo de 10 minutos a 20-25 m, con al menos dos personas además del
-operador, y al menos una posición topografiada que no sea la del operador.
+**Done when:** there is a 10-minute flight at 20-25 m, with at least two people besides the operator,
+and at least one surveyed position that is not the operator's.
 
-**Ayuda que existe:** la página `/plan` de la herramienta de etiquetado dibuja la altura contra los
-frames y dice, del tramo que elijas, cuánto es nuevo y de qué tamaño se vería la persona ahí.
+**Help that exists:** the labelling tool's `/plan` page draws altitude against frames and says, for
+whatever stretch is chosen, how much of it is new and how large a person would look there.
 
-### 2. Medir en la Pi el cuadro bajo demanda
+### 2. Measure the on-demand frame on the Pi
 
-Nada de lo nuevo corrió nunca en el aire. La Pi tarda 206 ms por cuadro.
+None of the new work has ever run in the air. The Pi takes 206 ms per frame.
 
-**Listo cuando:** `<= 330 ms/frame` medido en la Pi con el modelo congelado y el cuadro bajo demanda
-respondiendo.
+**Done when:** `<= 330 ms/frame` measured on the Pi with the model frozen and the on-demand frame
+answering.
 
-**Las fichas salieron de este punto el 17sep.** Medirlas en la Pi era caro y ya no hace falta
-decidirlo ahí: por el marcador de producto no compran ni una persona, no quitan ningún fantasma y
-alejan el punto 57 cm, a cambio de seis veces el cómputo. El número está en `RESULTADOS.md`. Si
-alguna vez se encienden, se mide entonces.
+**The tiles left this item on 17sep.** Measuring them on the Pi was expensive and no longer needs
+deciding there: by the product scoreboard they buy not one person, remove no phantom and push the
+point 57 cm away, in exchange for six times the compute. The number is in `RESULTADOS.md`. If they
+are ever switched on, it gets measured then.
 
-### 3. Juzgar las mejoras nuevas con el marcador de producto — HECHO el 17sep
+### 3. Judge the new improvements with the product scoreboard — DONE on 17sep
 
-Se temía que los 12 puntos de precisión que paga la adaptación fueran fantasmas nuevos. **Lo eran:**
-de 2 a 8. Y a cambio el punto se acerca un 42 %, de 1,92 a 1,12 m, así que es un compromiso que hay
-que elegir, no una mejora que se aplica. Las fichas no compran ninguna persona.
+The fear was that the 12 points of precision adaptation pays would be new phantoms. **They were:**
+from 2 to 8. And in exchange the point comes 42 % closer, from 1.92 to 1.12 m, so it is a trade to
+be chosen, not an improvement to be applied. The tiles buy no person at all.
 
-La tabla está en `RESULTADOS.md`. El marcador dejó de vivir en una carpeta temporal: es
-`scripts/personas_encontradas.py`, con `tests/test_personas_encontradas.py` fijándolo, y los
-candidatos se regeneran con `scripts/replay_vuelo3.py --candidatos=`, así que puntúa el código de hoy
-y no una corrida congelada.
+The table is in `RESULTADOS.md`. The scoreboard stopped living in a temporary folder: it is
+`scripts/personas_encontradas.py`, with `tests/test_personas_encontradas.py` pinning it, and the
+candidates are regenerated with `scripts/replay_vuelo3.py --candidatos=`, so it scores today's code
+and not a frozen run.
 
-**Lo que queda abierto:** decidir si la adaptación se enciende, y con qué salvaguarda. Como dice el
-final de este documento, el modo de fallo es silencioso y hay que poder volver al modelo original.
+**What is still open:** deciding whether adaptation is switched on, and with what safeguard. As the
+end of this document says, the failure mode is silent and it has to be possible to go back to the
+original model.
 
-### 4. RF-DETR en tierra, de punta a punta — HECHO el 17sep (`39f8f86`)
+### 4. RF-DETR on the ground, end to end — DONE on 17sep (`39f8f86`)
 
-El botón existe y está fijado por `tests/test_gs_segunda.js`, que recorre el flujo entero:
-
-```
-  clic en el del dron 2  : {"ruta":"/mirar","cuerpo":{"dron":"2"}}
-  mientras espera        : se ven las dos fases y ninguna afirma un resultado
-  contesta               : 4 personas en tierra, en 1.44 s
-  y solo al dron que miro: la tarjeta del dron 2 sigue sin respuesta
-```
-
-1,44 s contra el criterio de 5 s. El botón va junto al dron y no junto al punto del mapa, porque la
-segunda opinión se le pide a **un dron**: es su cuadro el que se mira.
-
-**Lo que queda, y es del portafolio y no del producto:** el video comparativo (punto 9) está citado
-en `docs/README.md` y no incrustado en ningún lado.
-
-### 5. Modo "objetivo fijado" — HECHO el 17sep, NEGATIVO
-
-Bajar el umbral solo dentro de la ventana del objetivo lleva el recall sobre el objetivo de 43,9 a
-60,7 %, sin un milisegundo extra de cómputo y reversible. **Pasado por la cadena entera no cambia
-nada**: las mismas cinco personas y los mismos seis fantasmas, en las cuatro variantes probadas, con
-el objetivo puesto en el operador y en el candidato más frágil (commit `e186c50`).
-
-Diecisiete puntos de recall que no compran una persona. Es el techo medido de la versión barata de
-"que el click enseñe", y el motivo por el que la vía es la plantilla de apariencia del punto B.
-
-### 6. Re-unir a una persona tras un hueco — CONSTRUIDO Y APAGADO, por el umbral
-
-El criterio **se cumple**, y `tests/test_reunir_movil.py` lo mide:
+The button exists and is pinned by `tests/test_gs_segunda.js`, which walks the whole flow:
 
 ```
-  como viene (apagado)               A(1) B(1) C(1) G(3) H(1)   6 fantasmas
-  encendido (0.63, 30 s)             A(1) B(1) C(1) G(1) H(1)   6 fantasmas
-  un poco mas suelto (0.70)          A(1) B(1) G(1) H(1)        6 fantasmas
+  click on drone 2's       : {"ruta":"/mirar","cuerpo":{"dron":"2"}}
+  while waiting            : both phases are visible and neither asserts a result
+  it answers               : 4 people on the ground, in 1.44 s
+  and only the drone asked : drone 2's card still shows no answer
 ```
 
-G pasa de tres puntos a uno sin perder a nadie y sin un fantasma más. H ya era uno.
+1.44 s against the 5 s criterion. The button sits next to the drone and not next to the map point,
+because the second opinion is asked of **a drone**: it is its frame that gets looked at.
 
-**Por qué sigue apagado**, y es el motivo que no hay que saltearse: entre unir a la que camina y
-borrar al chico del balcón hay **0,07** de distancia OSNet, en una escala donde dos pedazos de la
-misma persona llegan a estar a 0,81. El `EMB_DIST_REUNE = 0,63` se eligió mirando el vuelo contra el
-que se lo juzga, y su propio comentario lo declara: *"THIS NUMBER IS NOT SAFE AND THAT IS WHY
-REJOINING IS OFF BY DEFAULT"*.
+**What is left, and it belongs to the portfolio and not the product:** the comparison video (item 9)
+is cited in `docs/README.md` and embedded nowhere.
 
-**Listo cuando:** el 0,63 se re-elija sobre un vuelo que no sea el del test. Es el punto 1 otra vez.
+### 5. "Fixed target" mode — DONE on 17sep, NEGATIVE
 
-## Portafolio
+Lowering the threshold only inside the target window takes recall over the target from 43.9 to
+60.7 %, without a millisecond of extra compute and reversibly. **Run through the whole chain it
+changes nothing**: the same five people and the same six phantoms, across the four variants tried,
+with the target set on the operator and on the most fragile candidate (commit `e186c50`).
 
-El objetivo declarado es conseguir trabajo como ingeniero de visión o percepción. Para eso el sistema
-**no necesita estar terminado**, necesita ser defendible y entendible rápido.
+Seventeen points of recall that buy no person. It is the measured ceiling of the cheap version of
+"let the click teach", and the reason the route is the appearance template of item B.
 
-### 7. Una página que se entienda en 40 segundos — EN PIE, falta el medio
+### 6. Rejoin a person after a gap — BUILT AND SWITCHED OFF, because of the threshold
 
-El `README.md` ya abre con la afirmación y el número, y ya tiene la sección **What it does not do**,
-que es la parte que un lector que contrata valora: las 5 personas de 7 con sus 6 fantasmas, el 44 %
-que el detector pierde, la medición de que acercarse no lo arregla, los 46,2 % contra 90,5 % del
-modelo que no puede volar, que el sistema nunca toca el vuelo, y que sobre agua nunca se probó.
+The criterion **is met**, and `tests/test_reunir_movil.py` measures it:
 
-**Lo que falta:** el medio. Entre el titular y las limitaciones hay secciones de uso y de contrato de
-cámara, que son para quien va a trabajar en el repo, no para quien lo está juzgando en 40 segundos.
-Y el video comparativo (punto 9) está citado pero no incrustado.
+```
+  as it ships (off)                  A(1) B(1) C(1) G(3) H(1)   6 phantoms
+  switched on (0.63, 30 s)           A(1) B(1) C(1) G(1) H(1)   6 phantoms
+  a little looser (0.70)             A(1) B(1) G(1) H(1)        6 phantoms
+```
 
-### 8. Los entrenamientos que perdieron, contados como resultado — HECHO
+G goes from three points to one without losing anybody and without one more phantom. H was already
+one.
 
-Son cuatro, no tres, y `DESCARTADO.md` ya los cuenta como argumento y no como registro: la tabla con
-el número de cada uno, y debajo la lección que no era obvia, que el entrenamiento 3 ganaba mirando
-recall y precisión y perdía mirando personas, **y que por eso existe el marcador de personas y
-fantasmas**. Eso es el argumento: el fracaso explica por qué el sistema se mide como se mide.
+**Why it is still off**, and it is the reason not to skip: between joining the walking woman and
+erasing the boy on the balcony there are **0.07** of OSNet distance, on a scale where two pieces of
+the same person get as far apart as 0.81. The `EMB_DIST_REUNE = 0.63` was chosen by looking at the
+flight it is judged against, and its own comment declares it: *"THIS NUMBER IS NOT SAFE AND THAT IS
+WHY REJOINING IS OFF BY DEFAULT"*.
 
-Y los cuatro estaban lastrados por una línea de Ultralytics que reinicializa la cabeza de
-clasificación, así que ninguno estaba afinando nada. Está dicho ahí con el mensaje literal.
+**Done when:** the 0.63 is re-chosen on a flight that is not the test one. That is item 1 again.
 
-El `README.md` manda a ese documento diciendo para qué sirve: *"the document to read first if you
-are judging the method rather than the result"*.
+## Portfolio
 
-### 9. El video comparativo como pieza central — FALTA UN PASO QUE NO ES DE CÓDIGO
+The declared objective is getting work as a vision or perception engineer. For that the system
+**does not need to be finished**, it needs to be defensible and quick to understand.
 
-`docs/yolo26_vs_rfdetr.mp4` muestra 46,2 % contra 90,5 % con el acumulado corriendo en pantalla, y
-ahora está citado en la sección **What it does not do** del `README.md`, que es donde lo va a ver
-quien juzgue el repo.
+### 7. A page understood in 40 seconds — STANDING, the middle is missing
 
-**Lo que falta es subirlo.** Los binarios no entran al repositorio, por la misma convención que
-`demo.gif`: se sube a un issue de GitHub y se pega la URL. El hueco con la instrucción ya está en el
-README, en el sitio exacto. Es un paso manual y nadie más que el autor lo puede dar.
+`README.md` already opens with the claim and the number, and already has the **What it does not do**
+section, which is the part a reader who hires values: the 5 people of 7 with their 6 phantoms, the
+44 % the detector loses, the measurement that getting closer does not fix it, the 46.2 % against
+90.5 % of the model that cannot fly, that the system never touches the flight, and that it was never
+tried over water.
 
-**Listo cuando:** el video se reproduce dentro del README sin que el archivo esté versionado.
+**What is missing:** the middle. Between the headline and the limitations there are usage and
+camera-contract sections, which are for whoever is going to work in the repo, not for whoever is
+judging it in 40 seconds. And the comparison video (item 9) is cited but not embedded.
 
-## Lo que NO hay que hacer
+### 8. The training runs that lost, told as a result — DONE
 
-Está medido y agotado, el detalle en `DESCARTADO.md`:
+There are four, not three, and `DESCARTADO.md` already tells them as an argument and not as a record:
+the table with each one's number, and below it the lesson that was not obvious, that run 3 won when
+read through recall and precision and lost when read through people, **and that this is why the
+people-and-phantoms scoreboard exists**. That is the argument: the failure explains why the system is
+measured the way it is.
 
-- **Más entrenamientos con otra receta sobre los mismos datos.** Tres perdieron.
-- **Más etiquetado de los vuelos que ya tenemos.** El material está exprimido: lo que queda sin
-  etiquetar por encima de 12 m son vecinos inmediatos de lo ya etiquetado.
-- **RF-DETR como maestro mientras no haya metraje nuevo.** Pseudo-etiquetar los mismos vuelos
-  triplicaría el sobreajuste, no la variedad.
-- **Acercarse volando para que el detector vea mejor.** Medido el 30sep sobre las 764 pérdidas
-  etiquetadas del 02ago: no son chicas (mediana 49,3 px, sólo el 8,2 % bajo los 28 px para los que el
-  detector fue entrenado). Y comparando **dentro del mismo cuadro**, donde la altura del dron y la
-  escena son idénticas, en el 59,1 % de los 176 cuadros el detector perdió a una persona **más
-  grande** que una que encontró en la misma imagen (f2586: perdió 186 px y encontró 141). El fallo no
-  es de resolución, así que más píxeles no lo arreglan. El zoom digital ya se había medido peor
-  (43,9 → 11,2 → 2,3 %). La señal que queda es la **forma**: relación alto/ancho 1,27 en las perdidas
-  contra 1,79 en las encontradas, y más anchas que altas el 20,0 % contra el 0,9 %. Para recall la
-  vía es el detector (punto 4, segunda opinión en tierra), no la maniobra.
-- **Adaptación de pesos en vuelo sin poder revertir.** La adaptación funciona, pero el modo de fallo
-  es silencioso: hay que tener los dos modelos y poder volver al original.
+And all four were handicapped by one line of Ultralytics that reinitialises the classification head,
+so none of them was fine-tuning anything. It is stated there with the literal message.
 
-## Trabajo futuro: servocontrol visual (cerrar el lazo)
+`README.md` sends the reader to that document saying what it is for: *"the document to read first if
+you are judging the method rather than the result"*.
 
-Hoy el sistema es **percepción en lazo abierto**: mira, calcula la posición y la reporta, pero
-nunca toca el vuelo. Los únicos comandos que un protocolo GrADyS puede emitir son `GotoCoords`,
-`GotoGeoCoords` y `SetSpeed`: coordenadas y velocidad, nada de imagen.
+### 9. The comparison video as a centrepiece — ONE STEP MISSING, AND IT IS NOT CODE
 
-Cerrar el lazo se llama **servocontrol visual** (*visual servoing*). Dos variantes:
-**IBVS** (*image-based*), donde el error se mide en pixeles, y **PBVS** (*position-based*), que
-primero convierte la imagen en una posicion. El sistema ya hace la mitad dificil de PBVS:
-`pinhole_local.py` + `identity.py` convierten imagen en metros. Falta usar ese resultado para
-mandar un comando.
+`docs/yolo26_vs_rfdetr.mp4` shows 46.2 % against 90.5 % with the running total on screen, and it is
+now cited in the **What it does not do** section of `README.md`, which is where whoever judges the
+repo will see it.
 
-**Las primitivas ya existen en `uav_api`**, solo que no estan expuestas como comando de GrADyS:
+**What is missing is uploading it.** Binaries do not enter the repository, by the same convention as
+`demo.gif`: it is uploaded to a GitHub issue and the URL pasted in. The gap with the instruction is
+already in the README, in the exact place. It is a manual step and nobody but the author can take it.
 
-    /drive_body, /drive_body_wait    velocidad en el sistema del propio dron
-    /travel_at_ned                   velocidad
-    /set_heading, /set_yaw_rate      rumbo y velocidad de giro
+**Done when:** the video plays inside the README without the file being versioned.
 
-**El caso que lo justifica:** a 40 m una persona son 42 px y el detector falla pasados los 24 m.
-Un lazo que mantenga al objetivo a un tamano fijo en pixeles (por ejemplo 80 px de alto) elige la
-altura solo, en vez de fijarla a mano antes de despegar.
+## What NOT to do
 
-**Lo que lo hace dificil, y por que no esta hecho:**
-- Hay que exponer un comando nuevo en GrADyS, o llamar a uav_api directo desde el protocolo
-  salteandose la abstraccion, que es justo lo que la interfaz existe para evitar.
-- Un lazo cerrado a 3 FPS con un detector que pierde el 45 % de los cuadros se queda sin senal
-  cada vez que el detector falla. Hace falta decidir que hace el controlador mientras tanto.
-- Cambia lo que el sistema ES: de "observo y reporto" a "observo y vuelo", que es mucho mas
-  dificil de defender como seguro ante un operador.
+It is measured and exhausted, the detail in `DESCARTADO.md`:
+
+- **More training runs with another recipe over the same data.** Three lost.
+- **More labelling of the flights already held.** The material is squeezed dry: what is left
+  unlabelled above 12 m consists of immediate neighbours of what is already labelled.
+- **RF-DETR as a teacher while there is no new footage.** Pseudo-labelling the same flights would
+  triple the overfitting, not the variety.
+- **Flying closer so the detector sees better.** Measured on 30sep over the 764 labelled misses of
+  02ago: they are not small (median 49.3 px, only 8.2 % below the 28 px the detector was trained
+  for). And comparing **within the same frame**, where the drone's altitude and the scene are
+  identical, in 59.1 % of the 176 frames the detector missed a person **larger** than one it found in
+  the same image (f2586: missed 186 px and found 141). The failure is not one of resolution, so more
+  pixels do not fix it. Digital zoom had already measured worse (43.9 → 11.2 → 2.3 %). The signal
+  that remains is **shape**: height/width ratio 1.27 in the missed against 1.79 in the found, and
+  wider than tall 20.0 % against 0.9 %. For recall the route is the detector (item 4, second opinion
+  on the ground), not the manoeuvre.
+- **In-flight weight adaptation without being able to revert.** Adaptation works, but the failure
+  mode is silent: both models have to be held and going back to the original has to be possible.
+
+## Future work: visual servoing (closing the loop)
+
+Today the system is **open-loop perception**: it looks, computes the position and reports it, but
+never touches the flight. The only commands a GrADyS protocol can issue are `GotoCoords`,
+`GotoGeoCoords` and `SetSpeed`: coordinates and speed, nothing about the image.
+
+Closing the loop is called **visual servoing**. Two variants: **IBVS** (image-based), where the error
+is measured in pixels, and **PBVS** (position-based), which first turns the image into a position.
+The system already does the hard half of PBVS: `pinhole_local.py` + `identity.py` turn image into
+metres. What is missing is using that result to send a command.
+
+**The primitives already exist in `uav_api`**, they are simply not exposed as a GrADyS command:
+
+    /drive_body, /drive_body_wait    velocity in the drone's own frame
+    /travel_at_ned                   velocity
+    /set_heading, /set_yaw_rate      heading and turn rate
+
+**The case that justifies it:** at 40 m a person is 42 px and the detector fails past 24 m. A loop
+holding the target at a fixed size in pixels (say 80 px tall) chooses the altitude on its own,
+instead of fixing it by hand before taking off.
+
+**What makes it hard, and why it is not done:**
+- A new command has to be exposed in GrADyS, or uav_api has to be called directly from the protocol
+  bypassing the abstraction, which is exactly what the interface exists to prevent.
+- A closed loop at 3 FPS with a detector that loses 45 % of the frames runs out of signal every time
+  the detector fails. What the controller does meanwhile has to be decided.
+- It changes what the system IS: from "I observe and report" to "I observe and fly", which is much
+  harder to defend as safe to an operator.
