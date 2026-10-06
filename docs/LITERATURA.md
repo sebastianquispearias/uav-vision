@@ -1,73 +1,77 @@
-# Papers consultados, qué dieron y qué queda sin probar
+# Papers consulted, what they gave and what is still untested
 
-Solo lo que se leyó y se contrastó con datos propios. Cada entrada dice **qué nos dio a nosotros**,
-que suele no ser lo que el paper promete.
+Only what was read and checked against our own data. Every entry says **what it gave us**, which is
+usually not what the paper promises.
 
-## Detección de objetos pequeños desde el aire
+## Small object detection from the air
 
 **[Slicing Aided Hyper Inference (SAHI), arXiv 2202.06934](https://arxiv.org/pdf/2202.06934)**
-Reporta +6,8 / +5,1 / +5,3 de AP en VisDrone y xView, sin reentrenar, cortando la imagen en fichas a
-resolución nativa.
-**Qué nos dio:** la técnica funciona acá pero rinde menos, y sabemos por qué. Reemplazar el cuadro por
-las fichas no paga; **sumarlas sí**: +2,3 de recall total y +2,9 en el balcón, a la misma precisión.
-La diferencia con el paper se explica porque nuestro modelo está especializado en personas de unos
-28 px y empeora cuando le llegan más grandes.
+Reports +6.8 / +5.1 / +5.3 AP on VisDrone and xView, without retraining, by cutting the image into
+tiles at native resolution.
+**What it gave us:** the technique works here but yields less, and we know why. Replacing the frame
+with the tiles does not pay; **adding them does**: +2.3 total recall and +2.9 on the balcony, at the
+same precision. The difference from the paper is explained by our model being specialised in people
+of about 28 px and getting worse when larger ones arrive.
 
 **[Evaluation of YOLO Models with Sliced Inference, arXiv 2203.04799](https://arxiv.org/pdf/2203.04799)**
-**Qué nos dio:** confirmación del orden de magnitud esperable.
+**What it gave us:** confirmation of the order of magnitude to expect.
 
 **[SAHI-Improved-YOLOv8 for UAV imagery](https://www.sciencedirect.com/science/article/pii/S2772375525004125)**
-**Qué nos dio:** el mismo patrón aplicado a un caso de dron.
+**What it gave us:** the same pattern applied to a drone case.
 
 **[Maritime Small Object Detection with Altitude-Aware Dynamic Tiling, arXiv 2511.19728](https://arxiv.org/pdf/2511.19728)**
-Fichas adaptadas a la altura del vuelo.
-**Sin probar, y encaja:** usar fichas **solo cuando el dron está alto**, que es cuando pagan. Tenemos
-`persona_px()` midiendo el tamaño esperado por altura, así que la regla saldría de datos propios.
+Tiles adapted to the flight altitude.
+**Untested, and it fits:** use tiles **only when the drone is high**, which is when they pay.
+We have `persona_px()` measuring the expected size by altitude, so the rule would come out of our
+own data.
 
-## Interacción con el operador
+## Interaction with the operator
 
 **[UAVDB: Point-Guided Masks for UAV Detection and Segmentation, arXiv 2409.06490](https://arxiv.org/pdf/2409.06490)**
-Un punto como prompt para generar máscaras en imágenes de dron.
-**Qué nos dio:** el nombre de lo que propuso el usuario (detección guiada por punto) y la confirmación
-de que es una línea viva. Nuestra versión barata está medida: bajar el umbral solo en la ventana del
-objetivo da +17 puntos de recall sin coste de cómputo.
+A point as a prompt to generate masks on drone imagery.
+**What it gave us:** the name of what the user proposed (point-guided detection) and the
+confirmation that it is a live line of work. Our cheap version is measured: lowering the threshold
+only inside the target window gives +17 points of recall at no compute cost.
 
 **[A reliable UAV tracking system with online re-detection network](https://www.sciencedirect.com/science/article/abs/pii/S0019057825004744)**
-Estimación de incertidumbre y re-detección en línea.
-**Sin probar, y es lo que nos falta:** que el sistema sepa **cuándo dejó de estar seguro** y vuelva a
-buscar, en vez de seguir afirmando. Es exactamente el problema de G y H partidas en dos.
+Uncertainty estimation and online re-detection.
+**Untested, and it is what we are missing:** having the system know **when it stopped being sure**
+and go looking again, instead of carrying on asserting. It is exactly the problem of G and H split
+in two.
 
-## Traspaso entre drones
+## Handoff between drones
 
 **[Continuous Marine Tracking via Autonomous UAV Handoff, arXiv 2507.12763](https://arxiv.org/pdf/2507.12763)**
-82,9 % de cobertura del objetivo a 4-5 Hz sobre Jetson Nano. El traspaso se resuelve con la posición y
-**un marcador ArUco pegado al otro dron**.
-**Qué nos dio:** que el traspaso funciona, y que ellos lo resuelven por geometría y no por reconocer al
-objetivo. Nosotros ya mandamos la huella OSNet entre drones, así que tenemos una vía distinta a mano.
+82.9 % target coverage at 4-5 Hz on a Jetson Nano. The handoff is resolved with position and **an
+ArUco marker stuck to the other drone**.
+**What it gave us:** that handoff works, and that they solve it by geometry rather than by
+recognising the target. We already send the OSNet embedding between drones, so we have a different
+route to hand.
 
 **[Multi-Drone based Single Object Tracking with Agent Sharing Network, arXiv 2003.06994](https://arxiv.org/pdf/2003.06994)**
-**Sin explorar.**
+**Unexplored.**
 
-## Cómputo repartido entre dron y tierra
+## Compute split between drone and ground
 
 **[Supporting UAVs with Edge Computing, arXiv 2310.11957](https://arxiv.org/html/2310.11957v1)**,
 **[Offloading Deep Learning Vision Tasks from UAV, arXiv 2302.01991](https://arxiv.org/pdf/2302.01991)**,
 **[Real-time UAV object detection and task offloading](https://link.springer.com/article/10.1007/s11370-026-00736-z)**
 
-La advertencia que más nos sirvió: **descargar tareas simples degrada al dron**; lo óptimo suele ser
-computar a bordo.
-**Qué nos dio:** el reparto que implementamos. Un cuadro son 303 KB, o sea 7,3 Mbps a 3 FPS: mandar
-todo el video no es opción. Mandar **un cuadro bajo demanda** sí, y es lo que quedó cableado.
+The warning that served us most: **offloading simple tasks degrades the drone**; the optimum is
+usually to compute onboard.
+**What it gave us:** the split we implemented. One frame is 303 KB, that is 7.3 Mbps at 3 FPS:
+sending the whole video is not an option. Sending **one frame on demand** is, and that is what was
+wired.
 
-## Ideas sin fuente todavía
+## Ideas without a source yet
 
-- **Destilar RF-DETR a yolo26.** RF-DETR encuentra el 90,5 % donde el nuestro encuentra el 46,2 %.
-  Como maestro sobre metraje **nuevo** sería la vía más prometedora. Sobre los vuelos que ya tenemos
-  no sirve: triplicaría el sobreajuste, no la variedad.
-- **Adaptar solo la plantilla de apariencia en vez de los pesos.** Medido: el objetivo sube de 91,1 a
-  94,4 % aceptando detecciones dudosas que se le parecen, sin tocar un solo peso y con vuelta atrás
-  inmediata.
-- **Que el veredicto del operador enseñe.** Hoy "no es" solo borra el punto del mapa. Es la única vía
-  contra el fantasma que ni CLIP ni el tamaño físico detectan.
-- **Fichas solo cuando el dron está alto**, siguiendo el paper de tiling adaptativo, usando nuestra
-  propia medición de tamaño por altura.
+- **Distil RF-DETR into yolo26.** RF-DETR finds 90.5 % where ours finds 46.2 %. As a teacher over
+  **new** footage it would be the most promising route. Over the flights we already have it is no
+  use: it would triple the overfitting, not the variety.
+- **Adapt only the appearance template instead of the weights.** Measured: the target rises from
+  91.1 to 94.4 % by accepting doubtful detections that resemble it, without touching a single
+  weight and with immediate rollback.
+- **Have the operator's verdict teach.** Today "not it" only erases the point from the map. It is
+  the only route against the phantom that neither CLIP nor physical size detects.
+- **Tiles only when the drone is high**, following the adaptive tiling paper, using our own
+  measurement of size by altitude.
