@@ -96,6 +96,34 @@ assert set(real["alguna_vez"]) == {"bajo_voltaje", "acelerador"}, real
 
 print()
 print("=" * 72)
+print("1b. EL ARCHIVO DEL KERNEL NO LLEVA PREFIJO, Y ASI SE LEIA MAL")
+print("=" * 72)
+# Las lineas de arriba pasan el valor con '0x' delante, y con prefijo cualquier base acierta.
+# El archivo real no lo lleva: leido en la Pi 4 del banco decia '80008' pelado. Esta seccion
+# alimenta las dos formas y exige que coincidan, que es el contraste que faltaba.
+for sin_prefijo, con_prefijo in (("0", "0x0"), ("80008", "0x80008"), ("50005", "0x50005"),
+                                 ("e0008", "0xe0008")):
+    a, b = con(sin_prefijo), con(con_prefijo)
+    print("  %-8s vs %-9s -> ahora=%-22s alguna_vez=%s"
+          % (sin_prefijo, con_prefijo, a["ahora"], a["alguna_vez"]))
+    assert a is not None, (
+        "'%s' sin prefijo devolvio None, o sea 'esta maquina no tiene firmware'. Un valor con "
+        "letra hexadecimal reventaba int(texto, 0) y el except lo convertia en silencio: la "
+        "alarma desaparecia en vez de sonar." % sin_prefijo)
+    assert a == b, (
+        "'%s' y '%s' tienen que decodificar igual y dieron %r contra %r. Si difieren, el valor "
+        "se esta leyendo en base 10: '80008' pasa a ser 0x13888, y ahi los bits caen en otro "
+        "significado. Medido en el banco: una placa cuyo estado real era limite termico se "
+        "reportaba a la estacion como BAJO VOLTAJE." % (sin_prefijo, con_prefijo, a, b))
+sin_pref = con("80008")
+assert "bajo_voltaje" not in sin_pref["alguna_vez"], (
+    "80008 no tiene ningun bit de bajo voltaje (0x80008 = limite termico ahora y alguna vez) "
+    "y se reporto uno: %r" % sin_pref)
+assert sin_pref["alguna_vez"] == ["limite_termico"], sin_pref
+print("  las dos formas coinciden, y 80008 es limite termico y NO bajo voltaje")
+
+print()
+print("=" * 72)
 print("2. SIN FIRMWARE DE RASPBERRY NO SE INVENTA UNA ALARMA")
 print("=" * 72)
 sin = salud_electrica(os.path.join(TMP, "no-existe"))

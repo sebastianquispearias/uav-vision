@@ -179,10 +179,24 @@ def salud_electrica(ruta: str = THROTTLED) -> Optional[dict]:
 
     None is not a failure: a laptop running the replay has no Raspberry firmware to ask, and a
     station that drew a warning from a missing file would cry wolf on every desk run.
+
+    THE VALUE IS HEXADECIMAL AND THE FILE WRITES IT WITHOUT A PREFIX, which is why the base is
+    stated instead of inferred. Read with base 0, as this did, '80008' parses as the DECIMAL
+    80008, which is 0x13888, and the bits land on different meanings entirely: measured on the
+    Pi 4 flying the bench, a board whose real state was 'soft temperature limit' was reported to
+    the station as 'under-voltage'. Worse, a value carrying a hex letter -- the same board read
+    0xe0008 through vcgencmd -- raises ValueError on base 0, the except below swallows it, and
+    the function returns None, which this docstring itself declares to mean 'no firmware to ask'.
+    So the alarm the station shows first, because it is the only one that predicts a loss, could
+    be both WRONG and ABSENT, and neither failure printed anything.
+
+    Base 16 accepts the prefix too, so a file that writes '0x80008' decodes the same as one that
+    writes '80008'. The test feeds both, and it used to feed only the prefixed form, which is
+    exactly why this survived: with a prefix, base 0 is correct.
     """
     try:
         with open(ruta) as fh:
-            crudo = int(fh.read().strip(), 0)
+            crudo = int(fh.read().strip(), 16)
     except Exception:
         return None
     return {"crudo": crudo,
