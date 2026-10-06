@@ -796,8 +796,12 @@ La fila de una tabla se regenera con dos órdenes:
   10 fps → 58 °C / 76%.
 - Con UBEC 5 A el voltaje se hunde sobre ~5 FPS y el sistema colapsa;
   por eso la tasa de visión por defecto es 4 Hz (bajada de 5 a 4 el
-  24-ago-2026 para operar con margen bajo el punto de colapso). Prueba
-  con UBEC 7 A pendiente.
+  24-ago-2026 para operar con margen bajo el punto de colapso). **La
+  prueba con el de 7 A está hecha**, y es el experimento de una variable
+  de `docs/deploying-yolo-reid-tracking-on-a-raspberry-pi.md:45-52`: el de
+  7 A sobrevivió los 87 s con 0 filas en bajo voltaje y el de 5 A murió a
+  los 55 s con 153, **consumiendo menos** (p95 1,19 A contra 1,50 A). No
+  era la corriente, era el escalón.
 - Ensayo cadena completa en vivo (24-ago-2026, alimentación de pared):
   detector solo 7.23 FPS / CPU 54% · +BoT-SORT 8.84 FPS / 65% ·
   +OSNet 6.59 FPS / 75.5%. OSNet ≈ +40 ms/frame con 1 persona. La
