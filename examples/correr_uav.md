@@ -1,14 +1,14 @@
-# Correr la misma misión en el dron real
+# Running the same mission on the real drone
 
-El comportamiento es **el mismo archivo** que en simulación:
-`mi_mision_cuadrado.py`. No se toca.
+The behaviour is **the same file** as in simulation: `mi_mision_cuadrado.py`.
+It is not touched.
 
-Lo único que cambia son los **dos argumentos** de `construir()`:
-la cámara y de dónde sale el rumbo.
+The only thing that changes is the **two arguments** of `construir()`:
+the camera and where the heading comes from.
 
 ---
 
-## 1. El archivo que va a la Raspberry
+## 1. The file that goes to the Raspberry
 
 ```python
 # mision_cuadrado_real.py
@@ -25,42 +25,42 @@ MiProtocolo = construir(
         fps=3.0,
         crops=True,
     ),
-    yaw_source=UavApiYaw("http://localhost:8000"),   # rumbo REAL del Pixhawk
+    yaw_source=UavApiYaw("http://localhost:8000"),   # REAL heading from the Pixhawk
     velocidad=5.0,
 )
 ```
 
-Comparalo con `correr_sim.py`:
+Compare it with `correr_sim.py`:
 
-| | simulación | dron |
+| | simulation | drone |
 |---|---|---|
-| cámara | `SimulatedCamera(target=..., pitch_deg=-55)` | `OnboardCamera(model=...)` |
-| rumbo | `lambda: 0.0` | `UavApiYaw("http://localhost:8000")` |
-| comportamiento | `mi_mision_cuadrado.py` | **el mismo archivo** |
+| camera | `SimulatedCamera(target=..., pitch_deg=-55)` | `OnboardCamera(model=...)` |
+| heading | `lambda: 0.0` | `UavApiYaw("http://localhost:8000")` |
+| behaviour | `mi_mision_cuadrado.py` | **the same file** |
 
 ---
 
-## 2. Copiar los dos archivos a la Pi
+## 2. Copy the two files to the Pi
 
 ```bash
 scp examples/mi_mision_cuadrado.py    pi@192.168.1.120:~/gradys_protocols/
 scp examples/mision_cuadrado_real.py  pi@192.168.1.120:~/gradys_protocols/
 ```
 
-> El runner carga los protocolos desde `~/gradys_protocols/`, **no** desde
-> `~/uav_vision/scripts/`. Copiarlo al sitio equivocado hace que el runner
-> no lo vea.
+> The runner loads protocols from `~/gradys_protocols/`, **not** from
+> `~/uav_vision/scripts/`. Copying it to the wrong place makes the runner
+> not see it.
 
 ---
 
-## 3. Que estén corriendo los dos servicios
+## 3. Have both services running
 
-`mavlink-routerd` arranca solo con la Pi (lo gestiona Rpanion). Los otros
-dos van a mano:
+`mavlink-routerd` starts with the Pi on its own (Rpanion manages it). The other
+two go by hand:
 
 ```bash
 ssh pi@192.168.1.120
-date                                    # el reloj llega atrasado SIEMPRE
+date                                    # the clock comes up wrong ALWAYS
 
 cd ~/uav_api && setsid nohup python3 -m uav_api.run_api \
     --connection_type udpin --uav_connection 127.0.0.1:14552 \
@@ -70,12 +70,12 @@ setsid nohup env PYTHONPATH=~/gradys-embedded python3 -m gradys_embedded.runner.
     --config ~/runner_pi.toml > ~/runner.log 2>&1 < /dev/null &
 ```
 
-El puerto es **14552**, no 14540: el 14540 lo reserva Rpanion y al
-reiniciar gana la carrera, matando al `uav_api` con `Errno 98`.
+The port is **14552**, not 14540: 14540 is reserved by Rpanion and on a restart
+it wins the race, killing `uav_api` with `Errno 98`.
 
 ---
 
-## 4. Las cuatro peticiones
+## 4. The four requests
 
 ```bash
 curl -X POST localhost:8100/mission/load -H "Content-Type: application/json" \
@@ -87,62 +87,62 @@ curl -X POST localhost:8100/mission/load -H "Content-Type: application/json" \
        "communication_protocol":"http",
        "label":"cuadrado"}'
 
-curl -X POST localhost:8100/mission/setup     # ⚠️ ARMA Y DESPEGA
-curl -X POST localhost:8100/mission/start     # empieza a llamar al protocolo
-curl -X POST localhost:8100/mission/stop      # lo apaga y manda RTL (aterriza)
+curl -X POST localhost:8100/mission/setup     # WARNING: ARMS AND TAKES OFF
+curl -X POST localhost:8100/mission/start     # starts calling the protocol
+curl -X POST localhost:8100/mission/stop      # shuts it down and sends RTL (lands)
 ```
 
-`node_ip_dict` **no es opcional**: sin él el runner contesta `400 Bad Request`
-con *"node_ip_dict is required"* y la misión ni se carga. El `1` es la propia
-Pi (su puerto de datos) y el `2` es la estación de tierra en la laptop.
+`node_ip_dict` **is not optional**: without it the runner answers `400 Bad Request`
+with *"node_ip_dict is required"* and the mission does not even load. The `1` is the
+Pi itself (its data port) and the `2` is the ground station on the laptop.
 
-**No hay ningún `main`.** El runner ya estaba encendido; estas cuatro
-peticiones son todo.
+**There is no `main`.** The runner was already up; these four requests are all of it.
 
 ---
 
-## 5. Si `mission/setup` no arma
+## 5. If `mission/setup` does not arm
 
-Desde la laptop, para ver el motivo:
+From the laptop, to see the reason:
 
 ```bash
 ssh pi@192.168.1.120 "timeout 80 python3 ~/prearm.py"
 ```
 
-Dejarlo correr los 80 s: ArduPilot emite los `PreArm:` cada ~31 s, y una
-escucha corta puede caer entre dos ráfagas y dar cero sin que nada esté mal.
+Let it run the full 80 s: ArduPilot emits the `PreArm:` messages about every 31 s,
+and a short listen can fall between two bursts and report zero with nothing
+actually wrong.
 
-Lo que dio en banco:
+What it gave on the bench:
 
 ```
-PreArm: Hardware safety switch      <- el botón redondo del módulo GPS, sin pulsar
-PreArm: Check mag field: 158, ...   <- probablemente hierro bajo techo
-PreArm: GPS 1: Bad fix              <- esperable bajo techo
+PreArm: Hardware safety switch      <- the round button on the GPS module, unpressed
+PreArm: Check mag field: 158, ...   <- probably iron indoors
+PreArm: GPS 1: Bad fix              <- expected indoors
 ```
 
-También se ve en QGroundControl desde el celular: conectarse al WiFi
-`rpanion` (clave `rpanion123`) y en QGC añadir un enlace UDP con
+It can also be seen in QGroundControl from the phone: join the WiFi network
+`rpanion` (key `rpanion123`) and in QGC add a UDP link with
 *Server Address* `10.0.2.100:14550`.
 
 ---
 
-## Y la estación de tierra, en la laptop
+## And the ground station, on the laptop
 
 ```bash
 cd lac/uav_vision/scripts/banco_embedded
 python gs_mapa.py --puerto 8300 "--origen=-22.9793,-43.2325"
 ```
 
-El `=` de `--origen` no es opcional: sin él, argparse se come el signo menos.
-Abrir `http://localhost:8300`.
+The `=` in `--origen` is not optional: without it, argparse eats the minus sign.
+Open `http://localhost:8300`.
 
-**Una sola `gs_mapa.py` a la vez.** En Windows un segundo proceso se queda con
-el mismo puerto 8300 sin quejarse (`allow_reuse_address` de `HTTPServer`), y las
-peticiones caen en cualquiera de los dos: se ve el estado de la corrida de ayer
-y parece que el dron no reporta. Comprobar antes con `netstat -ano | findstr :8300`
-y matar por PID lo que sobre.
+**One `gs_mapa.py` at a time.** On Windows a second process takes the same port
+8300 without complaining (`allow_reuse_address` on `HTTPServer`), and requests land
+on either of the two: you see the state of yesterday's run and it looks as if the
+drone is not reporting. Check first with `netstat -ano | findstr :8300` and kill by
+PID whatever is left over.
 
-**Sin POI, la estación no imprime nada y `/estado` dice `reportes: 0`.** No es un
-fallo: un mensaje con `latido` actualiza la ficha del dron y vuelve sin tocar el
-histórico. Lo que hay que mirar es `drones` -- si `frames_seen` sube y `fps_real`
-está en 3.0, la cadena entera funciona aunque no haya nadie que ver.
+**With no POI the station prints nothing and `/estado` says `reportes: 0`.** That is
+not a failure: a message carrying `latido` updates the drone's card and returns
+without touching the history. What to look at is `drones` -- if `frames_seen` is
+rising and `fps_real` sits at 3.0, the whole chain works even with nobody to see.

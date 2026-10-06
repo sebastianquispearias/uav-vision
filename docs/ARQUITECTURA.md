@@ -1,310 +1,297 @@
-# Cómo está armado el sistema
+# How the system is put together
 
-Los docstrings del fuente dicen **qué es** cada cosa y cómo se corre.
-[NOTES.md](../NOTES.md) dice **de dónde sale cada número**. Este documento dice **cómo encajan
-las piezas**: lo que no cabe en una cabecera de archivo sin que la cabecera deje de ser legible.
+The source docstrings say **what** each thing is and how it is run.
+[NOTES.md](../NOTES.md) says **where every number comes from**. This document says **how the
+pieces fit**: what does not fit in a file header without the header ceasing to be readable.
 
-Tres componentes tienen bastante diseño para merecer una sección: la estación de tierra, el
-replay del vuelo, y la herramienta de etiquetado.
+Three components carry enough design to deserve a section: the ground station, the flight replay,
+and the labelling tool.
 
-La cadena entera, en una línea por etapa:
+The whole chain, one line per stage:
 
 ```
-camera.py        captura -> YOLO -> BoT-SORT -> OSNet -> recorte
-pinhole_local.py pixel -> rayo de rumbo
-                 interseccion con el suelo
-identity.py      acumula por pista, clasifica estatico/movil, funde pistas en candidatos
-vision_protocol.py  difunde los POI (es el protocolo de GrADyS)
-gs_mapa.py       la estacion de tierra, con mapa
+camera.py        capture -> YOLO -> BoT-SORT -> OSNet -> crop
+pinhole_local.py pixel -> bearing ray
+                 intersection with the ground
+identity.py      accumulates per track, classifies static/mobile, fuses tracks into candidates
+vision_protocol.py  broadcasts the POIs (it is the GrADyS protocol)
+gs_mapa.py       the ground station, with a map
 ```
 
-Para leer la cadena entera corriendo en un solo archivo, sin abrir cinco:
+To read the whole chain running in a single file, without opening five:
 `scripts/sistema_esencial.py`.
 
 ---
 
-## La estación de tierra (`scripts/banco_embedded/gs_mapa.py`)
+## The ground station (`scripts/banco_embedded/gs_mapa.py`)
 
-### Qué se importa del paquete, y por qué no se copia
+### What is imported from the package, and why it is not copied
 
-`fundir` y `pedidos_de_verificacion` hacen la fusión entre drones, que necesita **los mismos
-números que usa el dron** para fundir sus propias pistas, y `EMB_DIST_OBJETIVO` es la distancia
-con la que viaja el clic del operador. Los dos se **importan** en vez de copiarse, porque un
-umbral escrito a mano en dos sitios es como la estación y los drones terminan sin estar de
-acuerdo sobre qué cuenta como el mismo objeto, o sobre qué significó el clic: un bug que a nadie
-se le ocurriría buscar.
+`fundir` and `pedidos_de_verificacion` do the fusion between drones, which needs **the same
+numbers the drone uses** to fuse its own tracks, and `EMB_DIST_OBJETIVO` is the distance the
+operator's click travels with. Both are **imported** instead of copied, because a threshold
+written by hand in two places is how the station and the drones end up disagreeing about what
+counts as the same object, or about what the click meant: a bug nobody would think to look for.
 
-Sin el paquete, porque este archivo está pensado para poder dejarse caer en cualquier parte, la
-estación **sigue corriendo**: muestra los objetivos de los dos drones sin fundir, y el clic sigue
-significando solo una posición, que es lo que significaba antes.
+Without the package, because this file is meant to be droppable anywhere, the station **keeps
+running**: it shows the two drones' targets unfused, and the click still means only a position,
+which is what it meant before.
 
-`R_TIERRA` está ahí porque los POI llegan en **metros locales**, x al este e y al norte desde el
-origen de la misión, y con las coordenadas del origen esos mismos puntos se vuelven lat/lng. Esa
-conversión supuestamente estaba bloqueada esperando acordar un formato con el grupo. No lo está:
-los dos extremos de este enlace son nuestros.
+`R_TIERRA` is there because POIs arrive in **local metres**, x east and y north from the mission
+origin, and with the origin's coordinates those same points become lat/lng. That conversion was
+supposedly blocked waiting to agree a format with the group. It is not: both ends of this link
+are ours.
 
-### El estado de la estación (el dict `ESTADO`)
+### The station's state (the `ESTADO` dict)
 
-Las claves cuyo nombre no se explica solo:
+The keys whose name does not explain itself:
 
-| clave | qué es |
+| key | what it is |
 |---|---|
-| `pois` | la última lista recibida, anotada. Lo que ve el operador |
-| `historia` | cada reporte, para el rastro |
-| `drones` | id de dron → lo último que se le oyó |
-| `veredictos_dir` | dónde se guardan los veredictos del operador y sus recortes |
-| `origen`, `origen_cli`, `desacuerdo` | el origen **en uso**, que es el del dron si declara uno; lo que **tecleó** el operador, guardado para poder contrastarlo; y los metros entre los dos cuando no coinciden |
-| `nodos` | las direcciones del plano de datos de los drones, de `--nodos`, para empujarles cada orden. Vacío significa que los drones la aprenden consultando `/buscar` |
-| `objetivo` | el objetivo que el operador fijó con "es lo que busco", en metros, o `None` |
+| `pois` | the last list received, annotated. What the operator sees |
+| `historia` | every report, for the trail |
+| `drones` | drone id → the last thing heard from it |
+| `veredictos_dir` | where the operator's verdicts and their crops are stored |
+| `origen`, `origen_cli`, `desacuerdo` | the origin **in use**, which is the drone's if it declares one; what the operator **typed**, kept so the two can be contrasted; and the metres between them when they disagree |
+| `nodos` | the drones' data-plane addresses, from `--nodos`, to push every order at them. Empty means the drones learn it by polling `/buscar` |
+| `objetivo` | the target the operator fixed with "this is what I am looking for", in metres, or `None` |
 
-**`buscar`, `buscar_v`, `buscar_epoca`.** Lo que el operador le pide **al dron** que busque. Esto
-**no** es el filtro de la pantalla: esconder una clase solo deja de dibujarla, mientras que esto
-cambia lo que el detector reporta en absoluto. `None` significa "lo que el dron arrancó con", y
-el contador le permite a un dron notar un cambio sin comparar listas. La **época** es qué corrida
-de esta estación emitió la orden: una estación reiniciada cuenta otra vez desde cero, y sin ella
-un dron que tomó la versión 7 ignoraría toda orden nueva por debajo.
+**`buscar`, `buscar_v`, `buscar_epoca`.** What the operator asks **the drone** to look for. This is
+**not** the screen's filter: hiding a class merely stops drawing it, whereas this changes what the
+detector reports at all. `None` means "whatever the drone started with", and the counter lets a
+drone notice a change without comparing lists. The **epoch** is which run of this station issued
+the order: a restarted station counts from zero again, and without it a drone that took version 7
+would ignore every new order below that.
 
-**`pois_por_dron`.** Una lista por dron. Una sola lista compartida se reemplazaba en cada reporte,
-así que un segundo dron borraba los objetivos del primero y el mapa parpadeaba entre las dos
-vistas.
+**`pois_por_dron`.** One list per drone. A single shared list was replaced on every report, so a
+second drone erased the first one's targets and the map flickered between the two views.
 
-**`rastros`, `frame_actual`, `frames_dir`.** En qué cuadro va el replay del banco, y dónde viven
-los cuadros. Solo el banco manda esto: un dron de verdad manda coordenadas, no fotos, y el
-enlace no podría cargarlas. Existe para que una demo pueda poner lo que vio la cámara al lado de
-lo que el mapa hizo con eso.
+**`rastros`, `frame_actual`, `frames_dir`.** Where the bench replay is in the frame sequence, and
+where the frames live. Only the bench sends this: a real drone sends coordinates, not photos, and
+the link could not carry them. It exists so a demo can put what the camera saw beside what the map
+made of it.
 
-**`segunda`.** La segunda opinión de tierra, una entrada por dron: qué pidió el operador y qué
-volvió. **Nunca la imagen**, que se sirve desde disco por `/segunda.jpg`. Un cuadro de 1920x1080
-son 300 KB, y llevarlo dentro de un sondeo de estado que corre una vez por segundo serían cuatro
-megabits de la misma imagen durante todo el tiempo que el operador la mire.
+**`segunda`.** The ground second opinion, one entry per drone: what the operator asked for and what
+came back. **Never the image**, which is served from disk via `/segunda.jpg`. A 1920x1080 frame is
+300 KB, and carrying it inside a state poll that runs once a second would be four megabits of the
+same image for as long as the operator looks at it.
 
-`SEGUNDA` corre la segunda opinión en un **proceso aparte** a propósito: RF-DETR vive en el venv
-de entrenamiento y esta estación tiene que poder dejarse caer en una laptop sin nada instalado.
-`CLIP` es la segunda opinión opcional de CLIP sobre cada recorte (`filtro_clip.Anotador`), que
-enciende `--clip`; `None` significa que la estación nunca arrancó una, y entonces ningún POI
-lleva campo de puntaje.
+`SEGUNDA` runs the second opinion in a **separate process** on purpose: RF-DETR lives in the
+training venv and this station has to be droppable on a laptop with nothing installed. `CLIP` is
+CLIP's optional second opinion on each crop (`filtro_clip.Anotador`), switched on by `--clip`;
+`None` means the station never started one, and then no POI carries a score field.
 
-### Las constantes que son decisiones del operador
+### The constants that are the operator's decisions
 
-Todas se pueden cambiar desde la línea de comandos.
+All of them can be changed from the command line.
 
-**`DRON_CALLADO_S` (`--callado-s`).** Un dron que lleva este tiempo sin reportar no está viendo
-nada ahora, y sus objetivos dejan de contar para el mapa: un pin rotulado "visto por 1+2" no
-puede sobrevivir a que uno de los dos se calle. Es la misma ventana que los drones aplican a lo
-que se oyen entre ellos.
+**`DRON_CALLADO_S` (`--callado-s`).** A drone that has gone this long without reporting is not
+seeing anything now, and its targets stop counting towards the map: a pin labelled "seen by 1+2"
+cannot survive one of the two going quiet. It is the same window the drones apply to what they
+hear from each other.
 
-**`CLIP_DESCARTA` (`--clip-descarta`).** Quitar lo que CLIP llama no-persona en vez de degradarlo.
+**`CLIP_DESCARTA` (`--clip-descarta`).** Remove what CLIP calls a non-person instead of demoting
+it.
 
-**`OBJETIVO_RADIO_M`.** A qué distancia del clic puede estar un candidato y aun tomarse como el
-que el operador quiso decir. Mismo razonamiento que el veredicto, que solo se aplica al POI más
-cercano: un clic es un gesto con la precisión de un dedo sobre un mapa, y alcanzar más lejos le
-entregaría al dron la apariencia de alguien **parado al lado** de la persona que se señaló.
+**`OBJETIVO_RADIO_M`.** How far from the click a candidate may be and still be taken as the one the
+operator meant. Same reasoning as the verdict, which only applies to the nearest POI: a click is a
+gesture with the precision of a finger on a map, and reaching further would hand the drone the
+appearance of somebody **standing next to** the person pointed at.
 
-**`RODEO_RADIO_M`, `RODEO_ALTURA_M`.** Dónde quiere el operador que se pare una aeronave cuando se
-la manda a mirar un objetivo desde otro lado. Decisiones de misión, y nada las deriva: lo bastante
-cerca para que una persona sea más que una forma, lo bastante lejos para no estar sobre la cabeza
-de nadie, dentro de lo que permita el espacio aéreo. Viven en el instrumento del operador porque
-**la capa que vuela se niega a inventarlas**.
+**`RODEO_RADIO_M`, `RODEO_ALTURA_M`.** Where the operator wants an aircraft to stop when sent to
+look at a target from another side. Mission decisions, and nothing derives them: close enough for a
+person to be more than a shape, far enough not to be over anybody's head, within whatever the
+airspace allows. They live in the operator's instrument because **the layer that flies refuses to
+invent them**.
 
-**`RODEO_PUNTOS`.** Cuántas paradas. **UNA** por omisión, y el razonamiento importa más que el
-número: la pregunta que está haciendo el operador es "¿eso es una persona?", y una fotografía
-desde un ángulo que nadie tiene la contesta. Doce paradas son doce fotografías del mismo punto,
-once de ellas contestando una pregunta que nadie hizo, y a este radio cada tramo lleva decenas de
-segundos, así que la vuelta entera son minutos durante los cuales esa aeronave no patrulla nada.
-La órbita sigue ahí y el protocolo acepta cualquier número, porque "ir y quedarse encima" está en
-la misión y se va a querer; lo que no es es **el valor por omisión**, porque el valor por omisión
-tiene que ser la respuesta barata a la pregunta frecuente.
+**`RODEO_PUNTOS`.** How many stops. **ONE** by default, and the reasoning matters more than the
+number: the question the operator is asking is "is that a person?", and one photograph from an
+angle nobody has answers it. Twelve stops are twelve photographs of the same point, eleven of them
+answering a question nobody asked, and at this radius each leg takes tens of seconds, so the whole
+circuit is minutes during which that aircraft patrols nothing. The orbit is still there and the
+protocol accepts any number, because "go and stay overhead" is in the mission and will be wanted;
+what it is not is **the default**, because the default has to be the cheap answer to the frequent
+question.
 
-**`EN_BANCO` (`--banco`).** Esta estación está manejando placas sobre un escritorio, no aeronaves.
-Solo afecta lo que la página dice sobre la posición, y dice exactamente eso en vez de imprimir un
-número que nadie debería creer.
+**`EN_BANCO` (`--banco`).** This station is driving boards on a desk, not aircraft. It only affects
+what the page says about position, and it says exactly that instead of printing a number nobody
+should believe.
 
-### El arranque, que no tiene `main()` que documentar
+### The startup, which has no `main()` to document
 
-`--radio-rodeo`, `--altura-rodeo` y `--puntos-rodeo` son argumentos del instrumento del operador
-en vez de números en el fuente, porque los tres son decisiones de misión y la capa que vuela se
-niega a inventarlos.
+`--radio-rodeo`, `--altura-rodeo` and `--puntos-rodeo` are arguments of the operator's instrument
+instead of numbers in the source, because all three are mission decisions and the layer that flies
+refuses to invent them.
 
-`--origen` se guarda **aparte** del origen que de verdad se usa: el valor tecleado es lo que el
-operador **cree**, y el punto entero es poder distinguir los dos en cuanto un dron declare el
-suyo. Hasta que alguno hable, el valor tecleado es todo lo que hay, así que siembra el que está
-en uso.
+`--origen` is kept **apart** from the origin actually used: the typed value is what the operator
+**believes**, and the whole point is being able to tell the two apart as soon as a drone declares
+its own. Until one speaks, the typed value is all there is, so it seeds the one in use.
 
-CLIP se importa solo cuando se pide, para que la estación siga pudiendo dejarse caer en cualquier
-parte sin torch. La segunda opinión se arranca **antes del primer reporte** y nunca en el primer
-clic, porque cargar RF-DETR lleva unos 17 s y el criterio de esa función es que el operador espere
-menos de cinco.
+CLIP is imported only when asked for, so the station stays droppable anywhere without torch. The
+second opinion is started **before the first report** and never on the first click, because loading
+RF-DETR takes about 17 s and that function's criterion is that the operator waits less than five.
 
-El puerto se sondea antes de atarlo. **Windows deja que una segunda estación ate un puerto que ya
-tiene una**, y entonces los reportes van al socket que acepte primero; el síntoma es un mapa que
-se queda vacío mientras el vuelo claramente corre, y ha costado dos sesiones. Negarse en vez de
-adivinar.
+The port is probed before being bound. **Windows lets a second station bind a port that already has
+one**, and then the reports go to whichever socket accepts first; the symptom is a map that stays
+empty while the flight is clearly running, and it has cost two sessions. Refuse rather than guess.
 
 ---
 
-## El replay del vuelo (`scripts/replay_vuelo3.py`)
+## The flight replay (`scripts/replay_vuelo3.py`)
 
-### De dónde salen las entradas
+### Where the inputs come from
 
-Las tres viven en el archivo del vuelo por omisión. `demo/demo.py` apunta `UAV_VISION_DATOS` a
-una copia autocontenida, así que el replay corre desde un clon sin archivo y sin dron.
+All three live in the flight archive by default. `demo/demo.py` points `UAV_VISION_DATOS` at a
+self-contained copy, so the replay runs from a clone with no archive and no drone.
 
-`CONF_MIN` es el mismo corte que usa el análisis de identidad, y las filas de `embs_osnet.npy`
-corresponden, en orden, a las detecciones por encima de él. `LAT0`, `LNG0` son el origen ENU, que
-es el poste topografiado que usa cada análisis del vuelo 3. `PIES` es la posición topografiada del
-operador y `OBJ` la caja de equipos, el ladrón del vuelo 3 que se robaba el consenso único.
+`CONF_MIN` is the same cut the identity analysis uses, and the rows of `embs_osnet.npy` correspond,
+in order, to the detections above it. `LAT0`, `LNG0` are the ENU origin, which is the surveyed post
+every analysis of flight 3 uses. `PIES` is the operator's surveyed position and `OBJ` the equipment
+case, the flight-3 thief that stole the single consensus.
 
-Las detecciones de personas en caché preceden a que la clase llegara al reporte, así que no llevan
-clase propia. Nombrarlas no cuesta nada cuando están solas, porque una clase nunca se contradice
-consigo misma, y es lo que le permite a la estación distinguirlas de los vehículos una vez que los
-dos están en el mismo mapa.
+The cached person detections predate the class reaching the report, so they carry no class of their
+own. Naming them costs nothing while they are alone, because a class never contradicts itself, and
+it is what lets the station tell them from vehicles once both are on the same map.
 
-`fusion_radius_m` es el ruido de proyección esperado de **esta** escena (sigma del GPS más alcance
-oblicuo por error de rumbo a su altura) y es el valor validado offline.
+`fusion_radius_m` is the expected projection noise of **this** scene (GPS sigma plus slant range
+times heading error at its altitude) and it is the value validated offline.
 
-### Los interruptores, y por qué la corrida por omisión es intocable
+### The switches, and why the default run is untouchable
 
-La corrida de **solo personas es EL GATE DE EQUIVALENCIA de este repositorio**: tiene que seguir
-imprimiendo 2,39 m, así que nada de ella cambia salvo que se pida. Todos los interruptores son
-por eso opt-in.
+The people-only run is **THIS REPOSITORY'S EQUIVALENCE GATE**: it has to keep printing 2.39 m, so
+nothing about it changes unless asked. Every switch is opt-in for that reason.
 
-| interruptor | qué hace |
+| switch | what it does |
 |---|---|
-| `--vehiculos` | agrega el camino de vehículos. Implícito en `--vivo`, que solo tiene sentido si hay algo a lo que cambiar |
-| `--dron`, `--pasada` | qué dron dice ser este replay y qué mitad del vuelo vuela. El vuelo hizo dos pasadas sobre el mismo suelo con varios minutos de diferencia, y el paper mide que el sesgo de GPS entre ellas es **independiente**, así que la pasada 1 y la 2 hacen de dos aeronaves. Es el protocolo de pseudo-enjambre, usado acá para ejercitar dos drones con una cámara |
-| `--refuerzo` | deja que pistas demasiado cortas para abrir un candidato refuercen uno que ya abrió una pista que duró |
-| `--span`, `--miradas-min=N` | la madurez por miradas independientes es la que rige. `--span` reproduce la regla con la que se midió cada número anterior, que es la regla sobre la que está fijado el gate de 2,39 m |
-| `--preliminares` | muestra los candidatos que se formaron y no maduraron. Para un dron en órbita son ruido; un vehículo que el dron cruza una vez en un barrido es exactamente el caso para el que existen |
+| `--vehiculos` | adds the vehicle path. Implied by `--vivo`, which only makes sense if there is something to switch to |
+| `--dron`, `--pasada` | which drone this replay claims to be and which half of the flight it flies. The flight made two passes over the same ground several minutes apart, and the paper measures that the GPS bias between them is **independent**, so pass 1 and pass 2 stand in for two aircraft. It is the pseudo-swarm protocol, used here to exercise two drones with one camera |
+| `--refuerzo` | lets tracks too short to open a candidate reinforce one that was already opened by a track that lasted |
+| `--span`, `--miradas-min=N` | maturity by independent looks is the rule that governs. `--span` reproduces the rule every earlier number was measured with, which is the rule the 2.39 m gate is pinned on |
+| `--preliminares` | shows the candidates that formed and did not mature. For a drone in orbit they are noise; a vehicle the drone crosses once on a sweep is exactly the case they exist for |
 
-**`UAV_VISION_GS`, `--vivo`, `--velocidad`.** Con `UAV_VISION_GS` puesto, los reportes que produjo
-el protocolo se empujan a un `gs_mapa` corriendo, con el ritmo que tendrían durante el vuelo en
-vez de aparecer todos de golpe. El vuelo duró unos 11 min, así que el 20x por omisión lo deja bajo
-los 35 s, que alcanza para hacer clic durante.
+**`UAV_VISION_GS`, `--vivo`, `--velocidad`.** With `UAV_VISION_GS` set, the reports the protocol
+produced are pushed to a running `gs_mapa`, at the pace they would have had during the flight
+instead of appearing all at once. The flight lasted about 11 min, so the default 20x leaves it under
+35 s, which is enough to click during.
 
-**`--pistas=file.npz`.** Reemplaza el seguidor de reemplazo por ids calculados en otra parte;
-`scripts/botsort_pistas.py` escribe los que da el BoT-SORT del vuelo. Una detección que ese
-seguidor dejó sin id llega al protocolo sin id, exactamente como en el dron, y la capa de identity
-no la ve nunca.
+**`--pistas=file.npz`.** Replaces the stand-in tracker with ids computed elsewhere;
+`scripts/botsort_pistas.py` writes the ones the flight's BoT-SORT gives. A detection that tracker
+left without an id reaches the protocol without an id, exactly as on the drone, and the identity
+layer never sees it.
 
-**`--evidencia-min=X`.** Separa **ASOCIAR** de **EVIDENCIA**. El seguidor ya vio cada caja y dio
-ids con todas; una caja por debajo de X conserva el id que ayudó a construir pero nunca llega al
-protocolo, así que no agrega ni una observación a la capa de identity ni un impacto a la
-geolocalización. Los cuadros volados y la cadencia se dejan en paz, así que el piso de evidencia es
-lo único que cambia.
+**`--evidencia-min=X`.** Separates **ASSOCIATING** from **EVIDENCE**. The tracker has already seen
+every box and gave ids with all of them; a box below X keeps the id it helped build but never
+reaches the protocol, so it adds neither an observation to the identity layer nor an impact to the
+geolocation. The frames flown and the cadence are left alone, so the evidence floor is the only
+thing that changes.
 
-**`--foco=x,y`.** Fija un objetivo como lo hace el "es lo que busco" del operador, para que el modo
-de objetivo fijo se pueda juzgar por personas y fantasmas y no solo por cajas. Sin él, nunca se
-carga nada por debajo del umbral de reporte y la corrida es byte a byte la que fija el gate. El
-piso es **el de la cámara**, importado y no reescrito: este replay cargaba desde 0,10, por debajo
-tanto de la banda de la cámara como del propio `track_low_thresh` del seguidor, así que servía
-cajas que el dron nunca le habría dado a un seguidor en primer lugar.
+**`--foco=x,y`.** Fixes a target the way the operator's "this is what I am looking for" does, so
+fixed-target mode can be judged by people and phantoms and not only by boxes. Without it, nothing
+below the reporting threshold is ever loaded and the run is byte for byte the one that pins the
+gate. The floor is **the camera's**, imported and not rewritten: this replay used to load from 0.10,
+below both the camera's band and the tracker's own `track_low_thresh`, so it served boxes the drone
+would never have given a tracker in the first place.
 
-**`--plantilla=f.npy`.** La otra mitad del clic del operador: a qué **se parece** el objetivo. Con
-ella una caja dudada se conserva donde caiga y no solo dentro de la ventana proyectada. El vector
-se lee de un archivo para que este script siga sin saber nada de a quién pertenecen las letras del
-vuelo; construir la plantilla desde las etiquetas a mano es trabajo del script que mide, no del
-replay.
+**`--plantilla=f.npy`.** The other half of the operator's click: what the target **looks like**.
+With it, a doubted box is kept wherever it falls and not only inside the projected window. The
+vector is read from a file so this script still knows nothing about who the flight's letters belong
+to; building the template from the hand labels is the measuring script's job, not the replay's.
 
-**`--sintetico=V`.** Agrega un objetivo con **verdad conocida** que patrulla este-oeste a V m/s
-por la escena, durante todo el vuelo. Se proyecta en cada cuadro en el aire con las poses del
-propio vuelo, y un cuadro que lo tiene en vista lo detecta con la probabilidad medida para un
-objetivo real en vista en este vuelo, con algo de ruido de píxel, bajo un solo id de pista como
-sustituto de un seguidor que lo sostiene. Se llama 'boat' para que sus reportes se distingan de
-los del vuelo. Nada aguas abajo sabe que es sintético, así que lo que sale es lo que la cadena
-hace con un objetivo **en movimiento**: si lo reporta, cuándo, dónde y en cuántos pedazos.
+**`--sintetico=V`.** Adds a target with **known truth** that patrols east-west at V m/s across the
+scene, for the whole flight. It is projected into every airborne frame using the flight's own poses,
+and a frame that has it in view detects it with the probability measured for a real target in view
+on this flight, with some pixel noise, under a single track id standing in for a tracker that holds
+it. It is called 'boat' so its reports are distinguishable from the flight's. Nothing downstream
+knows it is synthetic, so what comes out is what the chain does with a **moving** target: whether it
+reports it, when, where and in how many pieces.
 
-**`--actitud`, `--actitud-roll=+1/-1`.** Mete el cabeceo del fuselaje grabado en `frames.csv` en
-cada rayo, y suma el alabeo con ese signo. El signo es un interruptor porque el análisis de agosto
-no pudo resolverlo con este vuelo.
+**`--actitud`, `--actitud-roll=+1/-1`.** Puts the airframe pitch recorded in `frames.csv` into every
+ray, and adds roll with that sign. The sign is a switch because the August analysis could not
+resolve it with this flight.
 
-**`--candidatos=file.json`.** Escribe cada candidato junto con los ids de las pistas fundidas en
-él. Ese enlace es lo que permite rastrear un candidato hasta las detecciones que lo alimentaron, y
-de ahí hasta la etiqueta que un humano le dio a cada caja, que es cómo
-`scripts/personas_encontradas.py` puntúa la cadena **por persona** en vez de por caja. Se escribe
-desde la corrida viva en vez de guardarse como archivo en disco, así que el marcador siempre
-describe la capa de identity tal como está, no como estuvo.
+**`--candidatos=file.json`.** Writes each candidate together with the ids of the tracks fused into
+it. That link is what allows a candidate to be traced back to the detections that fed it, and from
+there to the label a human gave each box, which is how `scripts/personas_encontradas.py` scores the
+chain **by person** instead of by box. It is written from the live run instead of saved as a file on
+disk, so the scoreboard always describes the identity layer as it stands, not as it stood.
 
-### En qué se diferencian los dos modos
+### How the two modes differ
 
-**SIN `--vivo`** nada del lazo cambia: corre tan rápido como puede y los reportes se publican al
-final, que es lo que mide el gate de equivalencia. A la estación se le habla con la envoltura del
-transporte y no con el reporte crudo: `{"message": <json string>, "source": <node id>}`.
+**WITHOUT `--vivo`** nothing about the loop changes: it runs as fast as it can and the reports are
+published at the end, which is what the equivalence gate measures. The station is spoken to with
+the transport envelope and not with the raw report: `{"message": <json string>, "source": <node id>}`.
 
-**CON `--vivo`** el vuelo va al ritmo del reloj de pared para que haya tiempo de hacer clic a
-mitad, el dron le pregunta a la estación qué debería estar buscando, y cada reporte sale **a
-medida que se produce**. Esa última parte es lo que hace visible un cambio de clases: un lote
-enviado al final mostraría la respuesta final y esconderría el momento en que cambió. La orden se
-aplica por el **propio handler del protocolo**, el que corre un dron, así que el replay ejercita
-el camino de código que vuela en vez de una copia de él, y una orden rancia o repetida se ignora
-igual. Lo que se imprime es el segundo **del vuelo** y no el reloj de pared, porque si una orden
-llegó a tiempo es una pregunta sobre el vuelo, no sobre el operador.
+**WITH `--vivo`** the flight goes at wall-clock pace so there is time to click partway through, the
+drone asks the station what it should be looking for, and each report goes out **as it is produced**.
+That last part is what makes a class change visible: a batch sent at the end would show the final
+answer and hide the moment it changed. The order is applied by the protocol's **own handler**, the
+one a drone runs, so the replay exercises the code path that flies instead of a copy of it, and a
+stale or repeated order is ignored just the same. What is printed is the second **of the flight** and
+not the wall clock, because whether an order arrived in time is a question about the flight, not
+about the operator.
 
-Con `--foco`, el operador señala lo que mostró **el mapa**, no la verdad topografiada: fijar la
-posición verdadera mediría un modo que nadie puede usar. Con `--pasada`, el vuelo se corta en el
-punto medio de su **tiempo** y no en una cuenta de cuadros, porque la cadencia varía y la mitad
-de los cuadros no es la mitad del vuelo.
+With `--foco`, the operator points at what **the map** showed, not at the surveyed truth: fixing the
+true position would measure a mode nobody can use. With `--pasada`, the flight is cut at the midpoint
+of its **time** and not at a frame count, because the cadence varies and half the frames are not half
+the flight.
 
-Lo que el reporte final **deja afuera** informa tanto como lo que lleva: un candidato que se formó
-y nunca maduró es un objetivo que el dron cruzó una vez y sobre el que no se demoró, que es una
-propiedad del plan de vuelo y no del detector.
+What the final report **leaves out** is as informative as what it carries: a candidate that formed
+and never matured is a target the drone crossed once and did not linger on, which is a property of
+the flight plan and not of the detector.
 
 ---
 
-## La herramienta de etiquetado (`scripts/etiquetar_grupos.py`)
+## The labelling tool (`scripts/etiquetar_grupos.py`)
 
-### Los vuelos que abre
+### The flights it opens
 
-`VUELOS_LISTOS` son los vuelos cuyas cajas y embeddings ya están en disco, así que `--vuelo`
-rellena las cuatro rutas. `VUELOS` son los vuelos con candidatos del detector de
-`proponer_cajas.py`, donde `--vuelo` rellena además `--lista-frames` y `--nombre`, y las etiquetas
-van a `etiquetas_detector_<vuelo>.json`, aparte de cualquier otro etiquetado de ese vuelo.
+`VUELOS_LISTOS` are the flights whose boxes and embeddings are already on disk, so `--vuelo` fills
+in the four paths. `VUELOS` are the flights with detector candidates from `proponer_cajas.py`, where
+`--vuelo` also fills in `--lista-frames` and `--nombre`, and the labels go to
+`etiquetas_detector_<vuelo>.json`, apart from any other labelling of that flight.
 
-- **02ago** es el vuelo de prueba, convertido por `scripts/convertir_02ago.py` para que también se
-  pueda revisar.
-- **02ago_alto** son sus cuadros 9315-9865: el único material sin etiquetar a altura alta que hay,
-  y del mismo día que la prueba, así que entrenar con él **halaga** el puntaje de la prueba.
-- **02ago_huecos** son los cuadros **entre** las ventanas de la prueba, pegados a ella, así que
-  sirven para **medir** y nunca para entrenar: sin ellos, un candidato que viva ahí no se puede
-  juzgar en ningún sentido.
-- **14jun** es el único material con una segunda persona dentro.
+- **02ago** is the test flight, converted by `scripts/convertir_02ago.py` so it can be reviewed too.
+- **02ago_alto** are its frames 9315-9865: the only unlabelled high-altitude material there is, and
+  from the same day as the test, so training on it **flatters** the test score.
+- **02ago_huecos** are the frames **between** the test windows, right up against them, so they serve
+  to **measure** and never to train: without them, a candidate living there cannot be judged either
+  way.
+- **14jun** is the only material with a second person in it.
 
-`_PERSONA_POR_ALTURA` es cuántos píxeles de alto salió una persona, por altura, **medido** sobre
-las cajas etiquetadas de estos vuelos en vez de derivado de la óptica: la cámara mira adelante y
-abajo, así que a poca altura la persona está lejos por el suelo y no crece como una vista nadir
-predeciría. La tabla está en [NOTES.md](../NOTES.md).
+`_PERSONA_POR_ALTURA` is how many pixels tall a person came out, by altitude, **measured** over the
+labelled boxes of these flights instead of derived from the optics: the camera looks forward and
+down, so at low altitude the person is far away along the ground and does not grow the way a nadir
+view would predict. The table is in [NOTES.md](../NOTES.md).
 
-### Lo que ve quien etiqueta
+### What the labeller sees
 
-`MUESTRA` es cuántos recortes muestra un grupo: suficientes para ver qué es, pocos para cargar
-rápido. `LADO` es el lado del recorte en píxeles, y a 96 el texto de una caja de contexto es un
-borrón. Los tres colores son BGR: amarillo la caja que se está etiquetando, magenta las
-detecciones propias del vuelo (las de `--contexto`), y cian las otras cajas del CSV que se está
-etiquetando en el mismo cuadro.
+`MUESTRA` is how many crops a group shows: enough to see what it is, few enough to load fast. `LADO`
+is the crop side in pixels, and at 96 the text on a context box is a blur. The three colours are
+BGR: yellow the box being labelled, magenta the flight's own detections (those of `--contexto`), and
+cyan the other boxes of the CSV being labelled in the same frame.
 
-`REVISION` tiene las etiquetas de la revisión por cuadro. **"duplicado"** es una segunda caja sobre
-una persona que ya tiene una, y se tira. **"ignorar"** es algo que no se puede llamar de una forma
-ni de otra, como un pie solo o una persona cortada a una astilla por el borde del cuadro: la
-exportación lo borra, así que al detector no se lo premia ni se lo castiga por encontrarlo.
+`REVISION` holds the labels of the per-frame review. **"duplicado"** is a second box over a person
+who already has one, and it is thrown away. **"ignorar"** is something that cannot be called one
+thing or the other, like a lone foot or a person clipped to a sliver by the frame edge: the export
+deletes it, so the detector is neither rewarded nor punished for finding it.
 
-`REPASO` es la fracción de cuadros revisados que la re-comprobación a ciegas vuelve a preguntar, y
-`SEMILLA_REPASO` está fija para que reabrir la herramienta pregunte por los mismos.
-`LADO_MIN_NUEVA` es el lado en píxeles por debajo del cual una caja dibujada es un resbalón del
-ratón.
+`REPASO` is the fraction of reviewed frames the blind re-check asks about again, and
+`SEMILLA_REPASO` is fixed so reopening the tool asks about the same ones. `LADO_MIN_NUEVA` is the
+side in pixels below which a drawn box is a slip of the mouse.
 
-### Lo que guarda la página
+### What the page saves
 
-Una caja dibujada es `[x1, y1, x2, y2]` para una persona, o `[x1, y1, x2, y2, "ignorar"]`. Una
-caja del CSV a la que se le arrastraron las esquinas **también** se guarda: la etiqueta pertenece
-a la caja, así que la caja tiene que ser arreglable, o una detección que cubre solo las piernas
-queda mal para siempre. Los pares confirmados son los que quien etiqueta dijo que son **dos
-personas paradas juntas** y no una encajada dos veces; sin registrarlos quedan marcadas para
-siempre y el cuadro no deja nunca de contar como un problema.
+A drawn box is `[x1, y1, x2, y2]` for a person, or `[x1, y1, x2, y2, "ignorar"]`. A CSV box whose
+corners were dragged **is also** saved: the label belongs to the box, so the box has to be fixable,
+or a detection covering only the legs stays wrong forever. Confirmed pairs are the ones the labeller
+said are **two people standing together** and not one boxed twice; without recording them they stay
+flagged forever and the frame never stops counting as a problem.
 
-Los recortes se ordenan **primero los sin etiquetar y después los más grandes**, así que el
-siguiente clic siempre es el que etiqueta más. Cada recorte lleva **su propia** etiqueta final,
-así que una caja corregida aparte de su grupo se ve. Un **hueco** es un cuadro sin nadie entre dos
-que sí tienen a alguien, y se encola con todo otro tipo de cuadro pendiente.
+The crops are ordered **unlabelled first and then largest**, so the next click is always the one that
+labels the most. Each crop carries **its own** final label, so a box corrected apart from its group
+shows. A **gap** is a frame with nobody in it between two that do have somebody, and it is queued
+along with every other kind of pending frame.
 
-Los recortes se cortan con un margen, porque una caja dibujada justa a altura corta el contexto
-que distingue una persona de un poste, y los bordes se dibujan **después** de redimensionar, así
-que su grosor son píxeles del thumbnail cualquiera sea el tamaño de la caja.
+The crops are cut with a margin, because a box drawn tight at altitude cuts away the context that
+tells a person from a post, and the borders are drawn **after** resizing, so their thickness is
+thumbnail pixels whatever the size of the box.
