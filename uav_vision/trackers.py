@@ -325,8 +325,9 @@ def construir(nombre: str, embs_propias: bool = True, traducir: bool = True,
     aplicados: Dict[str, Any] = {}
     ignorados: Dict[str, Any] = {}
 
-    # CMC va aparte del lazo porque es el unico ajuste cuyo destino cambia el VALOR y no solo
-    # el nombre, y porque dos trackers lo honran bajo un nombre que ningun renombre alcanza.
+    # CMC is resolved apart from the loop because it is the only setting whose destination
+    # changes the VALUE and not just the name, and because two trackers honour it under a name
+    # no rename reaches.
     cmc_ap, cmc_ig, cmc_notas = _resolver_cmc(
         acepta, ajustes.pop("use_cmc", None), ajustes.pop("cmc_method", None), traducir)
     aplicados.update(cmc_ap)
@@ -353,9 +354,9 @@ def construir(nombre: str, embs_propias: bool = True, traducir: bool = True,
 
     aproximados = aplicados.pop("_aproximados", []) + cmc_notas
 
-    # El cableado del adaptador, aparte de la calibracion del llamador: no se cuenta como
-    # "honrado" porque nadie lo pidio. Un informe que los sumara diria "7 de 5" y el numero
-    # que el llamador quiere leer es cuanto de LO SUYO llego.
+    # The adapter's own wiring, kept apart from the caller's calibration: it does not count as
+    # "honoured" because nobody asked for it. A report that added them would say "7 of 5", and
+    # the number the caller wants to read is how much of ITS OWN arrived.
     cableado = {}
     if "with_reid" in acepta and "with_reid" not in aplicados:
         cableado["with_reid"] = embs_propias
