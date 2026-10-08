@@ -73,6 +73,16 @@ from typing import Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 
+from uav_vision.fusion import ransac_fusion
+
+# Below this the bearings of a track are parallel for practical purposes and no intersection is
+# attempted. Half a degree, which is well under the arc even a barely-moving aircraft sweeps:
+# measured on the hovering case of tests/test_rayos.py, a drone that travels 0.70 m during the
+# whole sighting still spreads its bearings over degrees, not fractions of one. This threshold
+# is here to catch rays that do not diverge AT ALL, not to judge a weak geometry -- that
+# judgement is the operator's, through the estimator switch.
+MIN_DIVERGENCIA_RAD = math.radians(0.5)
+
 EMB_DIST_MAX_MEDIDO = 0.95
 
 COOCURRENCIA_MIN = 3
@@ -279,6 +289,8 @@ class IncrementalIdentity:
         emb_dist_rejoin: float = EMB_DIST_REUNE,
         rejoin_max_gap_s: float = 30.0,
         crop_choice: str = "confidence",
+        estimator: str = "suelo",
+        estimator_seed: int = 0,
     ) -> None:
         """Builds the thresholds the association rules work with.
 
@@ -305,6 +317,31 @@ class IncrementalIdentity:
         stays a per-class answer while an explicit value stays one number for the whole scene,
         as the caller asked.
 
+        estimator
+            How a track's static position is computed, and it is the one choice here that
+            changes the GEOMETRY rather than a threshold.
+
+            "suelo", the default, is the median of the ground impacts: every bearing is
+            intersected with a horizontal plane at the mission's z, and the track's position is
+            the robust centre of those intersections. It is exact when the ground is flat at the
+            height the mission declared, and the flight-3 replay measures that case at 2.39 m.
+
+            "rayos" throws the plane away and intersects the BEARINGS WITH EACH OTHER, through
+            fusion.ransac_fusion. The estimate is wherever the rays actually cross, in three
+            dimensions, so a target on a slope or on a rooftop is not dragged toward the plane
+            it is not standing on. It costs the rays being kept per track, which is why they are
+            only recorded under this mode, and it needs at least two bearings taken from
+            genuinely different places: rays cast from a hovering drone are nearly parallel and
+            cross nowhere useful, which is the regime the ground plane handles better.
+
+            Neither is strictly better, so this is a switch and not a replacement, and the
+            default is the one with a measured number behind it.
+
+        estimator_seed
+            Seeds the RANSAC inside the "rayos" estimator, so two runs over the same sightings
+            give the same position. An estimate that moved between reports with no new evidence
+            would read on the station as a target that is walking.
+
         _frames_vistos is every frame index this layer was ever handed a detection in, and it
         is the denominator of opportunity: asking in what fraction of a candidate's life it was
         seen is only meaningful against the frames something was seen in at all. Seconds will
@@ -317,7 +354,11 @@ class IncrementalIdentity:
             raise ValueError("maturity must be 'span' or 'looks', got %r" % (maturity,))
         if crop_choice not in ("confidence", "appearance"):
             raise ValueError("crop_choice must be 'confidence' or 'appearance', got %r" % (crop_choice,))
+        if estimator not in ("suelo", "rayos"):
+            raise ValueError("estimator must be 'suelo' or 'rayos', got %r" % (estimator,))
         self.crop_choice = crop_choice
+        self.estimator = estimator
+        self._estimator_rng = np.random.default_rng(estimator_seed)
         self.rejoin_mobile = bool(rejoin_mobile)
         self.emb_dist_rejoin = float(emb_dist_rejoin)
         self.rejoin_max_gap_s = float(rejoin_max_gap_s)
@@ -413,6 +454,7 @@ class IncrementalIdentity:
         t: Optional[float] = None,
         cls: Optional[str] = None,
         range_m: Optional[float] = None,
+        ray: Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = None,
     ) -> None:
         """
         Records one tracked detection, already projected to the ground.
@@ -432,6 +474,13 @@ class IncrementalIdentity:
         is one and off the frame index at the declared rate when there is not, which is the same
         fallback the span mode uses. The timestamp is read out before `t` is rebound to the
         track record it names for the rest of the method.
+
+        ray is the bearing the ground_xy was projected from, as (origin, direction), and it is
+        OPTIONAL in both directions: a caller that does not have one still works, and a caller
+        that passes one changes nothing unless the estimator is "rayos". It is kept only under
+        that estimator, so the default costs neither the memory nor a different code path --
+        the replay that guards this chain has to produce the same 2.39 m it always has, and the
+        cheapest way to guarantee that is for the default to touch nothing.
         """
         sello = t
         t = self._tracks.get(track_id)
@@ -440,12 +489,18 @@ class IncrementalIdentity:
                  "emb_sum": None, "n_emb": 0, "frames": set(),
                  "crop": None, "recorte_conf": -1.0,
                  "t0": None, "t1": None, "cls_votos": {},
-                 "bins": set(), "imp_bins": [], "ts": [], "rangos": []}
+                 "bins": set(), "imp_bins": [], "ts": [], "rangos": [],
+                 "rayos": [], "rayos_conf": []}
             self._tracks[track_id] = t
         t["imps"].append((float(ground_xy[0]), float(ground_xy[1])))
         t["ts"].append(float(sello) if sello is not None else None)
         if range_m is not None:
             t["rangos"].append(float(range_m))
+        if ray is not None and self.estimator == "rayos":
+            origen, direccion = ray
+            t["rayos"].append((tuple(float(v) for v in origen),
+                               tuple(float(v) for v in direccion)))
+            t["rayos_conf"].append(float(conf))
         t["conf_sum"] += float(conf)
         t["frames"].add(int(frame))
         self._frames_vistos.add(int(frame))
@@ -501,6 +556,70 @@ class IncrementalIdentity:
             t["crop"], t["recorte_conf"], t["recorte_emb"] = crop, conf, u
 
 
+    @staticmethod
+    def _divergencia(rayos) -> float:
+        """How far apart the bearings of a track point, in radians.
+
+        The widest angle any one bearing makes with their mean direction. Zero means every ray
+        is the same ray, which is what a target seen from a stationary aircraft looks like and
+        what makes an intersection meaningless.
+        """
+        d = np.asarray([r[1] for r in rayos], dtype=float)
+        d = d / (np.linalg.norm(d, axis=1, keepdims=True) + 1e-12)
+        media = d.mean(axis=0)
+        n = np.linalg.norm(media)
+        if n < 1e-12:
+            return math.pi
+        media = media / n
+        return float(np.arccos(np.clip(d @ media, -1.0, 1.0)).max())
+
+    def _posicion(self, t: dict, ii: np.ndarray) -> np.ndarray:
+        """Where this track is, by whichever estimator was asked for.
+
+        Under "suelo" this is the median of the ground impacts, unchanged and unconditional.
+
+        Under "rayos" the bearings are intersected with each other instead, and the result is
+        projected back to two dimensions because everything downstream -- association, the
+        fusion radius, the map -- works in the ground plane. The third coordinate is dropped
+        and not reported: a height this layer never validated is worse than no height, and the
+        value of the ray estimator here is that the X and Y stop depending on a plane the
+        target may not be standing on.
+
+        IT FALLS BACK TO THE MEDIAN AND DOES NOT RAISE. ransac_fusion needs two bearings to
+        exist at all, and a track can be reported before that. A target that vanished from the
+        map because its geometry was briefly degenerate would be a far worse failure than one
+        placed by the plane for a few seconds, and the fallback is the estimate the rest of the
+        system was built on.
+
+        PARALLEL BEARINGS ARE REFUSED BEFORE THEY ARE FUSED, and that check is not defensive
+        tidying: fed two identical rays, the fusion returns the CAMERA'S OWN POSITION. It is a
+        finite number, it raises nothing, and it would put the target on top of the aircraft.
+        Rays that do not diverge do not cross, so the question "where do these meet" has no
+        answer and the plane has to be the one to answer it.
+
+        Divergence is measured against the mean bearing rather than over every pair, because
+        this runs once per track per report on a board that is already the bottleneck and the
+        pairwise version is quadratic in the sightings. The two differ by at most a factor of
+        two, which is far inside the margin between a degenerate geometry and a usable one: the
+        threshold catches bearings that are parallel, not bearings that are merely close.
+        """
+        if self.estimator != "rayos" or len(t.get("rayos") or []) < 2:
+            return np.median(ii, axis=0)
+        if self._divergencia(t["rayos"]) < MIN_DIVERGENCIA_RAD:
+            return np.median(ii, axis=0)
+        try:
+            x, y, _z = ransac_fusion(
+                t["rayos"],
+                threshold_m=self.fusion_radius_m,
+                rng=self._estimator_rng,
+                confidences=t["rayos_conf"] or None,
+            )
+        except Exception:
+            return np.median(ii, axis=0)
+        if not (np.isfinite(x) and np.isfinite(y)):
+            return np.median(ii, axis=0)
+        return np.array([float(x), float(y)])
+
     def _summary(self, tid: int, t: dict) -> dict:
         """One track reduced to what association needs: where, how much, what it looks like.
 
@@ -517,7 +636,7 @@ class IncrementalIdentity:
             emb = t["emb_sum"] / (np.linalg.norm(t["emb_sum"]) + 1e-9)
         return {
             "tid": tid, "n": n,
-            "pos": np.median(ii, axis=0),
+            "pos": self._posicion(t, ii),
             "pos_actual": _current_position(ii, t.get("ts")),
             "desplaz": desplaz,
             "conf": t["conf_sum"] / n,

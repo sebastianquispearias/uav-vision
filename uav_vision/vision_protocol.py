@@ -1082,6 +1082,7 @@ class VisionProtocol(IProtocol):
                     t=self.provider.current_time(),
                     cls=cls,
                     range_m=rango,
+                    ray=(origin, direction),
                 )
 
     def _report(self) -> None:
