@@ -1014,7 +1014,8 @@ PAGINA = r"""<!doctype html>
   #diag .ojo  { color:var(--duda); }
   #diag .mal  { color:#f87171; }
   #diag .nada { color:var(--tenue); font-style:italic; font-weight:400; }
-  #diag .porque { color:var(--tenue); font-size:11px; padding:0 0 9px; border:0; }
+  #diag .umbrales { color:var(--tenue); font-size:11px; margin-top:10px; padding-top:8px;
+                    border-top:1px solid var(--linea); }
 </style></head>
 <body>
 <div id="alarma" style="display:none"></div>
@@ -1599,9 +1600,14 @@ function celda(texto, clase, bajo) {
 
 function sinDato(texto) { return `<td class="nada">${texto}</td>`; }
 
-function filaDiag(etiqueta, celdas, porque) {
-  return `<tr><th>${etiqueta}</th>${celdas.join('')}</tr>`
-    + `<tr><td class="porque" colspan="${celdas.length + 1}">${porque}</td></tr>`;
+// NO EXPLANATION ON THE ROW. Each row used to carry a paragraph saying why it mattered, and
+// the panel read as a lecture instead of an instrument: five numbers under five paragraphs is
+// not something an operator scans while an aircraft is up. The reasoning lives in the
+// docstrings here and in vision_protocol.py, which is where a reader who wants it will be.
+// What stays on screen is the number, its colour, and the one line of thresholds at the foot,
+// because that line is the only part that tells anybody to do something.
+function filaDiag(etiqueta, celdas) {
+  return `<tr><th>${etiqueta}</th>${celdas.join('')}</tr>`;
 }
 
 function pintarDiagnostico() {
@@ -1619,18 +1625,22 @@ function pintarDiagnostico() {
     const n = celdasDe(d.bateria_v, dichas);
     if (!n) return sinDato(`${d.bateria_v} V, not a LiPo`);
     const c = d.bateria_v / n;
-    const clase = c < CELDA_ATERRIZAR ? 'mal' : (c < CELDA_VOLVER ? 'ojo' : 'bien');
-    const que = c < CELDA_ATERRIZAR ? ' land now' : (c < CELDA_VOLVER ? ' turn back' : '');
+    // AT the threshold and not merely past it, because the line at the foot of this panel says
+    // "3.50 V/cell turn back" and a panel that prints 3.50 in green is contradicting its own
+    // instruction. Caught on the bench: the fake pack bottoms out at exactly 14.0 V over 4S,
+    // parked the display on the boundary, and the disagreement was there to read.
+    const clase = c <= CELDA_ATERRIZAR ? 'mal' : (c <= CELDA_VOLVER ? 'ojo' : 'bien');
+    const que = c <= CELDA_ATERRIZAR ? ' land now' : (c <= CELDA_VOLVER ? ' turn back' : '');
     return celda(`${c.toFixed(2)} V/cell${que}`, clase,
-                 `${d.bateria_v} V over ${n}S` + (dichas ? '' : ', guessed'));
+                 `${n}S · ${d.bateria_v} V` + (dichas ? '' : ', cell count guessed'));
   });
 
   const caidas = ds.map(d => {
     if (!d.salud) return sinDato('not a Raspberry');
     const ahora = (d.salud.ahora || []).indexOf('bajo_voltaje') >= 0;
     const antes = (d.salud.alguna_vez || []).indexOf('bajo_voltaje') >= 0;
-    if (ahora) return celda('BROWNING OUT NOW', 'mal', 'check its supply');
-    if (antes) return celda('has browned out', 'ojo', 'not now, but it did');
+    if (ahora) return celda('BROWNING OUT NOW', 'mal');
+    if (antes) return celda('has browned out', 'ojo');
     return celda('clean', 'bien');
   });
 
@@ -1640,7 +1650,7 @@ function pintarDiagnostico() {
     const frena = bits.indexOf('limite_termico') >= 0 || bits.indexOf('acelerador') >= 0;
     const clase = (frena || d.temp_c >= TEMP_MAL) ? 'mal'
                 : (d.temp_c >= TEMP_OJO ? 'ojo' : 'bien');
-    return celda(`${d.temp_c.toFixed(1)} °C`, clase, frena ? 'slowing itself down' : '');
+    return celda(`${d.temp_c.toFixed(1)} °C`, clase, frena ? 'throttling' : '');
   });
 
   const tasa = ds.map(d => {
@@ -1648,8 +1658,10 @@ function pintarDiagnostico() {
     if (d.fps_pedido == null) return celda(`${d.fps_real} FPS`, '', 'asked rate unknown');
     const frac = d.fps_pedido > 0 ? d.fps_real / d.fps_pedido : 1;
     const clase = frac < 0.6 ? 'mal' : (frac < 0.9 ? 'ojo' : 'bien');
+    // The percentage only when it is short. On a board that is keeping up it restates the
+    // two numbers beside it, and a line that says nothing new is a line the eye learns to skip.
     return celda(`${d.fps_real} of ${d.fps_pedido} FPS`, clase,
-                 `${(frac * 100).toFixed(0)} % of what it was asked for`);
+                 frac < 0.9 ? `${(frac * 100).toFixed(0)} % of the asked rate` : '');
   });
 
   const slots = ds.map(d => {
@@ -1661,22 +1673,14 @@ function pintarDiagnostico() {
 
   caja.innerHTML = '<table><tr><th></th>'
     + ids.map(id => `<th>drone ${id}</th>`).join('') + '</tr>'
-    + filaDiag('Cell voltage', voltios,
-               `minutes of warning. ${CELDA_VOLVER.toFixed(2)} V turn back, `
-               + `${CELDA_ATERRIZAR.toFixed(2)} V land now. Volts and not percent, `
-               + `because the discharge curve is flat.`)
-    + filaDiag('Supply dips', caidas,
-               'seconds of warning, and STICKY: a dip lasts an instant and the bit for "now" is '
-               + 'already off by the time anyone looks. A board that browns out does not warn, '
-               + 'it disappears.')
-    + filaDiag('Temperature', calor,
-               'degrades the product now, before anything is lost. A board at 84 C is taking '
-               + 'fewer looks than the one beside it and nothing else on this screen says so.')
-    + filaDiag('Rate delivered', tasa,
-               'against the rate the board was ASKED for, which is set on the board itself. '
-               + 'Fewer looks taken is fewer chances to find anyone.')
-    + filaDiag('Slots missed', slots, 'in the last report interval, and since takeoff.')
-    + '</table>';
+    + filaDiag('Cell voltage', voltios)
+    + filaDiag('Supply dips', caidas)
+    + filaDiag('Temperature', calor)
+    + filaDiag('Rate delivered', tasa)
+    + filaDiag('Slots missed', slots)
+    + '</table>'
+    + `<div class="umbrales">${CELDA_VOLVER.toFixed(2)} V/cell turn back`
+    + ` · ${CELDA_ATERRIZAR.toFixed(2)} V land now</div>`;
 }
 
 // Which panel the aside is showing. The health tab carries a count of what is red on it, so a

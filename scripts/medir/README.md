@@ -27,3 +27,32 @@ not complete", which does not name the cause:
     ssh pi@<placa> 'pkill -f "[g]radys_embedded.runner.cli"'
 
 The brackets are what keep that pattern from matching its own command line and killing the ssh.
+
+## The MAVLink probes
+
+Four read the bus directly instead of going through `uav_api`, which matters because `uav_api`
+binds its UDP port exclusively and the bench's fake pilot wants port 8000. They connect as an
+extra client to the router's **server** endpoint, so nothing has to be stopped:
+
+| Script | Answers |
+|---|---|
+| `quien_es_el_fc.py` | Which component is the autopilot. Run this FIRST |
+| `diag_mav_sr.py` | What is actually arriving, and every `SRx_*` stream rate |
+| `bateria_real.py` | The real pack voltage, per cell, while the bench shows a simulated one |
+| `aplicar_en_caliente.py` | Turns EXTENDED_STATUS on for a link that is already up |
+
+They are copied over and run on the board, which is where the router is:
+
+    scp scripts/medir/bateria_real.py pi@<placa>:~/ && ssh -n pi@<placa> 'python3 ~/bateria_real.py'
+
+**`wait_heartbeat()` latches the FIRST heartbeat, and that is usually not the autopilot.** On
+this airframe the ground station announces itself as sysid 250 and the probe's own heartbeat is
+echoed back by the router, both of them `MAV_AUTOPILOT_INVALID`. A `PARAM_SET` addressed to
+either is accepted by the socket and lands nowhere. `quien_es_el_fc.py` exists to name the right
+one, and on this aircraft it is **sysid 3, component 1**.
+
+**A stream rate written to `SRx_*` does nothing to a running autopilot.** ArduPilot turns those
+parameters into message intervals once, when the channel initialises, and never re-reads them.
+The parameter is for the next boot; a live link also needs `aplicar_en_caliente.py`. Measured on
+2026-10-08: with `SR2_EXT_STAT` already at 2, `SYS_STATUS` was absent from 557 packets in 15 s,
+and one `REQUEST_DATA_STREAM` brought it to 2 Hz.

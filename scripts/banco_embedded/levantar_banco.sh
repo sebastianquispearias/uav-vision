@@ -48,6 +48,15 @@
 #             path. THE SCENE DECIDES: the aerial model sees NOTHING indoors, which NOTES.md
 #             measures.
 #   BANCO_MODELO="coco visdrone" bash ...levantar_banco.sh ...
+#
+# BANCO_BATERIA_URL: where the pack voltage is read, ONE VALUE FOR THE WHOLE BENCH, because it
+#             is the same arrangement on every board. Unset, the battery comes from the same
+#             service as the yaw, which is right on the aircraft and WRONG HERE: on the bench
+#             that service is the fake pilot, and the voltage it serves is a simulation that
+#             drains from 16.8 to 14.0 V and stops. A bench showing the REAL pack runs uav_api
+#             beside the fake one, on another port, and points this at it. Read-only: the
+#             battery adapter issues one GET, so no command ever reaches the real autopilot.
+#   BANCO_BATERIA_URL=http://127.0.0.1:8001 bash ...levantar_banco.sh ...
 # CAREFUL: whatever goes into EXTRA is split on spaces when it reaches the board, so a path WITH
 #      spaces breaks the start-up and the error does not name the space. The aliases have none.
 #
@@ -157,6 +166,7 @@ for i in "${!PIS[@]}"; do
     case "${REID[$i]:-}" in no|NO|off) EXTRA="BANCO_REID=" ;; esac
     [ -n "${FPS[$i]:-}" ] && EXTRA="${EXTRA:+$EXTRA,}BANCO_FPS=${FPS[$i]}"
     [ -n "${MODELO[$i]:-}" ] && EXTRA="${EXTRA:+$EXTRA,}BANCO_MODELO=${MODELO[$i]}"
+    [ -n "${BANCO_BATERIA_URL:-}" ]         && EXTRA="${EXTRA:+$EXTRA,}BANCO_BATERIA_URL=${BANCO_BATERIA_URL}"
     [ -z "$EXTRA" ] && EXTRA="-"
     $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" "${DESDE[$i]:-0}" "$MISION" "$EXTRA" "${DIRS[@]}" \
         < "$(dirname "$0")/lanzar_banco_nodo.sh" || echo "   FALLO ${PIS[$i]}"

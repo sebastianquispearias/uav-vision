@@ -42,6 +42,30 @@ ENTREN="$LAC/drone-geolocation/entrenamiento"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
+# THE CLOCK, BEFORE ANYTHING IS COPIED. A Raspberry has no battery-backed clock of its own, and
+# with no route to the internet systemd-timesyncd never syncs, so fake-hwclock restores the time
+# of the last shutdown and the board simply stays there. Measured on 2026-10-08: the board came
+# up believing it was 2026-10-06 03:17, forty-seven hours behind, which is the moment it was
+# last switched off.
+#
+# volar.sh and levantar_banco.sh already did this and this script did not, which is the gap that
+# bit: this is the FIRST thing anyone runs, so the board had the wrong time for every step after
+# it. The symptom is not an error. tar warns that every file it is unpacking is "in the future"
+# and carries on; the station then reads reports stamped two days ago, decides every contact is
+# stale, and shows an empty screen while the drone is reporting perfectly.
+#
+# UTC on both sides, because the board's timezone is not the laptop's to assume. Not fatal if it
+# fails: a board whose clock cannot be set is still worth preparing, and the next script tries
+# again.
+echo "-- poniendo el reloj de $PI en hora (UTC de esta laptop)"
+AHORA_UTC="$(date -u '+%Y-%m-%d %H:%M:%S')"
+if ssh -n -o ConnectTimeout=10 "$PI" "sudo date -u -s '$AHORA_UTC' >/dev/null"; then
+    echo "   $(ssh -n -o ConnectTimeout=10 "$PI" 'date -u "+%Y-%m-%d %H:%M:%S UTC"')"
+else
+    echo "   NO PUDE poner el reloj. Los registros de la placa no se van a poder cruzar"
+    echo "   con los de la laptop, y la estacion puede ver los reportes como viejos."
+fi
+
 echo "== preparando $PI desde $RAIZ"
 mkdir -p "$STAGE/banco/datos" "$STAGE/gradys-embedded" "$STAGE/gradys_protocols"
 cp -r "$RAIZ/uav_vision" "$STAGE/banco/"

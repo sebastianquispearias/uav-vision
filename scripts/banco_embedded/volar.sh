@@ -14,6 +14,24 @@
 # From PowerShell, which is where this is actually typed, the wrapper beside it does the same:
 #   .\scripts\banco_embedded\volar.ps1 192.168.1.121:8300 pi@192.168.1.125 pi@192.168.1.126
 #
+# TWO VARIABLES DECIDE WHETHER THE BATTERY ROW IS TRUE, and both are about the airframe rather
+# than the code, which is why they are here and not in the mission:
+#
+#   VOLAR_CELDAS=4            the pack's cells in series. Without it the station divides the
+#                             pack voltage by a count it inferred and marks the row as guessed.
+#   BANCO_BATERIA_URL=...     where the pack is read. Unset, it is the same service as the yaw,
+#                             which is right on the aircraft. ON THE BENCH THAT IS THE FAKE
+#                             PILOT, and the voltage it serves is a ramp that drains from 16.8
+#                             to 14.0 V and stops -- it will happily sit on the "turn back"
+#                             threshold while the real pack is full. Run uav_api beside the
+#                             fake one on another port and point this at it:
+#                                 ssh pi@<placa> 'cd ~/uav_api && setsid nohup python3 -m \
+#                                     uav_api.run_api --connection_type udpin \
+#                                     --uav_connection 127.0.0.1:14552 --sysid 1 --port 8001 \
+#                                     > ~/uav_api_8001.log 2>&1 &'
+#                                 BANCO_BATERIA_URL=http://127.0.0.1:8001 VOLAR_CELDAS=4 \
+#                                     bash ...volar.sh 192.168.1.121:8300 pi@192.168.1.125
+#
 # Why this exists and levantar_banco.sh is not enough: the launcher starts things. On a flight day
 # the question is not "did it start" but "can I take off", and those differ in three places that
 # all bit on 2026-10-03.
@@ -167,9 +185,17 @@ else
         [ -n "$NODOS" ] && NODOS="$NODOS,"
         NODOS="$NODOS$((i + 1))=${PIS[$i]#*@}:8200"
     done
+    # VOLAR_CELDAS is the pack's cell count, and it belongs to the airframe rather than to the
+    # code. Without it the health tab divides the pack voltage by a count it inferred and says
+    # so; the inference is right for every ordinary pack but it cannot separate a charged 3S
+    # from a flat 4S, which are the same 12.0 V. Telling it costs one word and the row that
+    # warns first stops being a guess.
+    CELDAS=""
+    [ -n "${VOLAR_CELDAS:-}" ] && CELDAS="--celdas ${VOLAR_CELDAS}"
+    # shellcheck disable=SC2086  -- CELDAS and ESTACION_FLAGS are flag lists and must split
     ( cd "$RAIZ" && nohup python scripts/banco_embedded/gs_mapa.py \
         --puerto "$PUERTO" --origen="${ORIGEN_GPS:--22.978029946,-43.23214256266666}" \
-        --nodos "$NODOS" ${ESTACION_FLAGS:---segunda-opinion} > /tmp/estacion.log 2>&1 & )
+        --nodos "$NODOS" $CELDAS ${ESTACION_FLAGS:---segunda-opinion} > /tmp/estacion.log 2>&1 & )
     for i in $(seq 1 40); do
         curl -s -m 2 -o /dev/null "http://127.0.0.1:$PUERTO/estado" && break
         sleep 1
@@ -183,9 +209,15 @@ DIRS+=("$EST")
 
 echo "-- 4/5 cargando la mision en cada aeronave"
 AHORA="$(date -u '+%Y-%m-%d %H:%M:%S')"
+# The only environment this command forwards. On a flight day everything else is the mission's
+# own decision, deliberately. This one is different because where the pack voltage is read
+# decides whether a number on the station is the aircraft's or a simulation's, and a screen that
+# cannot be trusted on that is worse than one that does not show it at all.
+EXTRA="-"
+[ -n "${BANCO_BATERIA_URL:-}" ] && EXTRA="BANCO_BATERIA_URL=${BANCO_BATERIA_URL}"
 for i in "${!PIS[@]}"; do
     $SSH -n "${PIS[$i]}" "sudo date -u -s '$AHORA' >/dev/null" 2>/dev/null || true
-    $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" 0 "$MISION" "-" "${DIRS[@]}" \
+    $SSH "${PIS[$i]}" 'bash -s' -- "$((i + 1))" 0 "$MISION" "$EXTRA" "${DIRS[@]}" \
         < "$AQUI/lanzar_banco_nodo.sh" 2>&1 | sed -n 's/^/   /p' | grep -aE "setup:|FALLO|entorno" \
         || { echo "   FALLO cargando en ${PIS[$i]}"; exit 1; }
 done

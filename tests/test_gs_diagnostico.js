@@ -132,9 +132,9 @@ ok(t[1].texto.indexOf('26 %') >= 0, 'y dice la fraccion: 0,78 de 3,00 es el 26 %
 const c = fila('Temperature');
 ok(c[0].clase.indexOf('bien') >= 0 && c[1].clase.indexOf('mal') >= 0,
    '48,3 C en verde y 84,0 C en rojo');
-ok(c[1].texto.indexOf('slowing itself down') >= 0,
+ok(c[1].texto.indexOf('throttling') >= 0,
    'y cuando el bit termico esta puesto AHORA lo DICE, porque es lo que cuesta miradas');
-ok(c[0].texto.indexOf('slowing itself down') < 0,
+ok(c[0].texto.indexOf('throttling') < 0,
    'la placa fria no lo dice: el contraste es lo que hace legible la de al lado');
 
 // El contraste que importa en esta fila: el bit termico NO es pegajoso aqui a proposito. Una
@@ -145,7 +145,7 @@ estado = { drones: { '1': { temp_c: 50.2,
 pintarDiagnostico();
 const frio = fila('Temperature')[0];
 console.log('  freno en el pasado, hoy a 50,2 C: [' + frio.clase.replace('dato ', '') + '] ' + frio.texto);
-ok(frio.texto.indexOf('slowing itself down') < 0 && frio.clase.indexOf('bien') >= 0,
+ok(frio.texto.indexOf('throttling') < 0 && frio.clase.indexOf('bien') >= 0,
    'una placa que freno ANTES y hoy esta fria no arrastra el aviso: puede volar');
 
 console.log();
@@ -211,6 +211,24 @@ ok(pc[1].texto.indexOf('3.70') >= 0 && pc[1].texto.indexOf('4S') >= 0,
    'y 14,8 V como 3,70 V/celda sobre 4S: packs distintos, MISMO estado');
 ok(pc[0].clase === pc[1].clase,
    'por eso los dos salen del mismo color, que es lo que el porcentaje no dice');
+
+console.log();
+console.log('  EL BORDE EXACTO, que en el banco se vio porque el pack falso se para ahi:');
+estado = { celdas: 4, drones: {
+  '1': { bateria_v: 14.00 },   // 3.50 clavados: el umbral de "turn back"
+  '2': { bateria_v: 13.20 },   // 3.30 clavados: el umbral de "land now"
+  '3': { bateria_v: 14.04 },   // 3.51, apenas por encima
+} };
+pintarDiagnostico();
+const borde = fila('Cell voltage');
+borde.forEach((c2, i) => console.log('    ' + ['14.00', '13.20', '14.04'][i]
+  + ' V -> [' + c2.clase.replace('dato ', '') + '] ' + c2.texto));
+ok(borde[0].clase.indexOf('ojo') >= 0 && borde[0].texto.indexOf('turn back') >= 0,
+   '3,50 CLAVADOS ya dice turn back: el pie dice 3,50 y la celda no puede contradecirlo');
+ok(borde[1].clase.indexOf('mal') >= 0 && borde[1].texto.indexOf('land now') >= 0,
+   '3,30 clavados ya dice land now');
+ok(borde[2].clase.indexOf('bien') >= 0,
+   '3,51 sigue en verde: el umbral mueve el color en el borde, no antes');
 
 console.log();
 console.log('======================================================================');
