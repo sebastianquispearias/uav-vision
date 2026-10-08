@@ -174,6 +174,33 @@ BITS_ALGUNA_VEZ = (("bajo_voltaje", 0x10000), ("frecuencia_limitada", 0x20000),
                    ("acelerador", 0x40000), ("limite_termico", 0x80000))
 
 
+TEMPERATURA = "/sys/class/thermal/thermal_zone0/temp"
+
+
+def temperatura_c(ruta: str = TEMPERATURA) -> Optional[float]:
+    """The SoC temperature in degrees Celsius, or None where there is no such sensor.
+
+    THE FILE IS IN THOUSANDTHS OF A DEGREE, which is why the division is here and not left to
+    whoever paints the number: 47950 is a plausible-looking reading for a thing that is counted
+    in thousands, and 47.95 is a plausible-looking temperature, so a value that crossed this
+    boundary unconverted would look like a sensor fault rather than a unit mistake.
+
+    Read from sysfs and not from `vcgencmd measure_temp`, which is the command a person types.
+    Measured on the Pi 5 on 2026-10-07 they agree -- vcgencmd said 48.3 C and this file said
+    47950, the same sensor sampled a moment apart -- but vcgencmd forks a process, and this runs
+    inside the flight loop twice a second on a board that is already the bottleneck.
+
+    None, as with salud_electrica, means there is nothing to ask rather than something wrong: a
+    laptop replaying a flight has no thermal zone, and a station that warned about a missing
+    file would cry wolf on every desk run.
+    """
+    try:
+        with open(ruta) as fh:
+            return round(int(fh.read().strip()) / 1000.0, 1)
+    except Exception:
+        return None
+
+
 def salud_electrica(ruta: str = THROTTLED) -> Optional[dict]:
     """What the firmware says about power and heat, or None where there is no such firmware.
 
@@ -1106,6 +1133,21 @@ class VisionProtocol(IProtocol):
             one in ten, because a voltage dip lasts an instant and the next report may not
             exist.
 
+        temp_c
+            The board's own temperature in degrees Celsius, or None off a Raspberry. 'salud'
+            already carries the thermal THROTTLING bit, but a bit only says the board has
+            already started slowing down; the degrees say how close it is, which is the
+            difference between a warning and a post-mortem. A Pi 4 running this chain sat at
+            84 C with nothing on the station showing it.
+
+        fps_pedido
+            The rate the see loop is ASKED for, which the station cannot otherwise know: it is
+            set per board on the board itself, through BANCO_FPS. Without it 'fps_real' is a
+            number with nothing to be measured against, and on 2026-10-02 that is exactly how
+            a visitor read '4 FPS' off this screen and asked, correctly, why a Pi 4 and a Pi 5
+            were reporting the same thing. They were not: the screen was showing what both had
+            been asked for.
+
         bateria_v
             The pack voltage in volts, or absent when no battery_source was configured. It sits
             beside 'salud' because it is the other half of the same question and the two fail
@@ -1179,7 +1221,9 @@ class VisionProtocol(IProtocol):
                     round(float(self._position[2]), 2)] if self._position is not None else None,
             "buscando": self._estado_busqueda(),
             "salud": salud_electrica(),
+            "temp_c": temperatura_c(),
             "bateria_v": self._bateria(),
+            "fps_pedido": round(1.0 / self.see_period_s, 2) if self.see_period_s else None,
             "pois": pois,
         }
         self.provider.send_communication_command(

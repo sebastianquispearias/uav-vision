@@ -78,6 +78,7 @@ ESTADO = {
     'origen': None,
     'origen_cli': None,
     'desacuerdo': None,
+    'celdas': None,
 
     'georef': None,
     'fondo': None,
@@ -237,6 +238,14 @@ def ficha(ahora, mensaje):
     perfectly healthy until the rail collapses all at once. None means the drone was configured
     without a battery source, which is every bench and replay run, and is not a fault.
 
+    'temp_c' and 'fps_pedido' exist for the health tab, and they are the two things that were
+    NOT already arriving when that tab was planned. 'salud' carries the thermal throttling bit
+    but not the degrees, so a board at 84 C and a board at 50 C looked identical until the
+    moment one of them started slowing down. And 'fps_pedido' is set per board ON the board,
+    through BANCO_FPS, so the station had no way to say whether a rate was good: on 2026-10-02 a
+    visitor read '4 FPS' here and asked why a Pi 4 and a Pi 5 reported the same number. They did
+    not -- the screen was showing what both had been ASKED for.
+
     'pos' is where the drone is and, through the trail, where it has been. The trail is what
     shows an operator whether the drone is working the area or hovering, which is the difference
     between rays that cross and rays that do not.
@@ -253,6 +262,8 @@ def ficha(ahora, mensaje):
         'slots_perdidos_total': mensaje.get('slots_perdidos_total'),
         'salud': mensaje.get('salud'),
         'bateria_v': mensaje.get('bateria_v'),
+        'temp_c': mensaje.get('temp_c'),
+        'fps_pedido': mensaje.get('fps_pedido'),
         'buscando': mensaje.get('buscando'),
     }
 
@@ -837,6 +848,7 @@ class Handler(server.BaseHTTPRequestHandler):
                     'origen': ESTADO['origen'],
                     'origen_cli': ESTADO['origen_cli'],
                     'desacuerdo': ESTADO['desacuerdo'],
+                    'celdas': ESTADO['celdas'],
                     'georef': ESTADO['georef'],
                     'pedidos': pedidos_de_verificacion(
                         ESTADO['pois'], ESTADO['drones'], time.time()),
@@ -985,6 +997,24 @@ PAGINA = r"""<!doctype html>
           padding-top:12px; border-top:1px solid var(--linea); }
   #alarma { background:#7f1d1d; color:#fee2e2; padding:9px 16px; font-size:13px;
             font-weight:600; border-bottom:1px solid #991b1b; }
+  /* The two panels of the aside. A tab and not a second column: the map is the point, and the
+     health of the fleet is what you go and look at, not what you watch. */
+  #solapas { display:flex; gap:4px; margin:0 0 12px; }
+  #solapas button { flex:1; background:#171b23; color:var(--tenue); border:1px solid var(--linea);
+                    border-radius:6px; padding:6px 0; font-size:11px; font-weight:600;
+                    text-transform:uppercase; letter-spacing:.07em; cursor:pointer; }
+  #solapas button.on { background:var(--panel); color:var(--texto); border-color:#4b5563; }
+  #solapas button .mal { color:#f87171; }
+  #diag table { width:100%; border-collapse:collapse; font-size:12px; }
+  #diag th { text-align:left; color:var(--tenue); font-weight:600; font-size:10px;
+             text-transform:uppercase; letter-spacing:.06em; padding:0 6px 6px 0; }
+  #diag td { padding:7px 6px 7px 0; border-top:1px solid var(--linea); font-variant-numeric:tabular-nums; }
+  #diag .dato { font-weight:600; }
+  #diag .bien { color:var(--ok); }
+  #diag .ojo  { color:var(--duda); }
+  #diag .mal  { color:#f87171; }
+  #diag .nada { color:var(--tenue); font-style:italic; font-weight:400; }
+  #diag .porque { color:var(--tenue); font-size:11px; padding:0 0 9px; border:0; }
 </style></head>
 <body>
 <div id="alarma" style="display:none"></div>
@@ -1006,12 +1036,20 @@ PAGINA = r"""<!doctype html>
 <main>
   <canvas id="lienzo"></canvas>
   <aside>
-    <h2>Contacts</h2>
-    <div id="camara"><div class="cab">what the camera sees</div><img alt=""></div>
-    <div id="pedidos"></div>
-    <div id="buscar"></div>
-    <div id="filtro"></div>
-    <div id="lista"><div class="vacio">Nothing yet.</div></div>
+    <div id="solapas">
+      <button data-solapa="contactos" class="on">Contacts</button>
+      <button data-solapa="diag">Health</button>
+    </div>
+    <div id="panel-contactos">
+      <div id="camara"><div class="cab">what the camera sees</div><img alt=""></div>
+      <div id="pedidos"></div>
+      <div id="buscar"></div>
+      <div id="filtro"></div>
+      <div id="lista"><div class="vacio">Nothing yet.</div></div>
+    </div>
+    <div id="panel-diag" hidden>
+      <div id="diag"><div class="vacio">No drone has reported yet.</div></div>
+    </div>
   </aside>
 </main>
 <script>
@@ -1510,6 +1548,165 @@ function textoSegunda(d) {
 // answer about a moving scene is worse than none: the card says when it was taken.
 const SEGUNDA_VIEJA_S = 60;
 
+// -- the health tab ------------------------------------------------------------
+// ORDERED BY HOW SOON EACH THING ENDS THE FLIGHT, which is the rule the alarm banner already
+// follows: the electrical warning goes before the one about the origin because it is the only
+// one that predicts a loss. Cell voltage is minutes of warning, a brown-out is seconds, heat
+// degrades the product now, and a rate below the one asked for degrades it quietly.
+//
+// NO GRAPHS, on purpose. The group's own direction on 2026-10-02 was that it did not want to
+// recreate Grafana and would start with its own plots; a line chart of five numbers from two
+// boards is a worse way to answer "can this aircraft finish the mission" than five numbers
+// with thresholds on them.
+//
+// VOLTS PER CELL AND NOT PERCENT. Measured on this airframe, the autopilot reported 93 % at
+// 3.79 V per cell: a LiPo's discharge curve is flat across most of its range, so the percentage
+// is an interpolation along a plateau while the voltage is the measurement. 3.50 V is turn back
+// and 3.30 V is land now, which are the usual numbers for the chemistry and not something this
+// screen derived.
+const CELDA_VOLVER = 3.5, CELDA_ATERRIZAR = 3.3;
+const TEMP_OJO = 70, TEMP_MAL = 80;
+
+// THE CELL COUNT IS TOLD IF THE OPERATOR TOLD IT, AND ONLY INFERRED OTHERWISE. Nothing
+// upstream sends it -- uav_api forwards a pack voltage and no count -- so --celdas on the
+// station is the exact answer and this is the fallback.
+//
+// The window is 2.80 to 4.25 V a cell, which is the whole life of the chemistry: 4.20 is a full
+// charge and 4.25 is as high as one goes. THAT UPPER BOUND IS LOAD-BEARING and a looser one was
+// wrong: at 4.35 a 13.0 V pack came out as a 3S at 4.33 V a cell, which reads as a FULL pack in
+// green, when the same 13.0 V over 4S is 3.25 and means land now. One number, two readings, and
+// the wrong one is the reassuring one.
+//
+// It still cannot resolve everything, and the residual case is real: 12.0 V is a 3S charged to
+// 4.00 a cell and equally a 4S down to 3.00. There is no threshold that separates those, which
+// is the reason --celdas exists. The count is printed next to the voltage so an operator who
+// knows their airframe sees a wrong guess at once.
+function celdasDe(v, dichas) {
+  if (dichas) return dichas;
+  let mejor = null;
+  for (let n = 2; n <= 6; n++) {
+    const porCelda = v / n;
+    if (porCelda >= 2.8 && porCelda <= 4.25
+        && (mejor === null || Math.abs(porCelda - 3.8) < Math.abs(v / mejor - 3.8))) mejor = n;
+  }
+  return mejor;
+}
+
+function celda(texto, clase, bajo) {
+  return `<td class="dato ${clase || ''}">${texto}`
+    + (bajo ? `<br><span class="nada">${bajo}</span>` : '') + `</td>`;
+}
+
+function sinDato(texto) { return `<td class="nada">${texto}</td>`; }
+
+function filaDiag(etiqueta, celdas, porque) {
+  return `<tr><th>${etiqueta}</th>${celdas.join('')}</tr>`
+    + `<tr><td class="porque" colspan="${celdas.length + 1}">${porque}</td></tr>`;
+}
+
+function pintarDiagnostico() {
+  const caja = document.getElementById('diag');
+  const ids = Object.keys((estado && estado.drones) || {}).sort();
+  if (!ids.length) {
+    caja.innerHTML = '<div class="vacio">No drone has reported yet.</div>';
+    return;
+  }
+  const ds = ids.map(id => estado.drones[id]);
+
+  const voltios = ds.map(d => {
+    if (d.bateria_v == null) return sinDato('no battery source');
+    const dichas = estado.celdas || null;
+    const n = celdasDe(d.bateria_v, dichas);
+    if (!n) return sinDato(`${d.bateria_v} V, not a LiPo`);
+    const c = d.bateria_v / n;
+    const clase = c < CELDA_ATERRIZAR ? 'mal' : (c < CELDA_VOLVER ? 'ojo' : 'bien');
+    const que = c < CELDA_ATERRIZAR ? ' land now' : (c < CELDA_VOLVER ? ' turn back' : '');
+    return celda(`${c.toFixed(2)} V/cell${que}`, clase,
+                 `${d.bateria_v} V over ${n}S` + (dichas ? '' : ', guessed'));
+  });
+
+  const caidas = ds.map(d => {
+    if (!d.salud) return sinDato('not a Raspberry');
+    const ahora = (d.salud.ahora || []).indexOf('bajo_voltaje') >= 0;
+    const antes = (d.salud.alguna_vez || []).indexOf('bajo_voltaje') >= 0;
+    if (ahora) return celda('BROWNING OUT NOW', 'mal', 'check its supply');
+    if (antes) return celda('has browned out', 'ojo', 'not now, but it did');
+    return celda('clean', 'bien');
+  });
+
+  const calor = ds.map(d => {
+    if (d.temp_c == null) return sinDato('not reported');
+    const bits = (d.salud && d.salud.ahora) || [];
+    const frena = bits.indexOf('limite_termico') >= 0 || bits.indexOf('acelerador') >= 0;
+    const clase = (frena || d.temp_c >= TEMP_MAL) ? 'mal'
+                : (d.temp_c >= TEMP_OJO ? 'ojo' : 'bien');
+    return celda(`${d.temp_c.toFixed(1)} °C`, clase, frena ? 'slowing itself down' : '');
+  });
+
+  const tasa = ds.map(d => {
+    if (d.fps_real == null) return sinDato('no rate yet');
+    if (d.fps_pedido == null) return celda(`${d.fps_real} FPS`, '', 'asked rate unknown');
+    const frac = d.fps_pedido > 0 ? d.fps_real / d.fps_pedido : 1;
+    const clase = frac < 0.6 ? 'mal' : (frac < 0.9 ? 'ojo' : 'bien');
+    return celda(`${d.fps_real} of ${d.fps_pedido} FPS`, clase,
+                 `${(frac * 100).toFixed(0)} % of what it was asked for`);
+  });
+
+  const slots = ds.map(d => {
+    if (d.slots_perdidos == null) return sinDato('not reported');
+    const clase = d.slots_perdidos > 0 ? 'ojo' : 'bien';
+    return celda(String(d.slots_perdidos), clase,
+                 d.slots_perdidos_total == null ? '' : `${d.slots_perdidos_total} since takeoff`);
+  });
+
+  caja.innerHTML = '<table><tr><th></th>'
+    + ids.map(id => `<th>drone ${id}</th>`).join('') + '</tr>'
+    + filaDiag('Cell voltage', voltios,
+               `minutes of warning. ${CELDA_VOLVER.toFixed(2)} V turn back, `
+               + `${CELDA_ATERRIZAR.toFixed(2)} V land now. Volts and not percent, `
+               + `because the discharge curve is flat.`)
+    + filaDiag('Supply dips', caidas,
+               'seconds of warning, and STICKY: a dip lasts an instant and the bit for "now" is '
+               + 'already off by the time anyone looks. A board that browns out does not warn, '
+               + 'it disappears.')
+    + filaDiag('Temperature', calor,
+               'degrades the product now, before anything is lost. A board at 84 C is taking '
+               + 'fewer looks than the one beside it and nothing else on this screen says so.')
+    + filaDiag('Rate delivered', tasa,
+               'against the rate the board was ASKED for, which is set on the board itself. '
+               + 'Fewer looks taken is fewer chances to find anyone.')
+    + filaDiag('Slots missed', slots, 'in the last report interval, and since takeoff.')
+    + '</table>';
+}
+
+// Which panel the aside is showing. The health tab carries a count of what is red on it, so a
+// tab nobody has open can still get the operator to open it.
+let solapa = 'contactos';
+
+// Asked of the container and not of the document, which is the way every other control on this
+// page finds its buttons. It is also what keeps the switcher out of the way of a caller that
+// has no document to query: the gates run this script against a stub DOM.
+function botonesSolapa() {
+  return document.getElementById('solapas').querySelectorAll('button');
+}
+
+function pintarSolapas() {
+  const malas = (document.getElementById('diag').innerHTML.match(/class="dato mal"/g) || []).length;
+  botonesSolapa().forEach(b => {
+    b.className = b.dataset.solapa === solapa ? 'on' : '';
+    if (b.dataset.solapa === 'diag') {
+      b.innerHTML = 'Health' + (malas ? ` <span class="mal">● ${malas}</span>` : '');
+    }
+  });
+  document.getElementById('panel-contactos').hidden = solapa !== 'contactos';
+  document.getElementById('panel-diag').hidden = solapa !== 'diag';
+}
+
+botonesSolapa().forEach(b => b.addEventListener('click', () => {
+  solapa = b.dataset.solapa;
+  pintarSolapas();
+}));
+
 function pintar() {
   podarLimpiados(estado.pois);
   const recibidos = estado.pois.filter(p => !ocultas.has(claseDe(p)));
@@ -1530,6 +1727,8 @@ function pintar() {
     + (aviso ? ` \u00b7 ${aviso}` : '');
   ajustarVista(visibles);
   pintarLista(visibles);
+  pintarDiagnostico();
+  pintarSolapas();
   dibujar();
 }
 
@@ -1836,6 +2035,10 @@ if __name__ == '__main__':
     ap.add_argument('--fondo', default=None, help='PNG georeferenciado (opcional)')
     ap.add_argument('--georef', default=None,
                     help='archivo con lat0,lon0,lat1,lon1[,zoom] de las esquinas del PNG')
+    ap.add_argument('--celdas', type=int, default=None,
+                    help='celdas en serie del pack (4 para un 4S). Sin esto la pagina las '
+                         'infiere de la tension, y hay packs que la inferencia no puede '
+                         'distinguir: 12,0 V son un 3S cargado o un 4S agotado')
     ap.add_argument('--origen', default=None,
                     help='lat,lon del origen de la mision: convierte los metros a coordenadas')
     ap.add_argument('--demo', action='store_true')
@@ -1911,6 +2114,13 @@ if __name__ == '__main__':
             ESTADO['fondo'] = None
     elif args.fondo:
         print('AVISO: no existe %s; se dibuja solo la cuadricula.' % args.fondo)
+
+    # El operador sabe cuantas celdas tiene su pack y la pagina no puede saberlo siempre: 12,0 V
+    # son un 3S cargado a 4,00 V por celda y tambien un 4S agotado a 3,00, y las dos lecturas son
+    # fisicamente plausibles. Decirlo aqui saca la fila mas urgente de la pestana de salud del
+    # terreno de la adivinanza.
+    if args.celdas:
+        ESTADO['celdas'] = args.celdas
 
     if args.origen:
         ESTADO['origen_cli'] = tuple(float(x) for x in args.origen.split(','))
