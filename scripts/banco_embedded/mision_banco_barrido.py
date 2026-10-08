@@ -26,7 +26,7 @@ with room to spare.
 
 from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
-from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
+from uav_vision.vision_protocol import UavApiBattery, UavApiYaw, VisionProtocol
 
 ProtocoloBancoBarrido = VisionProtocol.with_config(
     camera=OnboardCamera(
@@ -40,6 +40,7 @@ ProtocoloBancoBarrido = VisionProtocol.with_config(
     pitch_deg=-55.0,
     see_period_s=0.25,
     yaw_source=UavApiYaw("http://localhost:8000"),
+    battery_source=UavApiBattery("http://localhost:8000"),
     identity=IncrementalIdentity(
         fusion_radius_m=3.5,
         fps=4.0,

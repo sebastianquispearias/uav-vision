@@ -11,7 +11,7 @@ and the identity thresholds — the protocol itself is unchanged.
 
 from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
-from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
+from uav_vision.vision_protocol import UavApiBattery, UavApiYaw, VisionProtocol
 
 ProtocoloVisionLAC = VisionProtocol.with_config(
     camera=OnboardCamera(
@@ -22,6 +22,7 @@ ProtocoloVisionLAC = VisionProtocol.with_config(
     ),
     pitch_deg=-20.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
+    battery_source=UavApiBattery("http://localhost:8000"),
     identity=IncrementalIdentity(
         fusion_radius_m=0.6,
         fps=4.0,

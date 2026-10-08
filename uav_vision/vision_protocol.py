@@ -228,6 +228,47 @@ class UavApiYaw:
             return None
 
 
+class UavApiBattery:
+    """
+    Pack-voltage source for the real drone: polls the uav_api service on localhost.
+
+    GET /telemetry/battery_info returns
+    {"result": "success", "info": {"voltage": <mV>, "current": <cA>, "battery_remaining": <%>}}
+    and the voltage is MAVLink's, in millivolts. The conversion to volts happens here so that
+    nothing downstream has to know the wire unit; a reading of 15013 becomes 15.013 V, which is
+    a 4S pack at 3.75 V per cell. Verified against the real service on the Pi 5 on 2026-10-07.
+
+    THE ENDPOINT IS SILENT UNLESS THE AUTOPILOT STREAMS SYS_STATUS, and a drone whose battery
+    looks absent is far more likely to be misconfigured than unpowered. uav_api reads the pack
+    out of SYS_STATUS, which belongs to ArduPilot's EXTENDED_STATUS stream group. On this
+    airframe that group was the only one left at rate zero, while BATTERY_STATUS -- carrying the
+    same volts in the EXTRA3 group -- arrived at 2 Hz all along. The endpoint answered
+    {"detail": "GET_BATTERY_INFO FAIL: 'SYS_STATUS'"} and the pack read as missing when it was
+    merely being asked for in the wrong message. Raising SRx_EXT_STAT fixes it from the next
+    boot of the autopilot, but not on a running one: the stream rates are turned into message
+    intervals when the channel initialises and are not re-read afterwards, so a live link also
+    needs a REQUEST_DATA_STREAM or a SET_MESSAGE_INTERVAL. See ESTADO_SESION.md.
+
+    Returns None on any failure, which is the same contract as UavApiYaw: a drone whose stream
+    is off loses the voltage field from its report and keeps flying, rather than taking the
+    mission down over a telemetry nicety.
+    """
+
+    def __init__(self, base_url: str = "http://localhost:8000", timeout_s: float = 0.5):
+        self.url = base_url.rstrip("/") + "/telemetry/battery_info"
+        self.timeout_s = timeout_s
+
+    def __call__(self) -> Optional[float]:
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(self.url, timeout=self.timeout_s) as r:
+                payload = json.loads(r.read())
+                return round(float(payload.get("info", payload)["voltage"]) / 1000.0, 3)
+        except Exception:
+            return None
+
+
 class VisionProtocol(IProtocol):
     """
     Observe-only protocol: camera in, POI messages out.
@@ -287,6 +328,16 @@ class VisionProtocol(IProtocol):
         the body, so a drone that noses down to fly forward points its camera elsewhere. None
         keeps the mount angle alone, which is right for a loitering drone and wrong for one
         that escorts.
+
+    battery_source
+        Where the pack voltage comes from: a callable returning volts, or None when there is no
+        pack to ask. On the real drone that is UavApiBattery; the bench and the replay pass
+        nothing, and the field simply does not appear in the report.
+
+        It is INJECTED rather than read here because the same file has to run on the laptop and
+        on the aircraft. A protocol that opened a MAVLink socket itself would not import on a
+        desk, and the replay that guards this chain -- demo.py, which must keep printing 2.39 m
+        -- runs on a laptop with no autopilot anywhere.
     """
 
     camera = None
@@ -301,6 +352,7 @@ class VisionProtocol(IProtocol):
     ground_extent_m: Mapping[str, float] = GROUND_EXTENT_M
     station_url: Optional[str] = None
     attitude_source: Optional[Callable[[], Optional[Tuple[float, float]]]] = None
+    battery_source: Optional[Callable[[], Optional[float]]] = None
 
     @classmethod
     def with_config(
@@ -317,6 +369,7 @@ class VisionProtocol(IProtocol):
         ground_extent_m: Optional[Mapping[str, float]] = None,
         station_url: Optional[str] = None,
         attitude_source: Optional[Callable[[], Optional[Tuple[float, float]]]] = None,
+        battery_source: Optional[Callable[[], Optional[float]]] = None,
     ) -> Type["VisionProtocol"]:
         """
         Builds a configured protocol class ready for the runner. pitch_deg is explicit and has
@@ -331,6 +384,8 @@ class VisionProtocol(IProtocol):
                 "yaw_source": staticmethod(yaw_source),
                 "attitude_source": (staticmethod(attitude_source)
                                     if attitude_source is not None else None),
+                "battery_source": (staticmethod(battery_source)
+                                   if battery_source is not None else None),
                 "see_period_s": see_period_s,
                 "report_period_s": report_period_s,
                 "ground_z": ground_z,
@@ -880,6 +935,23 @@ class VisionProtocol(IProtocol):
                 fuera.append(quien)
         return sorted(fuera)
 
+    def _bateria(self) -> Optional[float]:
+        """The pack voltage this report carries, or None when there is nothing to ask.
+
+        The call is wrapped because battery_source is injected from outside and a report is the
+        only thing that leaves this aircraft. UavApiYaw and UavApiBattery already swallow their
+        own HTTP failures, but a source this protocol has never seen must not be able to take
+        the POIs down with it: the voltage is the least important field in the message and
+        losing the message to it would be the worst possible trade.
+        """
+        if self.battery_source is None:
+            return None
+        try:
+            v = self.battery_source()
+        except Exception:
+            return None
+        return None if v is None else round(float(v), 3)
+
     def _ritmo(self):
         """
         Rate and misses over the LAST report interval, not over the whole mission.
@@ -1034,6 +1106,15 @@ class VisionProtocol(IProtocol):
             one in ten, because a voltage dip lasts an instant and the next report may not
             exist.
 
+        bateria_v
+            The pack voltage in volts, or absent when no battery_source was configured. It sits
+            beside 'salud' because it is the other half of the same question and the two fail
+            independently: 'salud' is the computer's rail as the firmware sees it, this is the
+            pack feeding it. A board can brown out with a healthy pack, through a BEC that
+            cannot deliver, and a pack can be nearly flat while the rail still reads clean --
+            which is the regime in which an aircraft stops flying with nothing on the screen
+            having changed.
+
         Each POI's crop arrives from the identity layer as raw JPEG bytes and is encoded here
         rather than there, so the identity layer stays free of transport concerns. Its
         embedding goes out at half precision: the vector is only ever compared by cosine, and
@@ -1098,6 +1179,7 @@ class VisionProtocol(IProtocol):
                     round(float(self._position[2]), 2)] if self._position is not None else None,
             "buscando": self._estado_busqueda(),
             "salud": salud_electrica(),
+            "bateria_v": self._bateria(),
             "pois": pois,
         }
         self.provider.send_communication_command(

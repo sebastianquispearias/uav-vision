@@ -102,7 +102,7 @@ import os
 
 from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
-from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
+from uav_vision.vision_protocol import UavApiBattery, UavApiYaw, VisionProtocol
 
 FPS = float(os.environ.get("BANCO_FPS", "4.0"))
 REID = os.environ.get("BANCO_REID", "/home/pi/modelos_visdrone/osnet_x0_25_msmt17.pt") or None
@@ -126,6 +126,7 @@ ProtocoloLab = VisionProtocol.with_config(
     see_period_s=SEE_S,
     pitch_deg=-20.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
+    battery_source=UavApiBattery("http://localhost:8000"),
     identity=IncrementalIdentity(
         fusion_radius_m=0.6,
         fps=FPS,

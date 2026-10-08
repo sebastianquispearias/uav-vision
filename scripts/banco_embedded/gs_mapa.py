@@ -232,6 +232,11 @@ def ficha(ahora, mensaje):
     is here because a board spent four hours browning out and nothing on this screen showed it;
     NOTES.md has that story.
 
+    'bateria_v' is the pack voltage, which answers a question 'salud' cannot: the firmware
+    reports the computer's rail, not the battery feeding it, so a pack on its way down looks
+    perfectly healthy until the rail collapses all at once. None means the drone was configured
+    without a battery source, which is every bench and replay run, and is not a fault.
+
     'pos' is where the drone is and, through the trail, where it has been. The trail is what
     shows an operator whether the drone is working the area or hovering, which is the difference
     between rays that cross and rays that do not.
@@ -247,6 +252,7 @@ def ficha(ahora, mensaje):
         'slots_perdidos': mensaje.get('slots_perdidos'),
         'slots_perdidos_total': mensaje.get('slots_perdidos_total'),
         'salud': mensaje.get('salud'),
+        'bateria_v': mensaje.get('bateria_v'),
         'buscando': mensaje.get('buscando'),
     }
 

@@ -7,7 +7,7 @@ margin. Yaw comes from the REAL uav_api on :8000 (real Pixhawk compass).
 
 from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
-from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
+from uav_vision.vision_protocol import UavApiBattery, UavApiYaw, VisionProtocol
 
 ProtocoloVisionReal = VisionProtocol.with_config(
     camera=OnboardCamera(
@@ -18,6 +18,7 @@ ProtocoloVisionReal = VisionProtocol.with_config(
     ),
     pitch_deg=-20.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
+    battery_source=UavApiBattery("http://localhost:8000"),
     see_period_s=0.5,
     identity=IncrementalIdentity(
         fusion_radius_m=0.6,

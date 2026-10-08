@@ -114,7 +114,7 @@ WHAT IS SET HERE AND WHY
 
 from uav_vision.camera import OnboardCamera
 from uav_vision.identity import IncrementalIdentity
-from uav_vision.vision_protocol import UavApiYaw, VisionProtocol
+from uav_vision.vision_protocol import UavApiBattery, UavApiYaw, VisionProtocol
 
 ProtocoloBarridoLAC = VisionProtocol.with_config(
     camera=OnboardCamera(
@@ -128,6 +128,7 @@ ProtocoloBarridoLAC = VisionProtocol.with_config(
     pitch_deg=-55.0,
     see_period_s=1.0 / 3.0,
     yaw_source=UavApiYaw("http://localhost:8000"),
+    battery_source=UavApiBattery("http://localhost:8000"),
     identity=IncrementalIdentity(
         fusion_radius_m=3.5,
         fps=3.0,
