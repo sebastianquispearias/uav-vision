@@ -188,10 +188,32 @@ print()
 print("  Y LA PUERTA DE VERDAD, el replay del vuelo 3:")
 r = subprocess.run([sys.executable, os.path.join(_HERE, "demo", "demo.py"), "--sin-mapa"],
                    cwd=_HERE, capture_output=True, text=True, encoding="utf-8", errors="replace")
-linea = [ln for ln in (r.stdout or "").splitlines() if "mejor POI" in ln]
-print("   ", (linea[0].strip() if linea else "(demo.py no imprimio la linea)"))
-revisar(bool(linea) and "2.39 m" in linea[0],
-        "demo.py --sin-mapa sigue dando 2,39 m con el estimador conmutable dentro")
+salida = (r.stdout or "") + (r.stderr or "")
+linea = [ln for ln in salida.splitlines() if "mejor POI" in ln]
+if linea:
+    print("   ", linea[0].strip())
+    revisar("2.39 m" in linea[0],
+            "demo.py --sin-mapa sigue dando 2,39 m con el estimador conmutable dentro")
+else:
+    # El mismo criterio que conftest.py, y la lista es LA SUYA para que no se separen: una
+    # dependencia opcional que falta no es un gate roto, y un rojo que solo significa "aqui no
+    # esta instalado" es un rojo que la gente aprende a ignorar. El clon pelado del CI no trae
+    # el runtime de GrADyS ni el archivo de vuelos, y ahi esta puerta no se puede correr.
+    sys.path.insert(0, _HERE)
+    from conftest import FALTA
+    porque = [f for f in FALTA if f in salida]
+    ultimas = [ln for ln in salida.strip().splitlines() if ln.strip()][-3:]
+    print("    demo.py no imprimio la linea. Lo ultimo que dijo:")
+    for ln in ultimas:
+        print("      " + ln.strip()[:100])
+    if porque:
+        print("    NO CORRESPONDE AQUI: %s. La puerta de 2,39 m la corre el otro job del CI,"
+              % porque[0])
+        print("    el que si trae el runtime, y la corre la laptop en cada sesion.")
+    else:
+        revisar(False,
+                "demo.py --sin-mapa sigue dando 2,39 m con el estimador conmutable dentro",
+                "y no es por una dependencia que falte: salio con codigo %d" % r.returncode)
 
 print()
 print("=" * 76)
