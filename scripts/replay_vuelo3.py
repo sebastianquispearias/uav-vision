@@ -348,6 +348,18 @@ if CON_VEHICULOS:
         if float(p["alt_agl"]) > 3.0 and f in por_frame)
 
 SINTETICO_V = next((float(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--sintetico=")), None)
+
+# --submuestreo=N keeps one frame of every N, which is how this recording answers a question
+# about rates it was not recorded at. The flight was captured at 1.64 frames per second, so the
+# only honest direction is DOWN: N=2 asks what the chain finds at 0.8 FPS, N=3 at 0.55. Faster
+# than 1.64 cannot be simulated at all, because those frames do not exist.
+#
+# It is one knob and not two on purpose. The declared rate the identity layer scales every
+# maturity threshold by is computed from this same list a few lines below, so thinning the list
+# moves both together and they cannot drift -- which is the failure mode that had to be fixed in
+# mision_banco_lab.py the same day this was written.
+SUBMUESTREO = next((int(a.split("=", 1)[1]) for a in sys.argv
+                    if a.startswith("--submuestreo=")), 1)
 SINTETICO_ID = 900000
 SINTETICO_X0, SINTETICO_X1, SINTETICO_Y = -25.0, 25.0, 25.0
 posicion_sintetica = None
@@ -389,6 +401,15 @@ if SINTETICO_V is not None:
     print(f"blanco sintetico a {SINTETICO_V} m/s: en cuadro en {_n_vista} frames, detectado en {_n_det}")
 
 camara_cfg = ARDUCAM_MODULE_3.rotated_180()
+
+# Applied HERE and not next to any of the three places frames_aire is built, because which of
+# them ran depends on the flags: this is the one point where the list is final whichever branch
+# produced it. Guarded, so the default path is untouched and not merely equivalent -- [::1] is a
+# copy, and the replay that prints 2.39 m is the gate this file lives under.
+if SUBMUESTREO > 1:
+    _antes = len(frames_aire)
+    frames_aire = frames_aire[::SUBMUESTREO]
+    print(f"submuestreo 1 de cada {SUBMUESTREO}: {_antes} -> {len(frames_aire)} cuadros")
 
 t_ini = float(poses[frames_aire[0]]["t_mono"])
 t_fin = float(poses[frames_aire[-1]]["t_mono"])
