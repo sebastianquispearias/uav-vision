@@ -54,12 +54,43 @@ def esperar_drones(base, cuantos, limite_s):
     while time.time() - t0 < limite_s:
         try:
             d = estado(base).get("drones") or {}
-            if sum(1 for f in d.values() if f.get("fps_real")) >= cuantos:
+            # "is not None" and not truthiness: at half a frame per second an interval with
+            # no frame in it reports 0.0, which is a drone answering, not a drone missing.
+            if sum(1 for f in d.values() if f.get("fps_real") is not None) >= cuantos:
                 return True
         except Exception:
             pass
         time.sleep(5)
     return False
+
+
+def asegurar_estacion(consulta, puerto, origen):
+    """Starts the ground station if nobody is answering, and waits until it does.
+
+    levantar_banco.sh does NOT start it -- it takes the station's address and hands it to the
+    drones, assuming somebody already brought it up, which volar.sh does and nothing else here
+    does. A sweep that ran without noticing produced an empty CSV and the message "the boards
+    did not report", which blames the wrong half of the system entirely.
+    """
+    try:
+        urllib.request.urlopen(consulta + "/estado", timeout=3).read()
+        print("la estacion ya responde en %s" % consulta)
+        return None
+    except Exception:
+        pass
+    gs = os.path.join(RAIZ, "scripts", "banco_embedded", "gs_mapa.py")
+    print("levantando la estacion en el puerto %s" % puerto)
+    proc = subprocess.Popen([sys.executable, gs, "--puerto", str(puerto),
+                             "--origen=" + origen, "--banco"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(40):
+        try:
+            urllib.request.urlopen(consulta + "/estado", timeout=2).read()
+            print("   responde")
+            return proc
+        except Exception:
+            time.sleep(1)
+    raise SystemExit("la estacion no respondio en 40 s")
 
 
 def levantar(estacion, placas, fps):
@@ -80,6 +111,7 @@ def main():
     ap.add_argument("--minutos", type=float, default=10.0, help="cuanto sostener cada tasa")
     ap.add_argument("--intervalo", type=float, default=30.0, help="segundos entre muestras")
     ap.add_argument("--salida", default=os.path.join(RAIZ, "docs", "barrido_fps.csv"))
+    ap.add_argument("--origen", default="-22.978029946,-43.23214256266666")
     args = ap.parse_args()
 
     # The address passed is the one the DRONES are told to reach, which is this same laptop by
@@ -95,6 +127,8 @@ def main():
     if nuevo:
         w.writeheader()
         fh.flush()
+
+    asegurar_estacion(consulta, args.estacion.rsplit(":", 1)[1], args.origen)
 
     print("barrido de %s, %.0f min por tasa, muestra cada %.0f s"
           % (", ".join(str(t) for t in args.tasas), args.minutos, args.intervalo))
