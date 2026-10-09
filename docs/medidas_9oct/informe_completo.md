@@ -449,8 +449,37 @@ que una pista espuria acumule evidencia suficiente para madurar. Y como los umbr
 madurez se escalan por la tasa declarada, veinte segundos de evidencia siguen siendo
 veinte segundos reales de reloj, no menos.
 
-**Esto convierte el calor de la Pi 4 de bloqueante en parámetro.** Si térmicamente solo
-aguanta media imagen por segundo, a esa tasa encuentra lo mismo.
+### Una limitación del metodo que acota lo que esto afirma
+
+El submuestreo se aplica **despues** de cargar las pistas, y esas pistas se calcularon
+con el vuelo completo a 1,64 imagenes por segundo. En el codigo del replay son las
+lineas 291 y 411: primero se cargan, despues se tiran cuadros.
+
+**Entonces el seguidor nunca sufrio la tasa baja.** Y el seguidor es justamente lo que
+mas sufre: a 0,41 imagenes por segundo pasan 2,4 segundos entre cuadros, la persona se
+movio mucho mas, y el solapamiento entre cajas se desploma, igual que en el ejemplo de
+la seccion 9.4 donde el IoU caia a 0,231 y la pista se partia en dos.
+
+Lo que la tabla mide, dicho con precision:
+
+> Si la capa de identidad recibe menos observaciones **de pistas calculadas a tasa
+> completa**, sigue encontrando 5 de 7.
+
+Lo que la tabla **no** mide:
+
+> Si la camara hubiera capturado a 0,41 imagenes por segundo, el sistema encontraria
+> 5 de 7.
+
+**El resultado es optimista.** A tasa realmente baja el seguidor tambien se degradaria.
+Para que la afirmacion valga hay que volver a correr el seguidor sobre los cuadros
+submuestreados en vez de heredar las pistas; es una corrida mas y no necesita hardware.
+
+### Que se puede decir mientras tanto
+
+Que **la capa de acumulacion tolera menos observaciones sin perder personas**, y que los
+falsos positivos bajan. Eso es verdadero y es un resultado util: dice que el cuello de
+botella no esta en la maduracion. Si convierte el calor de la Pi 4 de bloqueante en
+parametro depende de la corrida que falta.
 
 ## 5.6 Latencia contra error de posición: una cuenta que falta hacer
 
@@ -503,6 +532,13 @@ más que dos donde uno miente sobre lo que entrega.
 # 7. Qué no sabemos
 
 Esta sección existe porque un informe sin ella no es creíble.
+
+## 7.0 El seguidor no sufrió la tasa baja
+
+Desarrollado en §5.5. El submuestreo se aplica después de cargar pistas calculadas a
+tasa completa, así que la tabla de precisión mide la tolerancia de la capa de
+acumulación, no el comportamiento del sistema a esa tasa de captura. Es optimista y
+hay que rehacerlo antes de afirmar lo segundo.
 
 ## 7.1 La tabla de precisión es un vuelo y siete personas
 
@@ -596,10 +632,489 @@ En portugués, que es como vas a hablarle. Pregunta por pregunta.
 
 ## Si pregunta qué falta
 
+> E tem uma coisa que eu nao vou apresentar ainda: medi quanto custa baixar a taxa,
+> mas o rastreador no sofreu a taxa baixa na minha medicao, entao o numero esta
+> otimista. Preciso refazer antes de afirmar.
+>
 > Falta a energia por imagem, que é o que traduz taxa em minutos de autonomia, e o
 > percentil 95 da latência — hoje a instrumentação está pronta mas a meia imagem por
 > segundo entra uma amostra só por relatório, então o p95 é a mediana. Preciso rodar a
 > 3 e 4 para isso ter sentido.
+
+---
+
+---
+
+# 9. Cómo explicar el sistema, con las cuentas hechas
+
+Esta sección existe porque la pregunta *"¿cómo funciona tu sistema?"* se contesta mal
+casi siempre, y la razón es una sola: **se empieza por los componentes.** Decir "uso
+YOLO, BoT-SORT y OSNet" no enseña nada del sistema, enseña tres nombres. Y si el otro
+pregunta algo, hay que improvisar.
+
+El orden correcto es: **el problema físico, el truco que lo resuelve, la cadena, el
+número.** Las bibliotecas van al final y casi nunca hacen falta.
+
+Todo lo que sigue usa los parámetros reales del sistema.
+
+## 9.1 Por qué una cámara sola no mide distancia
+
+Es el punto de partida y el que hace entender todo lo demás.
+
+Un sensor de imagen registra **de qué dirección vino la luz**, no desde qué distancia.
+Dos personas, una de 1,80 m a 40 metros y otra de 0,90 m a 20 metros, ocupan
+exactamente los mismos píxeles. La imagen es idéntica. **La información de profundidad
+se perdió en la proyección y no hay procesamiento que la recupere de un solo cuadro.**
+
+Por eso el término correcto para este tipo de sistema es **geolocalización
+*bearing-only***: solo tenés el rumbo hacia el objetivo, no la distancia.
+
+De ahí salen las tres maneras de recuperar la distancia:
+
+| método | cómo | costo |
+|---|---|---|
+| estéreo | dos cámaras separadas, por paralaje | dos sensores, calibración entre ambos, peso |
+| lidar | mide el tiempo de vuelo de un pulso | caro, pesado, consume |
+| **geometría** | **cortar el rayo con un plano conocido** | **gratis, pero exige conocer la pose** |
+
+El sistema usa la tercera. Esa es la decisión de diseño, y el precio que paga es que
+**todo el error de pose se convierte en error de posición**, que es de lo que trata
+la sección 9.6.
+
+## 9.2 De un píxel a un punto en el suelo: la cuenta completa
+
+Partimos de datos reales del sistema:
+
+```
+camara ArduCam Module 3, calibrada con tablero
+  focal           f  = 1407,0 px
+  centro optico   cx = 945,7 px ,  cy = 547,1 px
+  imagen          1920 x 1080
+
+aeronave
+  posicion        (0, 0, 35)      metros, z hacia arriba
+  rumbo           0 grados        apuntando al norte
+  cabeceo montaje -55 grados      la camara mira 55 grados hacia abajo
+
+deteccion
+  pixel           (1100, 700)
+```
+
+### Paso 1. Del píxel a una dirección en el sistema de la cámara
+
+Se resta el centro óptico y se pone la focal como tercera componente:
+
+```
+u - cx = 1100 - 945,7 = 154,3
+v - cy =  700 - 547,1 = 152,9
+f      = 1407,0
+```
+
+La norma de ese vector:
+
+```
+|d| = raiz( 154,3^2 + 152,9^2 + 1407,0^2 )
+    = raiz( 23 808,5 + 23 378,4 + 1 979 649,0 )
+    = raiz( 2 026 835,9 )
+    = 1423,67
+```
+
+Y normalizado:
+
+```
+d_cam = ( 0,10838 ,  0,10740 ,  0,98828 )
+```
+
+**Qué significa cada número.** La tercera componente, 0,98828, es casi 1: el objetivo
+está casi sobre el eje óptico. Las otras dos son las desviaciones. En ángulos:
+
+```
+horizontal:  arctan(154,3 / 1407,0) = 6,26 grados a la derecha del eje
+vertical:    arctan(152,9 / 1407,0) = 6,20 grados por debajo del eje
+```
+
+Como la cámara ya mira 55° hacia abajo, el rayo baja en total unos 61°.
+
+### Paso 2. De la cámara al mundo
+
+El sistema de la cámara tiene `x` a la derecha, `y` hacia abajo en la imagen, y `z`
+hacia adelante sobre el eje óptico. Con rumbo 0 y cabeceo de montaje −55°, esos tres
+ejes expresados en coordenadas del mundo (x=este, y=norte, z=arriba) son:
+
+```
+z_c  (eje optico, 55 grados abajo) = ( 0 ,  0,5736 , -0,8192 )
+x_c  (derecha)                     = ( 1 ,  0      ,  0      )
+y_c  (abajo en la imagen)          = ( 0 , -0,8192 , -0,5736 )
+```
+
+La dirección en el mundo es la combinación lineal:
+
+```
+d_mundo = 0,10838 * x_c  +  0,10740 * y_c  +  0,98828 * z_c
+
+  este  :  0,10838
+  norte :  0,10740*(-0,8192) + 0,98828*(0,5736) = -0,08798 + 0,56688 =  0,47890
+  arriba:  0,10740*(-0,5736) + 0,98828*(-0,8192) = -0,06160 - 0,80960 = -0,87120
+
+d_mundo = ( 0,10838 , 0,47890 , -0,87120 )
+```
+
+Comprobación de que sigue siendo unitario:
+`0,011746 + 0,229345 + 0,758990 = 1,00008`. Correcto.
+
+### Paso 3. Del rayo al suelo
+
+La aeronave está en `(0, 0, 35)` y el suelo en `z = 0`:
+
+```
+k = (0 - 35) / (-0,87120) = 40,175
+
+p = (0, 0, 35) + 40,175 * (0,10838 , 0,47890 , -0,87120)
+  = ( 4,354 , 19,240 , 0,0 )
+```
+
+**La persona está 4,35 m al este y 19,24 m al norte del punto del suelo bajo la
+aeronave.**
+
+Y como `d_mundo` es unitario, **`k` es directamente el rango inclinado: 40,175 m.** La
+distancia horizontal es `raiz(4,354² + 19,240²) = 19,73 m`.
+
+Esa separación entre **19,73 m horizontales** y **40,18 m de rango inclinado** no es un
+detalle: es la que gobierna el error, y se usa en 9.6.
+
+## 9.3 Qué hace el seguidor, con números
+
+Esto es lo que no te quedó claro, así que va despacio.
+
+**El problema.** El detector no tiene memoria. En el cuadro 100 encuentra tres cajas.
+En el 101 encuentra tres cajas. **No sabe cuál de las tres del 101 es cuál de las tres
+del 100.** Para el detector son seis cajas independientes.
+
+Sin resolver eso no se puede acumular evidencia: cada detección sería una persona
+nueva, y nunca habría dos miradas de la misma.
+
+**La solución: asociar por solapamiento.** El seguidor compara cada caja nueva con cada
+caja anterior y mide cuánto se superponen, con la **intersección sobre unión**:
+
+```
+IoU = area de la interseccion / area de la union
+```
+
+Con números reales. Una persona a 40 metros ocupa una caja de unos 40 x 90 px:
+
+```
+cuadro 100   caja A: centro (1100, 700), 40 x 90
+             o sea  x de 1080,0 a 1120,0   y de 655,0 a 745,0
+
+cuadro 101   caja B: centro (1108, 704), 41 x 92
+             o sea  x de 1087,5 a 1128,5   y de 658,0 a 750,0
+```
+
+La intersección:
+
+```
+en x:  de 1087,5 a 1120,0  ->  32,5 px
+en y:  de  658,0 a  745,0  ->  87,0 px
+area de la interseccion = 32,5 * 87,0 = 2827,5 px2
+```
+
+La unión:
+
+```
+area A = 40 * 90 = 3600 px2
+area B = 41 * 92 = 3772 px2
+union  = 3600 + 3772 - 2827,5 = 4544,5 px2
+```
+
+Y el resultado:
+
+```
+IoU = 2827,5 / 4544,5 = 0,622
+```
+
+Con un umbral típico de 0,3, **0,622 pasa**: el seguidor decide que son la misma
+persona y le pone a la caja B el mismo identificador que tenía A, por ejemplo `7`.
+
+**Eso es "poner un identificador".** Es una decisión de asociación, no una propiedad de
+la imagen. A partir de ahí, la capa de identidad puede decir "la pista 7 lleva 40
+observaciones" en vez de "hay 40 detecciones sueltas".
+
+## 9.4 Por qué hace falta compensación de movimiento, con números
+
+Acá está la razón de que un seguidor común no sirva en un dron.
+
+Una persona **quieta** en el suelo, vista desde una aeronave que **se mueve**, cambia de
+lugar en la imagen. No porque ella se mueva, sino porque la cámara sí.
+
+A 40 m de rango, un desplazamiento lateral de la aeronave de 0,7 m entre dos cuadros
+desplaza la proyección aproximadamente:
+
+```
+desplazamiento en pixeles = f * (0,7 / 40) = 1407 * 0,0175 = 24,6 px
+```
+
+Recalculemos el IoU con la misma caja de 40 x 90 corrida 25 px, sin que la persona se
+haya movido:
+
+```
+interseccion en x:  40 - 25 = 15 px
+interseccion en y:  90 px (no cambia)
+area de la interseccion = 15 * 90 = 1350 px2
+
+union = 3600 + 3600 - 1350 = 5850 px2
+
+IoU = 1350 / 5850 = 0,231
+```
+
+**0,231 está por debajo del umbral de 0,3.** El seguidor concluye que la pista 7
+desapareció y que hay una persona nueva, que recibe el identificador 8.
+
+Resultado: la misma persona quieta se parte en dos pistas, ninguna acumula evidencia
+suficiente, y el sistema no reporta a nadie. O peor: reporta dos.
+
+**Eso es lo que corrige la compensación de movimiento de cámara.** Estima el
+desplazamiento global de la imagen entre cuadros, lo resta, y recién entonces compara.
+Con la corrección aplicada, el IoU vuelve a ser el 0,622 del ejemplo anterior.
+
+> Esto no es teórico. Medido en este proyecto el 5 de octubre: al corregir el manejo de
+> la compensación, el seguidor `ocsort` pasó de **6 detecciones con identificador a 487
+> de 764**. La tabla preliminar de `NOTES.md` no estaba midiendo trackers, estaba
+> midiendo un error de configuración.
+
+## 9.5 El vector de apariencia, y qué significa su distancia
+
+El seguidor funciona **entre cuadros consecutivos**. Si la persona se oculta cinco
+segundos detrás de un árbol, el solapamiento es cero y la pista se corta. Para volver a
+reconocerla hace falta otra cosa.
+
+**El modelo de apariencia** toma el recorte de la caja y produce un vector de 512
+números, normalizado a longitud 1. La idea es que dos recortes de la misma persona
+den vectores que apunten casi en la misma dirección.
+
+La comparación es la **distancia coseno**:
+
+```
+distancia = 1 - coseno(angulo entre los dos vectores)
+```
+
+Qué valores toma:
+
+```
+distancia = 0,00   los dos vectores apuntan exactamente igual
+distancia = 0,20   muy parecidos
+distancia = 1,00   perpendiculares, sin relacion
+distancia = 2,00   opuestos
+```
+
+Los umbrales reales del sistema:
+
+```
+EMB_DIST_MAX_MEDIDO = 0,95    para asociar dentro de la fusion
+EMB_DIST_REUNE      = 0,63    mas estricto, para reunir una pista cortada
+```
+
+### El dato incómodo que contesta a Bruno
+
+Bruno preguntó si ese vector aguanta el cambio de punto de vista. La medición sobre
+vectores promediados en ventanas de cuatro segundos, en este sistema, dice:
+
+> **El 35 % de los pares de personas DISTINTAS da una distancia por debajo del umbral.**
+
+O sea: **si solo se mirara la apariencia, una de cada tres parejas de personas
+diferentes se fusionaría en una sola.** La apariencia por sí sola no distingue
+personas.
+
+Lo que sostiene el sistema es el orden: **la distancia filtra primero.** Dos
+detecciones separadas 20 metros no pueden ser la misma persona, sin importar cuánto se
+parezcan sus vectores. La apariencia decide solo entre las candidatas que la geometría
+ya dejó cerca.
+
+Y hay una razón mecánica para que el vector sufra: a 40 metros de rango una persona
+ocupa unos **40 x 90 píxeles**. El modelo de apariencia fue entrenado con recortes de
+vigilancia bastante más grandes. Con noventa píxeles de alto, lo que queda es color de
+ropa y proporción, no textura ni rasgos.
+
+## 9.6 Cómo se propaga el error, y de dónde sale el radio de fusión
+
+Esta es la parte que convierte el sistema en ingeniería y no en una demostración.
+
+Como la distancia se obtiene de la geometría, **todo error en la pose de la aeronave se
+convierte en error de posición en el suelo**. Hay tres fuentes y no pesan igual.
+
+### Error de posición de la aeronave
+
+Se traslada uno a uno. Si el GPS está 1,5 m corrido, el impacto está 1,5 m corrido. No
+depende de a dónde mire la cámara.
+
+```
+GPS_SIGMA_M = 1,5 m
+```
+
+### Error de rumbo
+
+Gira el rayo alrededor del eje vertical. El impacto se mueve sobre un arco de radio
+igual a la **distancia horizontal**:
+
+```
+desplazamiento = distancia_horizontal * angulo_en_radianes
+               = 19,73 m * 0,017453 rad        (1 grado)
+               = 0,344 m
+```
+
+### Error de cabeceo
+
+Este es el que más pesa, y no es obvio. La distancia horizontal depende del ángulo de
+depresión según `R = h / tan(theta)`. Derivando:
+
+```
+dR/dtheta = -h / sin^2(theta)
+          = -35 / (0,8763)^2
+          = -45,58 m por radian
+
+para 1 grado:  45,58 * 0,017453 = 0,795 m
+```
+
+**Un grado de cabeceo cuesta más del doble que un grado de rumbo** en esta geometría.
+La razón es que un error de cabeceo empuja el impacto **radialmente**, alejándolo o
+acercándolo, mientras que el de rumbo lo mueve lateralmente sobre un arco.
+
+### El radio de fusión
+
+La fórmula del código es:
+
+```
+fusion_radius_m = gps_sigma + slant_range * yaw_sigma
+```
+
+Con las constantes reales del sistema:
+
+```
+bias_sigma_m = 2,4 / 1,1774 = 2,0384 m     (el error medido, convertido a sigma)
+GPS_SIGMA_M  = 1,5 m
+RANGO_REFERENCIA_M = 20,3 m
+
+yaw_sigma = raiz( 2,0384^2 - 1,5^2 ) / 20,3
+          = raiz( 4,1551 - 2,2500 ) / 20,3
+          = raiz( 1,9051 ) / 20,3
+          = 1,3803 / 20,3
+          = 0,06799 rad   =  3,90 grados
+```
+
+Y para la detección del ejemplo, con rango inclinado 40,175 m:
+
+```
+fusion_radius = 1,5 + 40,175 * 0,06799
+              = 1,5 + 2,731
+              = 4,23 m
+```
+
+**Dos personas separadas menos de 4,23 metros en esa geometría no se pueden distinguir
+con confianza, y el sistema las trata como candidatas a ser la misma.**
+
+Y fijate lo que hace el segundo término: a 20 m de rango el radio sería
+`1,5 + 1,36 = 2,86 m`, y a 80 m sería `1,5 + 5,44 = 6,94 m`. **El sistema es más
+tolerante cuando mira lejos, porque sabe que ahí es menos preciso.** Eso es lo que una
+constante fija no puede hacer.
+
+> **Una observación honesta sobre la fórmula.** Usa el **rango inclinado** (40,18 m)
+> donde la geometría del error de rumbo pediría la **distancia horizontal** (19,73 m),
+> lo que la hace conservadora por un factor de 2,04 en este caso. Pero como el error de
+> cabeceo contribuye 0,795 m contra los 0,344 m del rumbo, usar el rango inclinado
+> funciona como una aproximación agrupada de las dos fuentes. Vale saberlo: no es un
+> error, es una simplificación que conviene poder explicar si alguien la señala.
+
+## 9.7 Cuándo una pista está madura
+
+Una detección no es una persona. La capa de identidad acumula y decide. Los umbrales
+reales:
+
+```
+MIN_MEASUREMENTS   = 8      minimo de impactos antes de estimar una posicion
+DUTY_MIN           = 0,10   fraccion minima de cuadros en que hay que verla
+report_dur_s       = 36     segundos de evidencia antes de reportar (modo span)
+report_min_looks   = 20     miradas independientes (modo looks)
+```
+
+El **ciclo de trabajo** es la parte sutil. Con `report_dur_s = 36` a 3 imágenes por
+segundo, el lapso son `36 * 3 = 108` cuadros. Pero no alcanza con que la pista exista
+108 cuadros: hay que **haberla visto** en al menos el 10 %:
+
+```
+n_reporte = max(5, redondeo(0,10 * 108)) = 11 observaciones
+```
+
+**Por qué existe ese piso.** Una pista detectada en 3 de los 108 cuadros que abarca no
+está siendo seguida: está siendo **redescubierta**. El lapso solo la haría parecer
+madura. El ciclo de trabajo separa seguimiento de coincidencia.
+
+Y por eso los umbrales se escalan por la tasa declarada: a 1 imagen por segundo el
+mismo `report_dur_s = 36` son 36 cuadros, no 108. **Treinta y seis segundos de
+evidencia siguen siendo treinta y seis segundos reales.** Esa es la razón de que bajar
+la tasa no destruya la precisión, como mide la sección 5.5.
+
+## 9.8 El guión, por capas
+
+La respuesta se da en capas y se para en cuanto el otro tiene suficiente.
+
+### Una frase
+
+> "Un dron con una sola cámara encuentra personas en el suelo y dice dónde están, en
+> metros."
+
+### Treinta segundos: el mecanismo
+
+> "Una cámara sola no mide distancia: un píxel te da una **dirección**, no un punto.
+>
+> Lo que hace el sistema es **cortar esa dirección con el suelo**. Si sé dónde está el
+> dron, a qué altura y hacia dónde mira, el corte entre el rayo y el plano del suelo es
+> una posición concreta. Saco profundidad de la geometría en vez de un sensor.
+>
+> Y como cada corte tiene error, **acumulo en el tiempo**: muchas miradas de la misma
+> persona desde posiciones distintas, y recién con evidencia suficiente digo que ahí
+> hay alguien."
+
+### Dos minutos: la cadena y el número
+
+> "La cámara saca una imagen, un detector marca las cajas, un seguidor asocia las cajas
+> entre cuadros para que la misma persona sea una sola pista, y un modelo de apariencia
+> saca un vector del recorte para reconocerla si el seguidor la pierde.
+>
+> Con la caja y la pose calculo el rayo, lo corto con el suelo, y ese impacto se acumula
+> por pista. Una capa de identidad decide cuándo hay evidencia suficiente, si el
+> objetivo está quieto o se mueve, y si dos pistas son la misma persona. Lo que madura
+> se difunde.
+>
+> **El error mediano sobre un vuelo real es 2,39 metros.** Todo corre a bordo, en la
+> Raspberry: a la estación le llegan las coordenadas, no el video."
+
+### Si preguntan más
+
+| pregunta | respuesta corta | el número |
+|---|---|---|
+| ¿Cómo sabés que es la misma persona? | distancia primero, apariencia después | 35 % de los pares distintos pasan el filtro de apariencia |
+| ¿Cuánto error tiene? | depende del rango, no de la altura | 2,39 m de mediana; 1° de cabeceo cuesta 0,80 m a 40 m |
+| ¿Por qué no estéreo o lidar? | peso y consumo en un dron | una cámara, profundidad por geometría |
+| ¿Cuántas personas encuentra? | con verdad de campo | 5 de 7, con 6 falsos positivos |
+| ¿Corre a bordo o en tierra? | a bordo, entero | 104 ms por imagen en la Pi 5 |
+
+### Una palabra que conviene no usar mal
+
+Lo que hace el sistema **no es triangulación**. Triangular es cruzar dos rayos entre sí
+para hallar su punto de encuentro. Acá se corta **un** rayo contra **el suelo**, que es
+un plano conocido. Son cosas distintas, y notar la diferencia deja mejor parado que
+usar la palabra grande.
+
+En la propia reunión del 2 de octubre alguien se corrigió solo:
+
+> *"É, eu tô chamando de triangularização, mas é, desculpa, **não é uma
+> triangularização, de jeito nenhum**."*
+
+Tenía razón. Y vale la pena agregar que el cruce de rayos **sí existe** en el
+repositorio, como estimador alternativo conmutable: `fusion.py`, cableado el 8 de
+octubre. Sirve cuando el objetivo no está sobre el plano declarado, y falla cuando los
+rayos son casi paralelos. Medido: con un blanco 5 m por encima del plano, el plano se
+equivoca 3,30 m y el cruce de rayos 0,00; con la aeronave casi quieta, el plano da
+2,86 m y el cruce 16,60.
 
 ---
 
