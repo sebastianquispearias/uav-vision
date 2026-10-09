@@ -1,0 +1,201 @@
+<title>Pi 4 contra Pi 5 a bordo</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Informe de banco: una columna de lectura, con los datos en bloques a sangre completa. */
+  :root {
+    --fondo: #f7f7f5;
+    --panel: #ffffff;
+    --tinta: #1b1d21;
+    --tinta-2: #4a4f57;
+    --tinta-3: #787f89;
+    --linea: #dcdcd7;
+    --pi5: #2a78d6;
+    --pi4: #eb6834;
+    --alarma: #c0372c;
+    --ok: #1baf7a;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --fondo: #15171a; --panel: #1d2024; --tinta: #e9ebee; --tinta-2: #b3b9c2;
+      --tinta-3: #868d98; --linea: #333840; --pi5: #3987e5; --pi4: #d95926;
+      --alarma: #e66767; --ok: #199e70; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --fondo: #15171a; --panel: #1d2024; --tinta: #e9ebee; --tinta-2: #b3b9c2;
+    --tinta-3: #868d98; --linea: #333840; --pi5: #3987e5; --pi4: #d95926;
+    --alarma: #e66767; --ok: #199e70; color-scheme: dark;
+  }
+  body { background: var(--fondo); color: var(--tinta); font-family: var(--sans); line-height: 1.6; }
+  .envoltorio { max-width: 760px; margin: 0 auto; padding-inline: 20px; padding-block: 48px 72px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; text-wrap: balance; font-weight: 600; letter-spacing: -0.015em; }
+  .bajada { color: var(--tinta-2); font-size: 15px; margin: 0 0 8px; max-width: 60ch; }
+  .sello { font-family: var(--mono); font-size: 12px; color: var(--tinta-3); margin: 0 0 40px; }
+  h2 { font-size: 19px; margin: 44px 0 4px; font-weight: 600; letter-spacing: -0.01em; }
+  h2 + .sub { color: var(--tinta-3); font-size: 13px; margin: 0 0 18px; }
+  p { max-width: 65ch; }
+  .rotulo { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tinta-3); }
+
+  .titulares { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin: 28px 0 8px; }
+  .cifra { background: var(--panel); border: 1px solid var(--linea); border-radius: 8px; padding: 18px 18px 16px; min-width: 0; }
+  .cifra .n { font-family: var(--mono); font-size: 34px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  .cifra .u { font-size: 15px; font-weight: 400; color: var(--tinta-2); }
+  .cifra .q { font-size: 13px; color: var(--tinta-2); margin-top: 8px; }
+  .cifra.p5 { border-left: 3px solid var(--pi5); } .cifra.p5 .n { color: var(--pi5); }
+  .cifra.p4 { border-left: 3px solid var(--pi4); } .cifra.p4 .n { color: var(--pi4); }
+
+  .caja { background: var(--panel); border: 1px solid var(--linea); border-radius: 8px; padding: 18px; margin: 18px 0; }
+  .leyenda { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; margin-bottom: 10px; }
+  .leyenda span { display: inline-flex; align-items: center; gap: 7px; color: var(--tinta-2); }
+  .punto { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  svg { display: block; width: 100%; height: auto; max-width: 100%; }
+
+  .tabla-env { overflow-x: auto; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--linea); white-space: nowrap; }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tinta-3); font-weight: 400; }
+  td.num { font-family: var(--mono); }
+  .mal { color: var(--alarma); font-weight: 600; } .bien { color: var(--ok); font-weight: 600; }
+
+  .nota { border-left: 3px solid var(--linea); padding: 2px 0 2px 16px; margin: 20px 0; color: var(--tinta-2); font-size: 14px; }
+  .nota b { color: var(--tinta); }
+  ol, ul { max-width: 65ch; padding-left: 20px; }
+  li { margin-bottom: 9px; }
+  code { font-family: var(--mono); font-size: 0.9em; background: var(--panel); border: 1px solid var(--linea); border-radius: 4px; padding: 1px 5px; }
+  .pie { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--linea); color: var(--tinta-3); font-size: 13px; }
+</style>
+
+<div class="envoltorio">
+
+  <h1>Pi 4 contra Pi 5 a bordo</h1>
+  <p class="bajada">Qué tasa de cuadros sostiene cada computadora de a bordo durante un vuelo, y qué cuesta bajarla. Banco de dos placas, cámara y detector reales.</p>
+  <p class="sello">LAC · 9 de octubre de 2026 · medido sobre hardware, no estimado</p>
+
+  <div class="titulares">
+    <div class="cifra p5">
+      <div class="n">130<span class="u"> ms</span></div>
+      <div class="q">Pi 5, mediana por cuadro</div>
+    </div>
+    <div class="cifra p4">
+      <div class="n">720<span class="u"> ms</span></div>
+      <div class="q">Pi 4, mediana por cuadro</div>
+    </div>
+    <div class="cifra">
+      <div class="n">5,5<span class="u">×</span></div>
+      <div class="q">cuánto más tarda la Pi 4</div>
+    </div>
+  </div>
+
+  <h2>Lo que ese número explica</h2>
+  <p class="sub">Una sola medición cierra tres preguntas que llevaban semanas abiertas.</p>
+
+  <p><b>Por qué la Pi 4 no puede dar 3 cuadros por segundo.</b> Tres por segundo exigen terminar cada ciclo en menos de 333 ms. La Pi 4 tarda 720. No va lenta: es aritméticamente imposible. Su techo por cómputo es <b>1,4 cuadros por segundo</b>, y los 0,78 que se midieron el 7 de octubre eran ese techo menos el castigo del calor.</p>
+
+  <p><b>Por qué se calienta y la Pi 5 no.</b> Incluso pidiéndole medio cuadro por segundo, la Pi 4 está trabajando 720 ms de cada 2000: un <b>36 % del tiempo</b>. La Pi 5, 130 de cada 2000: un <b>7 %</b>. Esa es toda la diferencia entre una placa que se estabiliza en 48 °C y otra que trepa hasta frenarse.</p>
+
+  <p><b>Dónde está el costo.</b> El detector es prácticamente el ciclo entero en las dos placas: la proyección del rayo, el seguidor y la capa de identidad juntos no suman un milisegundo medible. Si hay que optimizar algo, es el detector, y nada más.</p>
+
+  <h2>La temperatura, a un cuadro por segundo</h2>
+  <p class="sub">Ocho minutos de banco. El límite blando de una Raspberry Pi 4 son 80 °C.</p>
+
+  <div class="caja">
+    <div class="leyenda">
+      <span><i class="punto" style="background:var(--pi4)"></i> Pi 4</span>
+      <span><i class="punto" style="background:var(--pi5)"></i> Pi 5</span>
+      <span><i class="punto" style="background:var(--alarma)"></i> límite térmico, 80 °C</span>
+    </div>
+    <svg viewBox="0 0 680 310" role="img" aria-label="Temperatura contra tiempo: la Pi 4 sube de 70 a 80 grados en ocho minutos mientras la Pi 5 se mantiene plana en 52">
+      <!-- rejilla y eje Y -->
+      <g font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--tinta-3)">
+        <line x1="54" y1="30" x2="660" y2="30" stroke="var(--linea)" stroke-width="1"/>
+        <text x="46" y="34" text-anchor="end">85</text>
+        <line x1="54" y1="85" x2="660" y2="85" stroke="var(--linea)" stroke-width="1"/>
+        <text x="46" y="89" text-anchor="end">75</text>
+        <line x1="54" y1="140" x2="660" y2="140" stroke="var(--linea)" stroke-width="1"/>
+        <text x="46" y="144" text-anchor="end">65</text>
+        <line x1="54" y1="195" x2="660" y2="195" stroke="var(--linea)" stroke-width="1"/>
+        <text x="46" y="199" text-anchor="end">55</text>
+        <line x1="54" y1="250" x2="660" y2="250" stroke="var(--linea)" stroke-width="1"/>
+        <text x="46" y="254" text-anchor="end">45</text>
+      </g>
+      <!-- umbral de 80 C -->
+      <line x1="54" y1="57.5" x2="660" y2="57.5" stroke="var(--alarma)" stroke-width="2" stroke-dasharray="6 5"/>
+      <text x="656" y="51" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--alarma)">80 °C</text>
+      <!-- eje X -->
+      <g font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--tinta-3)">
+        <text x="54" y="272" text-anchor="middle">0</text>
+        <text x="205.5" y="272" text-anchor="middle">2</text>
+        <text x="357" y="272" text-anchor="middle">4</text>
+        <text x="508.5" y="272" text-anchor="middle">6</text>
+        <text x="660" y="272" text-anchor="middle">8</text>
+        <text x="357" y="294" text-anchor="middle" fill="var(--tinta-3)">minutos de banco</text>
+      </g>
+      <!-- Pi 4: 70.1 71.1 73.5 72.5 74.5 74.5 74.0 76.9 75.5 77.4 (0..4.5) luego 76.4 77.9 76.4 78.4 78.9 79.9 (5.5..8) -->
+      <polyline fill="none" stroke="var(--pi4)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"
+        points="54,112.0 91.9,106.5 129.8,93.3 167.6,98.8 205.5,87.8 243.4,87.8 281.3,90.5 319.1,74.6 357,82.3 394.9,71.8 470.6,77.3 508.5,69.1 546.4,77.3 584.3,66.3 622.1,63.6 660,58.1"/>
+      <circle cx="660" cy="58.1" r="5" fill="var(--pi4)" stroke="var(--panel)" stroke-width="2"/>
+      <text x="652" y="44" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="600" fill="var(--pi4)">79,9</text>
+      <!-- Pi 5: 51.2 52.9 51.2 51.8 51.8 51.8 52.4 52.9 53.5 51.8 52.0 x6 -->
+      <polyline fill="none" stroke="var(--pi5)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"
+        points="54,213.4 91.9,204.1 129.8,213.4 167.6,210.1 205.5,210.1 243.4,210.1 281.3,206.8 319.1,204.1 357,200.8 394.9,210.1 470.6,209.0 508.5,209.0 546.4,209.0 584.3,209.0 622.1,209.0 660,209.0"/>
+      <circle cx="660" cy="209.0" r="5" fill="var(--pi5)" stroke="var(--panel)" stroke-width="2"/>
+      <text x="652" y="226" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="600" fill="var(--pi5)">52,0</text>
+    </svg>
+  </div>
+
+  <div class="nota">
+    <b>La trampa que casi se cuela.</b> A los dos minutos la Pi 4 marcaba 66 °C y entregaba el 100 % de lo que declaraba. Parecía aprobada. Una medición de treinta segundos habría dicho que funciona. El rendimiento sostenido y el de ráfaga no son el mismo número, y en un vuelo de quince minutos solo cuenta el primero.
+  </div>
+
+  <p>Al apagar las placas, el firmware de la Pi 4 reportó <code>throttled=0xe0000</code>: límite térmico blando alcanzado, throttling ocurrido y frecuencia del ARM limitada. No es una inferencia desde la curva. La placa se frenó y lo dice ella. La Pi 5 cerró en <code>0x0</code>.</p>
+
+  <h2>Bajar la tasa no cuesta detecciones</h2>
+  <p class="sub">El vuelo del 2 de agosto, submuestreado. Siete personas con etiqueta humana como verdad de campo.</p>
+
+  <div class="tabla-env">
+    <table>
+      <thead>
+        <tr><th>Cuadros/s</th><th>Cuadros usados</th><th>Personas encontradas</th><th>Falsos positivos</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="num">1,64</td><td class="num">1381</td><td class="num">5 de 7</td><td class="num">6</td></tr>
+        <tr><td class="num">0,82</td><td class="num">691</td><td class="num">5 de 7</td><td class="num">4</td></tr>
+        <tr><td class="num">0,55</td><td class="num">461</td><td class="num">4 de 7</td><td class="num">5</td></tr>
+        <tr><td class="num">0,41</td><td class="num">346</td><td class="num bien">5 de 7</td><td class="num bien">3</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Usando una cuarta parte de los cuadros, el sistema encuentra a las mismas cinco personas y produce <b>la mitad de falsos positivos</b>. El mecanismo es plausible: menos cuadros son menos oportunidades para que una pista espuria acumule evidencia suficiente para madurar. Y los umbrales de madurez se escalan por la tasa declarada, así que veinte segundos de evidencia siguen siendo veinte segundos reales.</p>
+
+  <p><b>Eso convierte el calor de la Pi 4 de bloqueante en parámetro.</b> Si solo aguanta medio cuadro por segundo, a esa tasa encuentra lo mismo.</p>
+
+  <div class="nota">
+    <b>Qué no prueba esto.</b> Es un vuelo, siete personas, cuatro puntos. El 4 de 7 a 0,55 es ruido: con siete personas, la diferencia entre cuatro y cinco es una sola. Sirve para decidir hoy; no para afirmar que la relación vale en general.
+  </div>
+
+  <h2>Cómo se midió</h2>
+  <p class="sub">El método importa tanto como el resultado, porque explica por qué estos números se pueden defender.</p>
+
+  <ol>
+    <li><b>Instrumentar la cadena, no cronometrarla desde afuera.</b> Cada reporte que sale de la aeronave lleva ahora la mediana y el percentil 95 del ciclo completo, la mediana del detector solo, y la memoria disponible. Se vacían en cada reporte, de modo que lo publicado es el último intervalo y no un promedio de toda la misión, que quedaría dominado por el arranque.</li>
+    <li><b>Percentil 95 y no promedio.</b> Un lazo rápido en diecinueve cuadros que se traba en el veinte conserva el promedio intacto y pierde lo que se movió durante el tranco.</li>
+    <li><b>Reloj de pared.</b> El reloj del simulador informaría lo que un cuadro <em>debía</em> tardar. La pregunta es cuánto tardó.</li>
+    <li><b>Las dos placas, la misma tasa, al mismo tiempo.</b> Lo que vale no es el techo de cada una aislada sino dónde divergen, y eso solo existe si a las dos se les pidió lo mismo.</li>
+    <li><b>Diez minutos por punto.</b> No es exceso de celo: es lo que tarda la temperatura en mostrar su pendiente, y ya se vio que a los dos minutos miente.</li>
+    <li><b>La precisión, sin hardware.</b> El vuelo etiquetado se vuelve a correr submuestreado. La tasa declarada se deriva de la lista de cuadros, de modo que no hay dos perillas que puedan desincronizarse.</li>
+  </ol>
+
+  <h2>Qué sigue</h2>
+  <ul>
+    <li><b>El percentil 95 todavía no significa nada.</b> A medio cuadro por segundo entra una sola mirada por reporte, así que el p95 es la misma muestra que la mediana. Hay que repetirlo a 3 y 4 cuadros por segundo, donde entran seis u ocho.</li>
+    <li><b>Energía por cuadro.</b> Es lo que traduce la tasa en minutos de autonomía, y es la métrica que falta para cerrar el presupuesto de vuelo.</li>
+    <li><b>Un disipador en la Pi 4.</b> El problema es térmico y la solución de un problema térmico cuesta cinco dólares. Vale la pena antes de descartar la placa.</li>
+  </ul>
+
+  <p class="pie">Banco de dos placas sobre red inalámbrica, sin cable. Datos crudos en <code>docs/medidas_9oct/</code>: veinte muestras del barrido, la curva térmica, la tabla de precisión y los registros de las dos placas.</p>
+
+</div>

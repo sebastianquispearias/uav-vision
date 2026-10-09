@@ -1,0 +1,15 @@
+la estacion ya responde en http://127.0.0.1:8300
+barrido de 0.5, 1.0, 2.0, 3.0, 4.0, 10 min por tasa, muestra cada 30 s
+salida: C:\Users\User\Desktop\lac\uav_vision\docs\barrido_fps.csv
+
+=== 0.5 FPS declarados en las 2 placas ===
+  t+  0.0 s  | dron 1: 0.49 /0.5  FPS  46.3  C | dron 2: 0.49 /0.5  FPS  74.5  C
+  t+ 30.0 s  | dron 1: 0.91 /0.5  FPS  46.3  C | dron 2: 0.53 /0.5  FPS  72.5  C
+  t+ 60.0 s  | dron 1: 0.98 /0.5  FPS  46.9  C | dron 2: 0.51 /0.5  FPS  74.0  C
+  t+ 90.1 s  | dron 1: 0.93 /0.5  FPS  46.9  C | dron 2: 0.52 /0.5  FPS  73.0  C
+  t+120.1 s  | dron 1: 0.52 /0.5  FPS  46.9  C | dron 2: 0.5  /0.5  FPS  72.5  C
+  t+150.1 s  | dron 1: 0.93 /0.5  FPS  46.9  C | dron 2: 0.5  /0.5  FPS  73.0  C
+  t+180.1 s  | dron 1: 0.49 /0.5  FPS  47.4  C | dron 2: 0.0  /0.5  FPS  74.0  C
+  t+210.1 s  | dron 1: 0.88 /0.5  FPS  47.4  C | dron 2: 0.73 /0.5  FPS  73.5  C
+  t+240.1 s  | dron 1: 0.92 /0.5  FPS  47.4  C | dron 2: 0.0  /0.5  FPS  73.0  C
+  t+270.2 s  | dron 1: 0.91 /0.5  FPS  47.4  C | dron 2: 0.0  /0.5  FPS  72.5  C

@@ -1,0 +1,5 @@
+temp=75.0'C
+throttled=0xe0000
+ 04:00:45 up  1:14,  0 user,  load average: 0.18, 0.80, 1.45
+               total        used        free      shared  buff/cache   available
+Mem:            3797         669        2589           0         603        3128
