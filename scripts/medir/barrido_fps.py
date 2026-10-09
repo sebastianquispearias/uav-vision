@@ -38,7 +38,9 @@ LEVANTAR = os.path.join(RAIZ, "scripts", "banco_embedded", "levantar_banco.sh")
 
 MISION = "mision_banco_lab:ProtocoloLab"
 CAMPOS = ["t_s", "fps_declarado", "dron", "fps_real", "fps_pedido", "temp_c",
-          "slots_perdidos", "slots_total", "throttle_ahora", "bateria_v"]
+          "slots_perdidos", "slots_total", "throttle_ahora", "bateria_v",
+          "mem_mb", "lat_ciclo_p50_ms", "lat_ciclo_p95_ms", "lat_detector_p50_ms",
+          "lat_muestras"]
 
 
 def estado(base, timeout=5):
@@ -127,6 +129,11 @@ def main():
                     "slots_total": f.get("slots_perdidos_total"),
                     "throttle_ahora": "|".join(salud.get("ahora") or []),
                     "bateria_v": f.get("bateria_v"),
+                    "mem_mb": f.get("mem_mb"),
+                    "lat_ciclo_p50_ms": f.get("lat_ciclo_p50_ms"),
+                    "lat_ciclo_p95_ms": f.get("lat_ciclo_p95_ms"),
+                    "lat_detector_p50_ms": f.get("lat_detector_p50_ms"),
+                    "lat_muestras": f.get("lat_muestras"),
                 })
             fh.flush()
             linea = "  t+%5.1f s " % t

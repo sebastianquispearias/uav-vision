@@ -238,6 +238,13 @@ def ficha(ahora, mensaje):
     perfectly healthy until the rail collapses all at once. None means the drone was configured
     without a battery source, which is every bench and replay run, and is not a fault.
 
+    The latency fields are what the rate cannot say. 'fps_real' answers how OFTEN the aircraft
+    looks; 'lat_ciclo_p95_ms' answers how long one look takes when it goes badly, and those come
+    apart exactly where it matters. A loop that is quick on nineteen frames and stalls on the
+    twentieth keeps its average and loses whatever moved during the stall. p95 and not the mean
+    for that reason, and 'mem_mb' beside it because the usual cause of such a stall is a board
+    that started swapping, which the frame rate barely registers.
+
     'temp_c' and 'fps_pedido' exist for the health tab, and they are the two things that were
     NOT already arriving when that tab was planned. 'salud' carries the thermal throttling bit
     but not the degrees, so a board at 84 C and a board at 50 C looked identical until the
@@ -264,6 +271,11 @@ def ficha(ahora, mensaje):
         'bateria_v': mensaje.get('bateria_v'),
         'temp_c': mensaje.get('temp_c'),
         'fps_pedido': mensaje.get('fps_pedido'),
+        'mem_mb': mensaje.get('mem_mb'),
+        'lat_ciclo_p50_ms': mensaje.get('lat_ciclo_p50_ms'),
+        'lat_ciclo_p95_ms': mensaje.get('lat_ciclo_p95_ms'),
+        'lat_detector_p50_ms': mensaje.get('lat_detector_p50_ms'),
+        'lat_muestras': mensaje.get('lat_muestras'),
         'buscando': mensaje.get('buscando'),
     }
 

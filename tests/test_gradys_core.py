@@ -146,9 +146,29 @@ for f in g["frames_aire"]:
 host.binding.stop()
 sobre_core = [json.loads(c.payload) for c in host.commands_of(Broadcast)]
 
-iguales = sum(1 for a, b in zip(referencia, sobre_core) if a == b)
+# THE STOPWATCH IS NOT PART OF THE CLAIM. These three are measured on the wall clock -- how
+# long the board really spent on a look -- so two runs of the same flight cannot produce the
+# same numbers, and demanding that they do would make this gate fail for the one reason that
+# proves nothing. What is being asserted is that the adapter does not change what the protocol
+# REPORTS: the finds, their positions, the evidence behind them.
+#
+# They are checked for PRESENCE first, in both runs, so that a field quietly disappearing from
+# the message cannot slip through as "equal after stripping".
+CRONOMETRO = ("lat_ciclo_p50_ms", "lat_ciclo_p95_ms", "lat_detector_p50_ms")
+for nombre, lote in (("replay", referencia), ("gradys-core", sobre_core)):
+    faltan = [c for c in CRONOMETRO if lote and c not in lote[-1]]
+    assert not faltan, "a los reportes de %s les falta %s" % (nombre, faltan)
+
+
+def sin_cronometro(r):
+    return {k: v for k, v in r.items() if k not in CRONOMETRO}
+
+
+iguales = sum(1 for a, b in zip(referencia, sobre_core)
+              if sin_cronometro(a) == sin_cronometro(b))
 print("  replay: %d reportes | gradys-core: %d reportes | iguales: %d"
       % (len(referencia), len(sobre_core), iguales))
+print("  (sin comparar %s, que se miden con el reloj de pared)" % ", ".join(CRONOMETRO))
 assert len(referencia) == len(sobre_core) == iguales, "el adaptador cambio lo que reporta el protocolo"
 p = sobre_core[-1]["pois"][0]
 print("  ultimo POI sobre gradys-core: %d obs en (%.2f, %.2f)" % (p["n_obs"], p["x"], p["y"]))

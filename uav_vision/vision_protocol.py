@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Type
 
 import numpy as np
@@ -172,6 +173,33 @@ BITS_AHORA = (("bajo_voltaje", 0x1), ("frecuencia_limitada", 0x2),
               ("acelerador", 0x4), ("limite_termico", 0x8))
 BITS_ALGUNA_VEZ = (("bajo_voltaje", 0x10000), ("frecuencia_limitada", 0x20000),
                    ("acelerador", 0x40000), ("limite_termico", 0x80000))
+
+
+MEMINFO = "/proc/meminfo"
+
+
+def memoria_mb(ruta: str = MEMINFO) -> Optional[float]:
+    """Megabytes of memory actually available, or None where there is no such file.
+
+    MemAvailable and not MemFree, which are different questions. MemFree counts only memory
+    nobody is holding, and on a Linux that has been running for a while it is always small
+    because the kernel keeps the page cache; a board with 2 GB of cache it would release on
+    demand reports almost no free memory and looks about to die. MemAvailable is the kernel's
+    own estimate of what a new allocation could actually get, cache included.
+
+    It matters here for one reason: this chain holds a detector, an appearance model and a
+    tracker on a board with four gigabytes. If it starts swapping, the frame rate barely moves
+    -- the loop still runs -- while the latency of individual frames goes through the roof, and
+    the average rate is exactly the statistic that will not show it.
+    """
+    try:
+        with open(ruta) as fh:
+            for linea in fh:
+                if linea.startswith("MemAvailable:"):
+                    return round(int(linea.split()[1]) / 1024.0, 1)
+    except Exception:
+        return None
+    return None
 
 
 TEMPERATURA = "/sys/class/thermal/thermal_zone0/temp"
@@ -484,6 +512,11 @@ class VisionProtocol(IProtocol):
         self._confs: List[float] = []
         self._clases: List[Optional[str]] = []
         self._frames_seen = 0
+        # One entry per look since the last report: how long the whole cycle took and how much
+        # of that was the detector. Cleared on every report, so what is published is the last
+        # interval and not an average over the mission -- the same reasoning as _ritmo.
+        self._lat_ciclo: List[float] = []
+        self._lat_detector: List[float] = []
         self._objetivo = None
         self._descartados: List[dict] = []
         self._rodeo: Optional[dict] = None
@@ -1044,7 +1077,16 @@ class VisionProtocol(IProtocol):
         actitud = self.attitude_source() if self.attitude_source is not None else None
         alabeo, cabeceo = actitud if actitud is not None else (0.0, 0.0)
         self._apuntar_foco(yaw, alabeo, cabeceo)
-        for det in self.camera.detect(self._position, yaw):
+
+        # WALL CLOCK, not the provider's. The provider's clock is driven by the simulation in a
+        # replay and would report the time a frame was *supposed* to take; what is being asked
+        # here is how long the board really spent, which is only visible on a real clock.
+        _t0_ciclo = time.perf_counter()
+        _t0_det = time.perf_counter()
+        detecciones = self.camera.detect(self._position, yaw)
+        self._lat_detector.append((time.perf_counter() - _t0_det) * 1000.0)
+
+        for det in detecciones:
             origin, direction = pixel_to_ray(
                 self._position,
                 yaw,
@@ -1084,6 +1126,38 @@ class VisionProtocol(IProtocol):
                     range_m=rango,
                     ray=(origin, direction),
                 )
+        self._lat_ciclo.append((time.perf_counter() - _t0_ciclo) * 1000.0)
+
+    def _latencias(self) -> dict:
+        """What the loop cost over the LAST report interval, and then forgets it.
+
+        Emptied here for the same reason _ritmo measures over a window: a p95 accumulated over
+        the whole mission is dominated by the start-up, when the detector and the appearance
+        model are still being loaded, and would keep reporting that minutes after the board
+        settled. The operator needs to know what the aircraft is doing now.
+        """
+        d = {"ciclo_p50": self._percentil(self._lat_ciclo, 0.50),
+             "ciclo_p95": self._percentil(self._lat_ciclo, 0.95),
+             "detector_p50": self._percentil(self._lat_detector, 0.50),
+             "n": len(self._lat_ciclo)}
+        self._lat_ciclo = []
+        self._lat_detector = []
+        return d
+
+    @staticmethod
+    def _percentil(valores: List[float], q: float) -> Optional[float]:
+        """The q-th percentile of what was measured, or None when nothing was.
+
+        p95 and not the mean, because the mean is what hides the failure this is here to catch.
+        A loop that is fast on nineteen frames out of twenty and stalls on the twentieth has a
+        fine average and loses targets on the stall: the drone was looking elsewhere, or at
+        nothing, for the length of that stall.
+        """
+        if not valores:
+            return None
+        orden = sorted(valores)
+        i = min(len(orden) - 1, max(0, int(round(q * (len(orden) - 1)))))
+        return round(orden[i], 1)
 
     def _report(self) -> None:
         """
@@ -1207,6 +1281,7 @@ class VisionProtocol(IProtocol):
                 p["corroborado_por"] = otros
 
         ritmo = self._ritmo()
+        lat = self._latencias()
         message = {
             "type": "vision_poi",
             "sender": self.provider.get_id(),
@@ -1223,6 +1298,11 @@ class VisionProtocol(IProtocol):
             "buscando": self._estado_busqueda(),
             "salud": salud_electrica(),
             "temp_c": temperatura_c(),
+            "mem_mb": memoria_mb(),
+            "lat_ciclo_p50_ms": lat["ciclo_p50"],
+            "lat_ciclo_p95_ms": lat["ciclo_p95"],
+            "lat_detector_p50_ms": lat["detector_p50"],
+            "lat_muestras": lat["n"],
             "bateria_v": self._bateria(),
             "fps_pedido": round(1.0 / self.see_period_s, 2) if self.see_period_s else None,
             "pois": pois,
