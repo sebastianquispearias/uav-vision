@@ -112,7 +112,16 @@ DETECTORES = {"coco": "/home/pi/yolov8n_ncnn_model",
 MODELO = DETECTORES.get(os.environ.get("BANCO_MODELO", "coco").strip().lower(),
                         os.environ.get("BANCO_MODELO", "coco"))
 
-SEE_S = float(os.environ.get("BANCO_SEE_S", "0.25"))
+# DERIVED FROM BANCO_FPS, not defaulted beside it. These two are the same number written the
+# other way round -- one is how often the loop asks for a frame, the other is the rate every
+# maturity threshold in the identity layer is scaled by -- and nothing was keeping them in step.
+# Setting BANCO_FPS=1 on a board that cannot keep up used to leave the loop running at 0.25 s,
+# so the board was measured at one rate and declared at another, which is the exact failure the
+# repository's own notes warn about: the two drifting apart is how "20 s of evidence" quietly
+# stops meaning 20 s. The default is unchanged, because 1/4.0 is the 0.25 that was written here.
+# BANCO_SEE_S still overrides, for the one case this does not cover: asking the camera for
+# frames faster or slower than the rate the thresholds are scaled by, on purpose.
+SEE_S = float(os.environ.get("BANCO_SEE_S", "") or (1.0 / FPS))
 
 # The pack is read from BANCO_BATERIA_URL when it is set, and from the same service as the yaw
 # when it is not. One variable, because on the bench the two do NOT come from the same place.
