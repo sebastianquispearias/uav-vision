@@ -11,7 +11,10 @@
 #      SYSID_THISMAV; the FC stamps it on every message it sends)
 #   3. sets the hostname to drone<SYSID>
 #   4. joins the "skynet" Wi-Fi network as 192.168.1.(100+SYSID)/24
-#   5. if there is no SYSID, or skynet cannot be joined, disables Rpanion's
+#   4b. if skynet is not around, tries the profiles in WIFI_EXTRA, in order,
+#      with whatever addressing each already has. The board is then reachable
+#      but NOT at a predictable address, which is the whole trade.
+#   5. if there is no SYSID, or no network at all could be joined, disables Rpanion's
 #      own hotspot ("WiFiAP", SSID "rpanion") and brings up the
 #      "drone_undefined" access point instead so the Pi stays reachable
 #
@@ -34,6 +37,13 @@ WIFI_SSID="${WIFI_SSID:-skynet}"
 WIFI_PSK="${WIFI_PSK:-gradysgradys}"
 WIFI_IFACE="${WIFI_IFACE:-wlan0}"
 WIFI_CON="${WIFI_CON:-skynet}"
+# Networks to try, in order, when the field network is not around: a phone
+# hotspot in the lab, the lab's own Wi-Fi, whatever the board already knows.
+# THESE ARE PROFILE NAMES, NOT CREDENTIALS. The script only runs `nmcli con up`
+# on profiles that already exist on the board, so no password for anybody's
+# personal network ever enters this file or the repository that holds it. A name
+# in this list that has no profile is skipped without complaint.
+WIFI_EXTRA="${WIFI_EXTRA:-sebas2464 lac5g}"
 IP_BASE="${IP_BASE:-192.168.1.100}"      # SYSID is added to the last octet
 IP_PREFIX="${IP_PREFIX:-24}"
 IP_GATEWAY="${IP_GATEWAY:-192.168.1.1}"
@@ -65,6 +75,7 @@ MODE=run
 EXIT_OK=0        # joined skynet as drone<SYSID>
 EXIT_ERROR=1     # preflight or hard failure
 EXIT_FALLBACK=3  # running the drone_undefined access point
+EXIT_EXTRA=4     # on one of WIFI_EXTRA, reachable but without the fixed address
 
 usage() {
   cat <<EOF
@@ -198,7 +209,12 @@ fi
 [[ "$MAVLINK_TIMEOUT" =~ ^[0-9]+$ ]] || die "--timeout must be a whole number of seconds"
 
 # --- [2/5] /etc/hosts peer table --------------------------------------------
-# Independent of this drone's own SYSID, so it is written on every path.
+# WRITTEN ONLY WHEN THIS BOARD ENDS UP ON skynet, which is the only network where
+# the table is true. The addresses in it are IP_BASE plus each SYSID, and that
+# scheme exists nowhere else: on a phone hotspot the drones get whatever DHCP
+# hands out, and a /etc/hosts saying drone5 is 192.168.1.105 would then be a
+# lie that every tool on the board believes. A name that does not resolve is an
+# error anybody can read; a name that resolves to the wrong host is not.
 write_hosts_block() {
   local block i
   block="$(
@@ -221,8 +237,21 @@ write_hosts_block() {
   install -m 0644 "$tmp" "$HOSTS_FILE"
   rm -f "$tmp"
 }
-say "[2/5] writing ${HOSTS_PREFIX}1..${HOSTS_PREFIX}${HOSTS_COUNT} into ${HOSTS_FILE}"
-write_hosts_block
+# remove_hosts_block: leaves /etc/hosts without the managed table, for the paths
+# where it would not be true.
+remove_hosts_block() {
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "+ would remove the managed block from ${HOSTS_FILE}"
+    return
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  awk -v b="$HOSTS_BEGIN" -v e="$HOSTS_END" \
+    '$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$HOSTS_FILE" >"$tmp"
+  install -m 0644 "$tmp" "$HOSTS_FILE"
+  rm -f "$tmp"
+}
+say "[2/5] the ${HOSTS_PREFIX}1..${HOSTS_PREFIX}${HOSTS_COUNT} table is decided after the network"
 
 # --- [3/5] read the SYSID ---------------------------------------------------
 # Prints the sysid of the first HEARTBEAT (msgid 0) that comes from an
@@ -409,6 +438,30 @@ start_ap() {
   run nmcli --wait "$CONNECT_WAIT" con up "$AP_CON"
 }
 
+# connect_extra: the first profile in WIFI_EXTRA that exists and activates.
+#
+# It does NOT create or modify profiles, which is the point: these are networks
+# somebody configured on the board by hand, with their own password and their own
+# addressing, and this has no business rewriting them. Missing profiles are
+# skipped, so the same list works on a board that only knows some of them.
+connect_extra() {
+  local con
+  for con in $WIFI_EXTRA; do
+    con_exists "$con" || continue
+    say "    trying saved profile '${con}'"
+    run nmcli dev wifi rescan ifname "$WIFI_IFACE" 2>/dev/null || true
+    if run nmcli --wait "$CONNECT_WAIT" con up "$con"; then
+      [[ "$DRY_RUN" -eq 1 ]] && { EXTRA_CON="$con"; return 0; }
+      if [[ "$(nmcli -g GENERAL.STATE con show "$con" 2>/dev/null || true)" == "activated" ]]; then
+        EXTRA_CON="$con"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+EXTRA_CON=""
 RESULT="$EXIT_FALLBACK"
 if [[ -n "$SYSID" ]]; then
   HOSTNAME_NEW="${HOSTS_PREFIX}${SYSID}"
@@ -419,13 +472,30 @@ if [[ -n "$SYSID" ]]; then
     RESULT="$EXIT_OK"
   else
     warn "could not join '${WIFI_SSID}' after ${CONNECT_ATTEMPTS} attempts"
+    say "[4b/5] ${WIFI_SSID} is not around, trying the saved profiles"
+    if connect_extra; then
+      RESULT="$EXIT_EXTRA"
+    fi
   fi
 else
   say "[4/5] no SYSID: hostname left as '$(hostname)'"
+  say "[4b/5] trying the saved profiles anyway, so the board is reachable"
+  if connect_extra; then
+    RESULT="$EXIT_EXTRA"
+  fi
+fi
+
+# The table is true on skynet and nowhere else.
+if [[ "$RESULT" -eq "$EXIT_OK" ]]; then
+  say "    writing ${HOSTS_PREFIX}1..${HOSTS_PREFIX}${HOSTS_COUNT} into ${HOSTS_FILE}"
+  write_hosts_block
+else
+  say "    not on ${WIFI_SSID}: removing the ${HOSTS_PREFIX} table from ${HOSTS_FILE}"
+  remove_hosts_block
 fi
 
 # --- [5/5] fallback access point ----------------------------------------------
-if [[ "$RESULT" -ne "$EXIT_OK" ]]; then
+if [[ "$RESULT" -eq "$EXIT_FALLBACK" ]]; then
   say "[5/5] falling back to access point '${AP_SSID}' on ${AP_ADDR}"
   if ! start_ap; then
     die "could not bring up the fallback access point '${AP_CON}'"
@@ -447,6 +517,10 @@ Summary
   hostname:    $(hostname)
   active:      $(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | grep -F ":${WIFI_IFACE}" | cut -d: -f1 || true)
   address:     $(ip -4 -brief addr show "$WIFI_IFACE" 2>/dev/null | awk '{print $3}')
-  result:      $([[ "$RESULT" -eq "$EXIT_OK" ]] && echo "on ${WIFI_SSID}" || echo "fallback access point ${AP_SSID} (exit ${EXIT_FALLBACK})")
+  result:      $(case "$RESULT" in
+                 "$EXIT_OK")    echo "on ${WIFI_SSID}, fixed address, ${HOSTS_PREFIX} table written" ;;
+                 "$EXIT_EXTRA") echo "on saved profile '${EXTRA_CON}' (exit ${EXIT_EXTRA}), address not predictable" ;;
+                 *)             echo "fallback access point ${AP_SSID} (exit ${EXIT_FALLBACK})" ;;
+               esac)
 EOF
 exit "$RESULT"

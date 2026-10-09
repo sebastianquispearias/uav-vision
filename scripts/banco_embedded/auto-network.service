@@ -1,0 +1,34 @@
+# Boot-time network setup for a drone companion computer (Rpanion image).
+#
+# Runs auto_network.sh once per boot: reads the flight controller's SYSID from
+# the mavlink-router UDP output, then sets hostname, static IP on "skynet" and
+# /etc/hosts, or brings up the "drone_undefined" access point as a fallback.
+#
+# Installed by:  sudo ./auto_network.sh --install
+# Logs:          journalctl -u auto-network -b
+
+[Unit]
+Description=Auto network setup from flight controller SYSID
+# nmcli needs NetworkManager; the heartbeat needs Rpanion's mavlink-router.
+# Units that are not installed are ignored in After=, so this is safe on an
+# image without rpanion-server.service or mavlink-router.service.
+Wants=NetworkManager.service
+After=NetworkManager.service rpanion-server.service mavlink-router.service
+# vehicle-api binds the same UDP port (17171) this script reads the heartbeat
+# from, and it reports its own wlan0 address to the ground station at startup,
+# so the address must be final before it starts.
+Before=vehicle-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/auto-network
+# 90 s heartbeat wait + 3 x 45 s connection attempts + AP fallback.
+TimeoutStartSec=300
+# Exit 3 means "running the fallback access point": handled, not a failure.
+SuccessExitStatus=3
+SyslogIdentifier=auto-network
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
